@@ -58,6 +58,8 @@ const StartHelp = `Привет! Я строю астрономический п
 
 const NotReadyText = `Координаты распознаны, но выдача рабочего ICON-прогноза ещё разворачивается. Синтетические данные я пользователям не отправляю.`
 
+const defaultForecastMaxStaleAge = 12 * time.Hour
+
 type Messenger interface {
 	SendMessage(ctx context.Context, chatID int64, text string, locationButton bool) error
 	SendPhoto(ctx context.Context, chatID int64, path, caption string) error
@@ -99,21 +101,22 @@ type LightPollutionProvider interface {
 }
 
 type Handler struct {
-	messenger          Messenger
-	resolver           *forecast.TimeZoneResolver
-	provider           ForecastProvider
-	renderRoot         string
-	renderCacheRoot    string
-	renderOptions      render.Options
-	overallCalibration forecast.OverallIndexCalibration
-	lightPollution     LightPollutionProvider
-	worldAtlas2015     LightPollutionProvider
-	persistence        Persistence
-	admins             map[int64]struct{}
-	sessionMu          sync.Mutex
-	sessions           map[int64]saveSession
-	logf               func(string, ...any)
-	requestSequence    atomic.Uint64
+	messenger           Messenger
+	resolver            *forecast.TimeZoneResolver
+	provider            ForecastProvider
+	renderRoot          string
+	renderCacheRoot     string
+	renderOptions       render.Options
+	overallCalibration  forecast.OverallIndexCalibration
+	forecastMaxStaleAge time.Duration
+	lightPollution      LightPollutionProvider
+	worldAtlas2015      LightPollutionProvider
+	persistence         Persistence
+	admins              map[int64]struct{}
+	sessionMu           sync.Mutex
+	sessions            map[int64]saveSession
+	logf                func(string, ...any)
+	requestSequence     atomic.Uint64
 }
 
 func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot string, options render.Options) error {
@@ -157,7 +160,15 @@ func NewHandler(messenger Messenger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), logf: func(string, ...any) {}, admins: map[int64]struct{}{}, sessions: map[int64]saveSession{}}, nil
+	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, sessions: map[int64]saveSession{}}, nil
+}
+
+func (handler *Handler) SetForecastMaxStaleAge(maxAge time.Duration) error {
+	if maxAge <= 0 {
+		return errors.New("forecast maximum stale age must be positive")
+	}
+	handler.forecastMaxStaleAge = maxAge
+	return nil
 }
 
 func (handler *Handler) EnablePersistence(p Persistence, adminIDs []int64) error {
@@ -415,8 +426,8 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	if zoneError != nil {
 		locationZone = time.UTC
 	}
-	summary := fmt.Sprintf("ICON-EU run %s UTC\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
-		series.RunID, series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
+	summary := fmt.Sprintf("ICON-EU run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
+		series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), handler.forecastMaxStaleAge), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
 		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion)
 	if lightPollutionChannel != nil {
 		select {
@@ -496,6 +507,39 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		time.Since(sendStarted).Round(time.Millisecond), time.Since(requestStarted).Round(time.Millisecond))
 	successful = true
 	return nil
+}
+
+func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration) string {
+	if maxAge <= 0 {
+		maxAge = defaultForecastMaxStaleAge
+	}
+	age := now.UTC().Sub(baseTime.UTC())
+	if age < 0 {
+		age = 0
+	}
+	ageText := formatForecastAge(age)
+	thresholdText := formatForecastAge(maxAge)
+	if age > maxAge {
+		return fmt.Sprintf("⚠️ Данные устарели (stale run): возраст run %s, порог %s. Прогноз может не учитывать последние изменения атмосферы.", ageText, thresholdText)
+	}
+	return fmt.Sprintf("Актуальность данных (freshness): run актуален, возраст %s (порог %s).", ageText, thresholdText)
+}
+
+func formatForecastAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	totalMinutes := int64(age / time.Minute)
+	days := totalMinutes / (24 * 60)
+	hours := totalMinutes/60 - days*24
+	minutes := totalMinutes % 60
+	if days > 0 {
+		return fmt.Sprintf("%d д %d ч %d мин", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%d ч %d мин", hours, minutes)
+	}
+	return fmt.Sprintf("%d мин", minutes)
 }
 
 func safeForecastError(err error) string {

@@ -277,6 +277,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	); err != nil {
 		return err
 	}
+	if err := handler.SetForecastMaxStaleAge(cfg.Providers.ICONEU.MaxStaleAge.Duration); err != nil {
+		return err
+	}
 	if err := handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "telegram-render-v1")); err != nil {
 		return err
 	}

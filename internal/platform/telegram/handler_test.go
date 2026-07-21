@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 type sentMessage struct {
@@ -87,5 +88,31 @@ func TestForecastCommandValidationError(t *testing.T) {
 	}
 	if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].text, "Не удалось") {
 		t.Fatalf("unexpected reply: %#v", messenger.messages)
+	}
+}
+
+func TestForecastFreshnessText(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
+
+	fresh := forecastFreshnessText(now.Add(-9*time.Hour-17*time.Minute), now, 12*time.Hour)
+	for _, expected := range []string{"Актуальность данных (freshness)", "run актуален", "9 ч 17 мин", "порог 12 ч 0 мин"} {
+		if !strings.Contains(fresh, expected) {
+			t.Fatalf("fresh status %q does not contain %q", fresh, expected)
+		}
+	}
+
+	stale := forecastFreshnessText(now.Add(-14*time.Hour-2*time.Minute), now, 12*time.Hour)
+	for _, expected := range []string{"⚠️", "Данные устарели (stale run)", "14 ч 2 мин", "порог 12 ч 0 мин", "последние изменения атмосферы"} {
+		if !strings.Contains(stale, expected) {
+			t.Fatalf("stale status %q does not contain %q", stale, expected)
+		}
+	}
+}
+
+func TestForecastFreshnessTreatsClockSkewAsZeroAge(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
+	status := forecastFreshnessText(now.Add(time.Minute), now, 12*time.Hour)
+	if !strings.Contains(status, "run актуален, возраст 0 мин") {
+		t.Fatalf("unexpected clock-skew status: %q", status)
 	}
 }
