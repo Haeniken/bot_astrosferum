@@ -1,0 +1,80 @@
+name: bot_astrosferum
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bot_astrosferum}
+      POSTGRES_USER: ${POSTGRES_USER:-bot_astrosferum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/18/docker
+    command: ["postgres", "-c", "max_connections=30", "-c", "shared_buffers=256MB", "-c", "effective_cache_size=768MB"]
+    volumes:
+      - ./data/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+    cpus: "1.00"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+  bot_astrosferum:
+    image: bot_astrosferum:latest
+    build:
+      context: .
+    command: ["serve", "--config", "/app/config/config.yaml"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOMEMLIMIT: 24GiB
+      ASTRO_OVERALL_SEEING_WEIGHT: ${ASTRO_OVERALL_SEEING_WEIGHT:-1.0}
+      ASTRO_OVERALL_CLOUD_WEIGHT: ${ASTRO_OVERALL_CLOUD_WEIGHT:-2.0}
+      ASTRO_OVERALL_COHERENCE_TIME_WEIGHT: ${ASTRO_OVERALL_COHERENCE_TIME_WEIGHT:-0.25}
+      ASTRO_OVERALL_POSSIBLE_FOG_FACTOR: ${ASTRO_OVERALL_POSSIBLE_FOG_FACTOR:-0.75}
+      ASTRO_OVERALL_HIGH_FOG_FACTOR: ${ASTRO_OVERALL_HIGH_FOG_FACTOR:-0.10}
+      ASTRO_OVERALL_GOOD_SEEING_ARCSEC: ${ASTRO_OVERALL_GOOD_SEEING_ARCSEC:-0.5}
+      ASTRO_OVERALL_BAD_SEEING_ARCSEC: ${ASTRO_OVERALL_BAD_SEEING_ARCSEC:-2.0}
+      ASTRO_OVERALL_BEST_COHERENCE_TIME_MS: ${ASTRO_OVERALL_BEST_COHERENCE_TIME_MS:-5.2}
+      ASTRO_OVERALL_BAD_COHERENCE_TIME_MS: ${ASTRO_OVERALL_BAD_COHERENCE_TIME_MS:-1.6}
+      ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M: ${ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M:-500}
+      ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M: ${ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M:-2000}
+      ASTRO_OVERALL_GROUND_CN2_SCALE: ${ASTRO_OVERALL_GROUND_CN2_SCALE:-1.0}
+      ASTRO_OVERALL_UNRESOLVED_CLOUD_OBSTRUCTION: ${ASTRO_OVERALL_UNRESOLVED_CLOUD_OBSTRUCTION:-0.45}
+      ASTRO_OVERALL_SURFACE_WIND_MAX_PENALTY: ${ASTRO_OVERALL_SURFACE_WIND_MAX_PENALTY:-0.20}
+      ASTRO_OVERALL_SURFACE_WIND_START_MS: ${ASTRO_OVERALL_SURFACE_WIND_START_MS:-8.5}
+      ASTRO_OVERALL_SURFACE_WIND_FULL_MS: ${ASTRO_OVERALL_SURFACE_WIND_FULL_MS:-15.0}
+      ASTRO_OVERALL_SURFACE_GUST_START_MS: ${ASTRO_OVERALL_SURFACE_GUST_START_MS:-12.0}
+      ASTRO_OVERALL_SURFACE_GUST_FULL_MS: ${ASTRO_OVERALL_SURFACE_GUST_FULL_MS:-22.0}
+      ASTRO_CLOUD_LIQUID_RADIUS_MICROMETERS: ${ASTRO_CLOUD_LIQUID_RADIUS_MICROMETERS:-10}
+      ASTRO_CLOUD_ICE_RADIUS_MICROMETERS: ${ASTRO_CLOUD_ICE_RADIUS_MICROMETERS:-25}
+      ASTRO_LIGHT_POLLUTION_ATLAS_YEAR: ${ASTRO_LIGHT_POLLUTION_ATLAS_YEAR:-2024}
+      ASTRO_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      ASTRO_TELEGRAM_ADMIN_IDS: ${ASTRO_TELEGRAM_ADMIN_IDS-}
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./config/config.yaml:/app/config/config.yaml:ro
+      - ./data:/app/data
+      - ./secrets/telegram_token:/run/secrets/telegram_token:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"

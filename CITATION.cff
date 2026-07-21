@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite the repository revision or release."
+title: "bot_astrosferum"
+type: software
+authors:
+  - name: "bot_astrosferum contributors"
+repository-code: "https://github.com/Haeniken/bot_astroferum"
+license: MIT
+keywords:
+  - astronomy
+  - astrophotography
+  - numerical weather prediction
+  - ICON-EU
+  - seeing

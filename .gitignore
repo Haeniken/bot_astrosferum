@@ -1,0 +1,23 @@
+# Runtime configuration and credentials
+.env
+config/config.yaml
+secrets/*
+!secrets/.gitkeep
+
+# Downloaded model data and generated artifacts. These directories are
+# runtime-only and must never be added to the repository.
+/data/
+/logs/
+/.cache/
+
+# Go/build artifacts
+/astrobot
+/bot_astrosferum
+/dist/
+/coverage.out
+*.test
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store

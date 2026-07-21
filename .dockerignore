@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+data
+logs
+.cache
+secrets
+config/config.yaml
+dist
+coverage.out
+*.md
+CITATION.cff
+LICENSE
+.github
+docs
+scripts
