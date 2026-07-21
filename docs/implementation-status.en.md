@@ -16,6 +16,8 @@ Deployment target: operator-managed host
 - Go `1.26.5`, `tzf v1.2.3`, and `gonum/plot v0.17.0`;
 - Telegram accepts native locations, `59.9386, 30.3141`, and `/forecast 59.9386 30.3141`;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
+- the user summary reports model-run age against configurable `max_stale_age`; beyond the threshold it shows an explicit `⚠️ stale run` warning while still serving the last complete publication;
+- Telegram language follows `User.language_code`: only `ru*` receives Russian, while every other or missing code receives English; help, statuses, errors, buttons, captions, the weather table, and all PNG titles/axes/legends are localized, and render-cache identity includes the language;
 - timezone lookup is offline and every PNG labels the coordinate timezone;
 - DWD discovery selects the latest complete ICON-EU `00/06/12/18` cycle available through `+72 h`;
 - atomic sync streams pressure-level `U/V/FI/T`, retains no `.bz2`, and validates every bundle with ecCodes and SHA-256;
@@ -33,6 +35,8 @@ Deployment target: operator-managed host
 - the old wind-only index remains a separate diagnostic chart; direction delta becomes `0°` below `2 m/s`, while `NaN` means missing data only;
 - the container runs as `1000:1000` with a read-only root filesystem and bind mounts only below `/opt/docker/bot_astrosferum`;
 - `go test ./...`, `go vet ./...`, and `doctor` pass.
+
+Freshness and bilingual rendering were deployed on 2026-07-21: the production binary generated seven non-empty PNG files for each of `ru` and `en`, temporary verification directories were removed, the main container remained `running` with `restart_count=0`, and PostgreSQL remained `healthy`.
 
 ## Production Overall change
 
@@ -70,8 +74,8 @@ Production uses the following replacement:
   old entries without `MH`, `T`, or native layer thickness;
 - version markers match the new contract:
   `seeing-hybrid-tke-mh-hmnsp99-v4`,
-  `conditions-v4-dynamic-mh-cloud-guard`, `render-v9-dynamic-mh`, and
-  `telegram-render-v6-dynamic-mh`.
+  `conditions-v4-dynamic-mh-cloud-guard`, `render-v10-localized`, and
+  `telegram-render-v7-localized`.
 
 A server-side fixed-2-km calculation without fitting (`ground Cn² scale=1`)
 produced control-case seeing of `2.221″` at `f042` and `3.644″` at `f048`; the
@@ -113,9 +117,8 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 ## Next vertical slice
 
-1. Show freshness and warn users about a stale run.
-2. Implement ICON Global fallback for Russian points outside ICON-EU.
-3. Add the equivalent VK adapter after the Telegram path stabilizes.
+1. Implement ICON Global fallback for Russian points outside ICON-EU.
+2. Add the equivalent VK adapter after the Telegram path stabilizes.
 
 Production `seeing-hybrid-tke-mh-hmnsp99-v4` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

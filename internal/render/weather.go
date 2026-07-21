@@ -40,7 +40,7 @@ type weatherFonts struct {
 	tiny, small, normal, normalBold, large, title font.Face
 }
 
-func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.Series) error {
+func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.Series, options Options) error {
 	if len(surface.Frames) < 2 {
 		return fmt.Errorf("weather chart requires at least two surface frames")
 	}
@@ -72,8 +72,8 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		}
 	}
 
-	drawWeatherDayHeaders(canvas, fonts, surface.Frames, zone, left, columnWidth)
-	drawWeatherLabels(canvas, fonts, left)
+	drawWeatherDayHeaders(canvas, fonts, surface.Frames, zone, left, columnWidth, options)
+	drawWeatherLabels(canvas, fonts, left, options)
 	for index, frame := range surface.Frames {
 		center := left + int((float64(index)+0.5)*columnWidth)
 		drawCentered(canvas, fonts.normalBold, center, 79, frame.ValidAt.In(zone).Format("15"), weatherText)
@@ -94,7 +94,8 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		}
 		drawCentered(canvas, fonts.normal, center, 290, precipitation, weatherCyan)
 		drawCentered(canvas, fonts.normalBold, center, 332, fmt.Sprintf("%+.0f", frame.TemperatureC), weatherOrange)
-		drawCentered(canvas, fonts.normal, center, 374, fmt.Sprintf("%.0f", frame.PressureHPA*0.750061683), weatherText)
+		pressure := frame.PressureHPA * 0.750061683
+		drawCentered(canvas, fonts.normal, center, 374, fmt.Sprintf("%.0f", pressure), weatherText)
 		drawCentered(canvas, fonts.normal, center, 416, fmt.Sprintf("%.0f", frame.WindSpeedMS), weatherText)
 		drawCentered(canvas, fonts.normal, center, 458, fmt.Sprintf("%.0f", frame.WindGustMS), gustColor(frame.WindGustMS))
 		drawWindArrow(canvas, center, 494, frame.WindDirectionDegrees, weatherText)
@@ -102,15 +103,15 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		drawCentered(canvas, fonts.small, center, 584, fmt.Sprintf("%.1f", frame.DewPointSpreadC()), dewColor(frame.DewPointSpreadC()))
 	}
 
-	drawAstronomyRows(canvas, fonts, sky, surface.Frames, zone, left, columnWidth)
-	drawWeatherLegend(canvas, fonts)
+	drawAstronomyRows(canvas, fonts, sky, surface.Frames, zone, left, columnWidth, options)
+	drawWeatherLegend(canvas, fonts, options)
 	timezoneLabel := forecast.TimeZoneLabel(surface.Location.TimeZone, surface.Frames[0].ValidAt)
-	footer := fmt.Sprintf("Локальное время точки · %s  |  ICON-EU run %s UTC", timezoneLabel, surface.RunID)
+	footer := fmt.Sprintf(localized(options, "Местное время точки · %s  |  ICON-EU run %s UTC", "Location local time · %s  |  ICON-EU run %s UTC"), timezoneLabel, surface.RunID)
 	drawText(canvas, fonts.small, 20, 1058, footer, weatherMuted)
 	return saveWeatherAtomic(canvas, destination)
 }
 
-func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []forecast.SurfaceFrame, zone *time.Location, left int, columnWidth float64) {
+func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []forecast.SurfaceFrame, zone *time.Location, left int, columnWidth float64, options Options) {
 	start := 0
 	for start < len(frames) {
 		day := frames[start].ValidAt.In(zone)
@@ -124,9 +125,15 @@ func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []fore
 		}
 		x0 := left + int(float64(start)*columnWidth)
 		x1 := left + int(float64(end)*columnWidth)
-		label := fmt.Sprintf("%s, %d %s", russianWeekday(day.Weekday()), day.Day(), russianMonth(day.Month()))
+		label := day.Format("Monday, 2 January")
+		if options.Language == "ru" {
+			label = fmt.Sprintf("%s, %d %s", russianWeekday(day.Weekday()), day.Day(), russianMonth(day.Month()))
+		}
 		if end-start < 8 {
-			label = fmt.Sprintf("%d %s", day.Day(), russianMonth(day.Month()))
+			label = day.Format("2 Jan")
+			if options.Language == "ru" {
+				label = fmt.Sprintf("%d %s", day.Day(), russianMonth(day.Month()))
+			}
 		}
 		drawCentered(canvas, fonts.normalBold, (x0+x1)/2, 31, label, weatherText)
 		if end < len(frames) {
@@ -136,31 +143,31 @@ func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []fore
 	}
 }
 
-func drawWeatherLabels(canvas *image.RGBA, fonts weatherFonts, left int) {
+func drawWeatherLabels(canvas *image.RGBA, fonts weatherFonts, left int, options Options) {
 	labels := []struct {
 		text string
 		y    int
 	}{
-		{"Местное время", 79}, {"Условия", 126},
-		{"Осадки, мм/ч", 290}, {"Температура, °C", 332}, {"Давление, мм рт. ст.", 374},
-		{"Ветер, м/с", 416}, {"Порывы, м/с", 458}, {"Направление", 500},
-		{"Влажность, %", 542}, {"T−Td, °C", 584}, {"Солнце", 626},
-		{"Луна", 668}, {"Фаза Луны", 710}, {"Юпитер", 752}, {"Сатурн", 794},
+		{localized(options, "Местное время", "Local time"), 79}, {localized(options, "Условия", "Conditions"), 126},
+		{localized(options, "Осадки, мм/ч", "Precip., mm/h"), 290}, {localized(options, "Температура, °C", "Temperature, °C"), 332}, {localized(options, "Давление, мм рт. ст.", "Pressure, mmHg"), 374},
+		{localized(options, "Ветер, м/с", "Wind, m/s"), 416}, {localized(options, "Порывы, м/с", "Gusts, m/s"), 458}, {localized(options, "Направление", "Direction"), 500},
+		{localized(options, "Влажность, %", "Humidity, %"), 542}, {"T−Td, °C", 584}, {localized(options, "Солнце", "Sun"), 626},
+		{localized(options, "Луна", "Moon"), 668}, {localized(options, "Фаза Луны", "Moon phase"), 710}, {localized(options, "Юпитер", "Jupiter"), 752}, {localized(options, "Сатурн", "Saturn"), 794},
 	}
 	for _, label := range labels {
 		drawRight(canvas, fonts.normal, left-18, label.y, label.text, weatherMuted)
 	}
-	drawRight(canvas, fonts.small, left-18, 198, "Облака по ярусам, %", weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 214, "Нижний", weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 229, "Средний", weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 244, "Верхний", weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 261, "Прозрачность %", weatherMuted)
+	drawRight(canvas, fonts.small, left-18, 198, localized(options, "Облака по ярусам, %", "Cloud layers, %"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, 214, localized(options, "Нижний", "Low"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, 229, localized(options, "Средний", "Middle"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, 244, localized(options, "Верхний", "High"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, 261, localized(options, "Прозрачность %", "Transparency %"), weatherMuted)
 	for _, y := range []int{184, 268, 310, 352, 394, 436, 478, 520, 562, 604, 646, 686, 724, 766, 808} {
 		drawLine(canvas, 0, y, WeatherWidth, y, weatherGrid)
 	}
 }
 
-func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Series, frames []forecast.SurfaceFrame, zone *time.Location, left int, columnWidth float64) {
+func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Series, frames []forecast.SurfaceFrame, zone *time.Location, left int, columnWidth float64, options Options) {
 	for _, day := range sky.Days {
 		first, last := -1, -1
 		date := day.Date.In(zone)
@@ -182,11 +189,15 @@ func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Ser
 		center := left + int((float64(first+last+1)/2)*columnWidth)
 		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626, day.Sunrise, true, false, day.MoonCycle)
 		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626, day.Sunset, false, false, day.MoonCycle)
-		phaseText := fmt.Sprintf("%s · %.0f%% · %.1f д", astronomy.PhaseNameRU(day.MoonPhase), day.MoonIlluminationPercent, day.MoonAgeDays)
+		phaseName := astronomy.PhaseNameRU(day.MoonPhase)
+		phaseText := fmt.Sprintf("%s · %.0f%% · %.1f д", phaseName, day.MoonIlluminationPercent, day.MoonAgeDays)
+		if options.Language != "ru" {
+			phaseText = fmt.Sprintf("%s · %.0f%% · %.1f d", englishMoonPhase(day.MoonPhase), day.MoonIlluminationPercent, day.MoonAgeDays)
+		}
 		if day.MoonAlwaysUp {
-			drawCentered(canvas, fonts.normal, center, 668, "над горизонтом весь день", weatherText)
+			drawCentered(canvas, fonts.normal, center, 668, localized(options, "над горизонтом весь день", "above horizon all day"), weatherText)
 		} else if day.MoonAlwaysDown {
-			drawCentered(canvas, fonts.normal, center, 668, "ниже горизонта весь день", weatherText)
+			drawCentered(canvas, fonts.normal, center, 668, localized(options, "ниже горизонта весь день", "below horizon all day"), weatherText)
 		} else {
 			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668, day.Moonrise, true, true, day.MoonCycle)
 			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668, day.Moonset, false, true, day.MoonCycle)
@@ -202,8 +213,8 @@ func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Ser
 	}
 }
 
-func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts) {
-	drawText(canvas, fonts.normalBold, 22, 832, "Легенда пиктограмм", weatherText)
+func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) {
+	drawText(canvas, fonts.normalBold, 22, 832, localized(options, "Легенда пиктограмм", "Icon legend"), weatherText)
 	items := []struct {
 		x, y                 int
 		cloud, precipitation float64
@@ -211,13 +222,13 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts) {
 		day                  bool
 		label                string
 	}{
-		{140, 854, 5, 0, 8, true, "ясно, день"},
-		{760, 854, 5, 0, 8, false, "ясно, ночь"},
-		{1380, 854, 45, 0, 8, true, "переменная облачность, день"},
-		{2180, 854, 45, 0, 8, false, "переменная облачность, ночь"},
-		{140, 889, 95, 0, 8, false, "пасмурно"},
-		{760, 889, 90, 1, 8, false, "дождь"},
-		{1380, 889, 90, 1, 0, false, "снег"},
+		{140, 854, 5, 0, 8, true, localized(options, "ясно, день", "clear, day")},
+		{760, 854, 5, 0, 8, false, localized(options, "ясно, ночь", "clear, night")},
+		{1380, 854, 45, 0, 8, true, localized(options, "переменная облачность, день", "partly cloudy, day")},
+		{2180, 854, 45, 0, 8, false, localized(options, "переменная облачность, ночь", "partly cloudy, night")},
+		{140, 889, 95, 0, 8, false, localized(options, "пасмурно", "overcast")},
+		{760, 889, 90, 1, 8, false, localized(options, "дождь", "rain")},
+		{1380, 889, 90, 1, 0, false, localized(options, "снег", "snow")},
 	}
 	for _, item := range items {
 		frame := forecast.SurfaceFrame{CloudCoverPercent: item.cloud, PrecipitationMM: item.precipitation, TemperatureC: item.temperature, DewPointC: item.temperature - 6}
@@ -225,16 +236,24 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts) {
 		drawText(canvas, fonts.small, item.x+24, item.y+6, item.label, weatherText)
 	}
 	drawDrop(canvas, 2050, 884, 8, weatherCyan)
-	drawText(canvas, fonts.small, 2072, 895, "возможна роса: T−Td ≤3°C", weatherText)
+	drawText(canvas, fonts.small, 2072, 895, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
 	drawDrop(canvas, 2650, 884, 8, weatherOrange)
-	drawText(canvas, fonts.small, 2672, 895, "высокий риск росы: ≤1°C", weatherText)
+	drawText(canvas, fonts.small, 2672, 895, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
 	drawFog(canvas, 140, 916, 13, weatherCyan)
-	drawText(canvas, fonts.small, 174, 930, "возможен туман: ICON VIS <5 км + насыщение", weatherText)
+	drawText(canvas, fonts.small, 174, 930, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
 	drawFog(canvas, 1200, 916, 13, weatherOrange)
-	drawText(canvas, fonts.small, 1234, 930, "высокий риск тумана: ICON VIS <1 км + насыщение", weatherText)
-	drawText(canvas, fonts.small, 22, 958, "Роса — подготовить обогрев/бленду; она не ухудшает seeing.", weatherMuted)
-	drawText(canvas, fonts.small, 22, 986, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", weatherMuted)
-	drawText(canvas, fonts.small, 22, 1014, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", weatherMuted)
+	drawText(canvas, fonts.small, 1234, 930, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
+	drawText(canvas, fonts.small, 22, 958, localized(options, "Роса — подготовить обогрев/бленду; она не ухудшает seeing.", "Dew — prepare a heater/dew shield; it does not worsen seeing."), weatherMuted)
+	drawText(canvas, fonts.small, 22, 986, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
+	drawText(canvas, fonts.small, 22, 1014, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
+}
+
+func englishMoonPhase(value string) string {
+	return map[string]string{
+		"new": "new moon", "waxing_crescent": "waxing crescent", "first_quarter": "first quarter",
+		"waxing_gibbous": "waxing gibbous", "full": "full moon", "waning_gibbous": "waning gibbous",
+		"last_quarter": "last quarter", "waning_crescent": "waning crescent",
+	}[value]
 }
 
 func drawWeatherIcon(canvas *image.RGBA, centerX, centerY, radius int, frame forecast.SurfaceFrame, daylight bool) {

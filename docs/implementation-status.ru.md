@@ -16,6 +16,8 @@
 - Go `1.26.5`, `tzf v1.2.3`, `gonum/plot v0.17.0`;
 - Telegram принимает native location, `59.9386, 30.3141` и `/forecast 59.9386 30.3141`;
 - `/start` и `/help` объясняют запрос и интерпретацию всех семи графиков;
+- пользовательское сообщение показывает возраст model run относительно настраиваемого `max_stale_age`; после порога оно явно предупреждает `⚠️ stale run`, но продолжает выдавать последний полный набор;
+- язык Telegram определяется по `User.language_code`: только `ru*` получает русский интерфейс, любой другой или отсутствующий код — английский; локализованы помощь, статусы, ошибки, кнопки, подписи, погодная таблица и все заголовки/оси/легенды PNG, а render-cache разделён по языку;
 - timezone определяется offline по координатам и подписывается на каждом PNG;
 - DWD discovery выбирает последний полный ICON-EU цикл `00/06/12/18` с доступным `+72 h`;
 - atomic sync скачивает pressure-level `U/V/FI/T`, не сохраняет `.bz2`, проверяет каждый бандл через ecCodes и SHA-256;
@@ -33,6 +35,8 @@
 - старый wind-only index сохранён отдельным диагностическим графиком; direction delta равен `0°` при ветре `<2 m/s`, а `NaN` означает только отсутствие данных;
 - контейнер работает от `1000:1000`, с read-only root filesystem и всеми bind mounts внутри `/opt/docker/bot_astrosferum`;
 - `go test ./...`, `go vet ./...` и `doctor` проходят.
+
+Freshness и двуязычный render развёрнуты 21.07.2026: production-бинарь успешно создал по семь ненулевых PNG для `ru` и `en`, временные проверочные каталоги удалены, основной контейнер остался `running` с `restart_count=0`, PostgreSQL — `healthy`.
 
 ## Production-изменение Overall
 
@@ -69,8 +73,8 @@
   записи без `MH`, `T` и нативной толщины слоя не переиспользовались;
 - version markers синхронизированы с новым контрактом:
   `seeing-hybrid-tke-mh-hmnsp99-v4`,
-  `conditions-v4-dynamic-mh-cloud-guard`, `render-v9-dynamic-mh` и
-  `telegram-render-v6-dynamic-mh`.
+  `conditions-v4-dynamic-mh-cloud-guard`, `render-v10-localized` и
+  `telegram-render-v7-localized`.
 
 Server-side fixed-2-km расчёт двух сроков без подгонки
 (`ground Cn² scale=1`) дал для исторического контрольного примера `2.221″` на `f042` и `3.644″` на
@@ -113,9 +117,8 @@ Provider засветки зафиксирован на проверенном L
 
 ## Следующий vertical slice
 
-1. Показывать freshness и предупреждать о stale run в пользовательском сообщении.
-2. Реализовать ICON Global fallback для точек России вне ICON-EU.
-3. После стабилизации Telegram добавить эквивалентный VK adapter.
+1. Реализовать ICON Global fallback для точек России вне ICON-EU.
+2. После стабилизации Telegram добавить эквивалентный VK adapter.
 
 Production-расчёт `seeing-hybrid-tke-mh-hmnsp99-v4` не считается
 наблюдательно откалиброванным до

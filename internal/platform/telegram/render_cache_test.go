@@ -79,6 +79,18 @@ func TestRenderCacheKeyIncludesEveryOverallCalibrationField(t *testing.T) {
 	}
 }
 
+func TestRenderCacheKeyIncludesLanguage(t *testing.T) {
+	vertical := forecast.SyntheticVerticalFixture()
+	surface := forecast.SyntheticSurfaceFixture()
+	cloud := forecast.SyntheticCloudFixture()
+	calibration := forecast.DefaultOverallIndexCalibration()
+	russian := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+	english := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "en"}, calibration)
+	if russian == english {
+		t.Fatal("render cache key ignored language")
+	}
+}
+
 func TestUpdateShardPreservesChatAffinity(t *testing.T) {
 	first := Update{ID: 1, Message: &Message{Chat: Chat{ID: -12345}}}
 	second := Update{ID: 2, Message: &Message{Chat: Chat{ID: -12345}}}

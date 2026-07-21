@@ -130,6 +130,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	latitude := flags.Float64("lat", 0, "latitude")
 	longitude := flags.Float64("lon", 0, "longitude")
 	outputDirectory := flags.String("output", "/app/data/verification/render-live", "output directory")
+	language := flags.String("language", "en", "chart language: en or ru")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -138,6 +139,9 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	if err := forecast.ValidateCoordinates(*latitude, *longitude); err != nil {
 		return err
+	}
+	if *language != "en" && *language != "ru" {
+		return errors.New("render language must be en or ru")
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -167,7 +171,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	cloud = cloud.Window(time.Now(), 72)
-	result, err := render.All(*outputDirectory, series, render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height})
+	result, err := render.All(*outputDirectory, series, render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height, Language: *language})
 	if err != nil {
 		return err
 	}
@@ -176,12 +180,12 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	result.Weather = filepath.Join(*outputDirectory, "weather-hourly.png")
-	if err := render.Weather(result.Weather, surface, sky); err != nil {
+	if err := render.Weather(result.Weather, surface, sky, render.Options{Language: *language}); err != nil {
 		return err
 	}
 	calibration := overallCalibration(cfg.Algorithms)
 	result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
-	if err := render.CloudObstruction(result.CloudObstruction, cloud, calibration, render.Options{Width: 3200, Height: 1100}); err != nil {
+	if err := render.CloudObstruction(result.CloudObstruction, cloud, calibration, render.Options{Width: 3200, Height: 1100, Language: *language}); err != nil {
 		return err
 	}
 	overall, err := forecast.ComputeHourlyOverallIndex(series, surface, cloud, calibration)
@@ -189,7 +193,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
-	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960}); err != nil {
+	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960, Language: *language}); err != nil {
 		return err
 	}
 	return writeJSON(stdout, struct {
@@ -305,14 +309,18 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 	outputDirectory := flags.String("output", "/app/data/verification/render-sample", "output directory for synthetic fixture PNGs")
 	width := flags.Int("width", render.DefaultWidth, "PNG width in pixels")
 	height := flags.Int("height", render.DefaultHeight, "PNG height in pixels")
+	language := flags.String("language", "en", "chart language: en or ru")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("render-sample accepts flags only")
 	}
+	if *language != "en" && *language != "ru" {
+		return errors.New("render language must be en or ru")
+	}
 	series := forecast.SyntheticVerticalFixture()
-	result, err := render.All(*outputDirectory, series, render.Options{Width: *width, Height: *height})
+	result, err := render.All(*outputDirectory, series, render.Options{Width: *width, Height: *height, Language: *language})
 	if err != nil {
 		return err
 	}
@@ -322,11 +330,11 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	result.Weather = filepath.Join(*outputDirectory, "weather-hourly.png")
-	if err := render.Weather(result.Weather, surface, sky); err != nil {
+	if err := render.Weather(result.Weather, surface, sky, render.Options{Language: *language}); err != nil {
 		return err
 	}
 	result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
-	if err := render.CloudObstruction(result.CloudObstruction, forecast.SyntheticCloudFixture(), forecast.DefaultOverallIndexCalibration(), render.Options{Width: 3200, Height: 1100}); err != nil {
+	if err := render.CloudObstruction(result.CloudObstruction, forecast.SyntheticCloudFixture(), forecast.DefaultOverallIndexCalibration(), render.Options{Width: 3200, Height: 1100, Language: *language}); err != nil {
 		return err
 	}
 	overall, err := forecast.ComputeHourlyOverallIndex(series, surface, forecast.SyntheticCloudFixture(), forecast.DefaultOverallIndexCalibration())
@@ -334,7 +342,7 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
-	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960}); err != nil {
+	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960, Language: *language}); err != nil {
 		return err
 	}
 	return writeJSON(stdout, struct {

@@ -31,7 +31,8 @@ type Message struct {
 }
 
 type User struct {
-	ID int64 `json:"id"`
+	ID           int64  `json:"id"`
+	LanguageCode string `json:"language_code"`
 }
 
 type Chat struct {

@@ -10,14 +10,15 @@ import (
 	"gonum.org/v1/plot/vg"
 )
 
-func UsageStats(path string, days []store.DailyUsage) error {
+func UsageStats(path string, days []store.DailyUsage, language string) error {
 	if len(days) == 0 {
 		return fmt.Errorf("usage stats are empty")
 	}
 	p := plot.New()
-	p.Title.Text = "Запросы прогноза за последние 30 дней"
-	p.X.Label.Text = "День · MSK (UTC+3)"
-	p.Y.Label.Text = "Запросы"
+	options := Options{Language: language}
+	p.Title.Text = localized(options, "Запросы прогноза за последние 30 дней", "Forecast requests over the last 30 days")
+	p.X.Label.Text = localized(options, "День · MSK (UTC+3)", "Day · MSK (UTC+3)")
+	p.Y.Label.Text = localized(options, "Запросы", "Requests")
 	p.Y.Min = 0
 	successValues := make(plotter.Values, len(days))
 	failedValues := make(plotter.Values, len(days))
@@ -46,8 +47,8 @@ func UsageStats(path string, days []store.DailyUsage) error {
 	successBars.Color = color.RGBA{R: 55, G: 175, B: 95, A: 255}
 	successBars.StackOn(failedBars)
 	p.Add(failedBars, successBars)
-	p.Legend.Add("С ошибкой", failedBars)
-	p.Legend.Add("Успешно", successBars)
+	p.Legend.Add(localized(options, "С ошибкой", "Failed"), failedBars)
+	p.Legend.Add(localized(options, "Успешно", "Successful"), successBars)
 	p.Legend.Top = true
 	p.NominalX(labels...)
 	p.Add(plotter.NewGrid())

@@ -17,7 +17,7 @@ func TestUsageStatsRendersEmptyThirtyDayWindow(t *testing.T) {
 	days[28].Requests, days[28].Successful = 3, 3
 	days[29].Requests, days[29].Successful, days[29].Failed = 5, 4, 1
 	path := filepath.Join(t.TempDir(), "stats.png")
-	if err := UsageStats(path, days); err != nil {
+	if err := UsageStats(path, days, "ru"); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)

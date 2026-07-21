@@ -38,7 +38,7 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = handler.Handle(context.Background(), Update{Message: &Message{Chat: Chat{ID: 42}, Text: "/start"}})
+	err = handler.Handle(context.Background(), Update{Message: &Message{Chat: Chat{ID: 42}, From: &User{ID: 42, LanguageCode: "ru"}, Text: "/start"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +60,35 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 	}
 }
 
+func TestNonRussianClientReceivesEnglishHelp(t *testing.T) {
+	messenger := &fakeMessenger{}
+	handler, err := NewHandler(messenger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Handle(context.Background(), Update{Message: &Message{Chat: Chat{ID: 42}, From: &User{ID: 42, LanguageCode: "de"}, Text: "/start"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].text, "How to request a forecast") {
+		t.Fatalf("unexpected English reply: %#v", messenger.messages)
+	}
+	if strings.Contains(messenger.messages[0].text, "Как читать результат") {
+		t.Fatalf("English reply contains Russian help: %q", messenger.messages[0].text)
+	}
+	if len([]byte(messenger.messages[0].text)) > 4096 {
+		t.Fatalf("English Telegram help is too long: %d bytes", len([]byte(messenger.messages[0].text)))
+	}
+}
+
+func TestMissingLanguageCodeUsesEnglish(t *testing.T) {
+	if got := languageFromCode(""); got != languageEnglish {
+		t.Fatalf("languageFromCode(empty) = %q, want en", got)
+	}
+	if got := languageFromCode("ru-RU"); got != languageRussian {
+		t.Fatalf("languageFromCode(ru-RU) = %q, want ru", got)
+	}
+}
+
 func TestNativeLocationResolvesCoordinateTimezone(t *testing.T) {
 	messenger := &fakeMessenger{}
 	handler, err := NewHandler(messenger)
@@ -67,7 +96,7 @@ func TestNativeLocationResolvesCoordinateTimezone(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = handler.Handle(context.Background(), Update{Message: &Message{
-		Chat: Chat{ID: 42}, Location: &Location{Latitude: 59.9386, Longitude: 30.3141},
+		Chat: Chat{ID: 42}, From: &User{ID: 42, LanguageCode: "ru"}, Location: &Location{Latitude: 59.9386, Longitude: 30.3141},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +112,7 @@ func TestForecastCommandValidationError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := handler.Handle(context.Background(), Update{Message: &Message{Chat: Chat{ID: 42}, Text: "/forecast nope"}}); err != nil {
+	if err := handler.Handle(context.Background(), Update{Message: &Message{Chat: Chat{ID: 42}, From: &User{ID: 42, LanguageCode: "ru"}, Text: "/forecast nope"}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].text, "Не удалось") {
@@ -94,14 +123,14 @@ func TestForecastCommandValidationError(t *testing.T) {
 func TestForecastFreshnessText(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
 
-	fresh := forecastFreshnessText(now.Add(-9*time.Hour-17*time.Minute), now, 12*time.Hour)
+	fresh := forecastFreshnessText(now.Add(-9*time.Hour-17*time.Minute), now, 12*time.Hour, languageRussian)
 	for _, expected := range []string{"Актуальность данных (freshness)", "run актуален", "9 ч 17 мин", "порог 12 ч 0 мин"} {
 		if !strings.Contains(fresh, expected) {
 			t.Fatalf("fresh status %q does not contain %q", fresh, expected)
 		}
 	}
 
-	stale := forecastFreshnessText(now.Add(-14*time.Hour-2*time.Minute), now, 12*time.Hour)
+	stale := forecastFreshnessText(now.Add(-14*time.Hour-2*time.Minute), now, 12*time.Hour, languageRussian)
 	for _, expected := range []string{"⚠️", "Данные устарели (stale run)", "14 ч 2 мин", "порог 12 ч 0 мин", "последние изменения атмосферы"} {
 		if !strings.Contains(stale, expected) {
 			t.Fatalf("stale status %q does not contain %q", stale, expected)
@@ -111,8 +140,18 @@ func TestForecastFreshnessText(t *testing.T) {
 
 func TestForecastFreshnessTreatsClockSkewAsZeroAge(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
-	status := forecastFreshnessText(now.Add(time.Minute), now, 12*time.Hour)
+	status := forecastFreshnessText(now.Add(time.Minute), now, 12*time.Hour, languageRussian)
 	if !strings.Contains(status, "run актуален, возраст 0 мин") {
 		t.Fatalf("unexpected clock-skew status: %q", status)
+	}
+}
+
+func TestForecastFreshnessEnglish(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
+	status := forecastFreshnessText(now.Add(-13*time.Hour-5*time.Minute), now, 12*time.Hour, languageEnglish)
+	for _, expected := range []string{"⚠️ Stale run", "13h 5min", "12h 0min", "recent atmospheric changes"} {
+		if !strings.Contains(status, expected) {
+			t.Fatalf("English freshness status %q does not contain %q", status, expected)
+		}
 	}
 }

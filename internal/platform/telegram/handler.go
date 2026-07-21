@@ -212,8 +212,12 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 	}
 	message := update.Message
 	userID := message.Chat.ID
-	if message.From != nil && message.From.ID > 0 {
-		userID = message.From.ID
+	language := languageEnglish
+	if message.From != nil {
+		language = languageFromCode(message.From.LanguageCode)
+		if message.From.ID > 0 {
+			userID = message.From.ID
+		}
 	}
 	if handler.persistence != nil {
 		if err := handler.persistence.TouchUser(ctx, userID); err != nil {
@@ -229,40 +233,42 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 		command = command[:at]
 	}
 	if command == "/start" || command == "/help" {
-		return handler.sendMainKeyboard(ctx, message.Chat.ID, StartHelp, userID)
+		return handler.sendMainKeyboard(ctx, message.Chat.ID, startHelp(language), userID, language)
 	}
 	if command == "/cancel" {
 		handler.clearSession(userID)
-		return handler.sendMainKeyboard(ctx, message.Chat.ID, "Сохранение отменено.", userID)
+		return handler.sendMainKeyboard(ctx, message.Chat.ID, language.text("Сохранение отменено.", "Saving cancelled."), userID, language)
 	}
-	if text == "⬅️ Назад" {
+	if isButton(text, "⬅️ Назад", "⬅️ Back") {
 		handler.clearSession(userID)
-		return handler.sendMainKeyboard(ctx, message.Chat.ID, "Главное меню.", userID)
+		return handler.sendMainKeyboard(ctx, message.Chat.ID, language.text("Главное меню.", "Main menu."), userID, language)
 	}
-	if command == "/admin" || command == "/stats" || text == "📊 Статистика" {
-		return handler.replyAdminStats(ctx, message.Chat.ID, userID)
+	if command == "/admin" || command == "/stats" || isButton(text, "📊 Статистика", "📊 Statistics") {
+		return handler.replyAdminStats(ctx, message.Chat.ID, userID, language)
 	}
-	if command == "/points" || text == "📌 Мои точки" {
-		return handler.replyPoints(ctx, message.Chat.ID, userID)
+	if command == "/points" || isButton(text, "📌 Мои точки", "📌 My locations") {
+		return handler.replyPoints(ctx, message.Chat.ID, userID, language)
 	}
 	if command == "/deletepoint" {
-		return handler.deletePoint(ctx, message.Chat.ID, userID, text)
+		return handler.deletePoint(ctx, message.Chat.ID, userID, text, language)
 	}
-	if command == "/savepoint" || text == "💾 Сохранить координаты" {
+	if command == "/savepoint" || isButton(text, "💾 Сохранить координаты", "💾 Save coordinates") {
 		handler.setSession(userID, saveSession{Stage: 1})
-		return handler.sendSaveKeyboard(ctx, message.Chat.ID, "Отправьте геопозицию или координаты текстом (например, 59.9386, 30.3141). Для отмены: /cancel")
+		return handler.sendSaveKeyboard(ctx, message.Chat.ID, language.text(
+			"Отправьте геопозицию или координаты текстом (например, 59.9386, 30.3141). Для отмены: /cancel",
+			"Share a location or send coordinates as text (for example, 59.9386, 30.3141). To cancel: /cancel"), language)
 	}
 	if point, ok, err := handler.selectedPoint(ctx, userID, text); err != nil {
 		return err
 	} else if ok {
-		return handler.replyToLocation(ctx, message.Chat.ID, userID, point.Latitude, point.Longitude)
+		return handler.replyToLocation(ctx, message.Chat.ID, userID, point.Latitude, point.Longitude, language)
 	}
 	if session, ok := handler.getSession(userID); ok {
-		return handler.handleSaveSession(ctx, message, userID, session)
+		return handler.handleSaveSession(ctx, message, userID, session, language)
 	}
 
 	if message.Location != nil {
-		return handler.replyToLocation(ctx, message.Chat.ID, userID, message.Location.Latitude, message.Location.Longitude)
+		return handler.replyToLocation(ctx, message.Chat.ID, userID, message.Location.Latitude, message.Location.Longitude, language)
 	}
 	if text == "" {
 		return nil
@@ -270,15 +276,16 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 	latitude, longitude, err := forecast.ParseLocationText(text)
 	if err != nil {
 		if command == "/forecast" {
-			return handler.messenger.SendMessage(ctx, message.Chat.ID,
-				"Не удалось прочитать координаты. Пример: /forecast 59.9386 30.3141", true)
+			return handler.sendUserMessage(ctx, message.Chat.ID, language.text(
+				"Не удалось прочитать координаты. Пример: /forecast 59.9386 30.3141",
+				"Could not parse the coordinates. Example: /forecast 59.9386 30.3141"), true, language)
 		}
 		return nil
 	}
-	return handler.replyToLocation(ctx, message.Chat.ID, userID, latitude, longitude)
+	return handler.replyToLocation(ctx, message.Chat.ID, userID, latitude, longitude, language)
 }
 
-func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int64, latitude, longitude float64) error {
+func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int64, latitude, longitude float64, language userLanguage) error {
 	successful := false
 	if handler.persistence != nil {
 		defer func() {
@@ -295,14 +302,14 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	label := forecast.TimeZoneLabel(timeZone, time.Now())
 	location, err := forecast.NewLocation(latitude, longitude, timeZone)
 	if err != nil {
-		return handler.messenger.SendMessage(ctx, chatID, "Координаты не прошли проверку.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Координаты не прошли проверку.", "The coordinates failed validation."), true, language)
 	}
 	if handler.provider == nil {
-		text := fmt.Sprintf("Точка принята: %.4f, %.4f\nЧасовая зона: %s\n\n%s", latitude, longitude, label, NotReadyText)
-		return handler.messenger.SendMessage(ctx, chatID, text, true)
+		text := fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\n\n%s", "Location accepted: %.4f, %.4f\nTime zone: %s\n\n%s"), latitude, longitude, label, language.text(NotReadyText, NotReadyTextEN))
+		return handler.sendUserMessage(ctx, chatID, text, true, language)
 	}
-	if err := handler.messenger.SendMessage(ctx, chatID,
-		fmt.Sprintf("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nСтрою прогноз ICON-EU…", latitude, longitude, label), true); err != nil {
+	if err := handler.sendUserMessage(ctx, chatID,
+		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nСтрою прогноз ICON-EU…", "Location accepted: %.4f, %.4f\nTime zone: %s\nBuilding the ICON-EU forecast…"), latitude, longitude, label), true, language); err != nil {
 		return err
 	}
 	type lightPollutionResult struct {
@@ -328,7 +335,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	dataStarted := time.Now()
 	series, err := handler.provider.Vertical(ctx, location)
 	if err != nil {
-		return handler.messenger.SendMessage(ctx, chatID, "Не удалось получить актуальный ICON-EU профиль: "+safeForecastError(err), true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Не удалось получить актуальный ICON-EU профиль: ", "Could not obtain a current ICON-EU profile: ")+safeForecastError(err, language), true, language)
 	}
 	var surfaceSeries forecast.SurfaceSeries
 	var sky astronomy.Series
@@ -361,11 +368,13 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	dataDuration := time.Since(dataStarted)
 	renderStarted := time.Now()
+	requestRenderOptions := handler.renderOptions
+	requestRenderOptions.Language = language.renderCode()
 	renderCacheHit := false
 	cacheKey := ""
 	var charts render.Result
 	if handler.renderCacheRoot != "" && hasWeather && hasCloud {
-		cacheKey = forecastRenderCacheKey(series, surfaceSeries, cloudSeries, sky, handler.renderOptions, handler.overallCalibration)
+		cacheKey = forecastRenderCacheKey(series, surfaceSeries, cloudSeries, sky, requestRenderOptions, handler.overallCalibration)
 		charts, renderCacheHit = loadRenderCache(handler.renderCacheRoot, cacheKey)
 		hasOverall = renderCacheHit
 	}
@@ -375,20 +384,20 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			root = handler.renderCacheRoot
 		}
 		if err := os.MkdirAll(root, 0o750); err != nil {
-			return handler.messenger.SendMessage(ctx, chatID, "Не удалось подготовить каталог графиков.", true)
+			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось подготовить каталог графиков.", "Could not prepare the chart directory."), true, language)
 		}
 		requestDirectory, directoryError := os.MkdirTemp(root, ".incoming-")
 		if directoryError != nil {
-			return handler.messenger.SendMessage(ctx, chatID, "Не удалось подготовить временный каталог графиков.", true)
+			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось подготовить временный каталог графиков.", "Could not prepare the temporary chart directory."), true, language)
 		}
 		defer os.RemoveAll(requestDirectory)
-		charts, err = render.All(requestDirectory, series, handler.renderOptions)
+		charts, err = render.All(requestDirectory, series, requestRenderOptions)
 		if err != nil {
-			return handler.messenger.SendMessage(ctx, chatID, "Не удалось построить графики прогноза.", true)
+			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось построить графики прогноза.", "Could not render the forecast charts."), true, language)
 		}
 		if hasWeather {
 			charts.Weather = filepath.Join(requestDirectory, "weather-hourly.png")
-			if err := render.Weather(charts.Weather, surfaceSeries, sky); err != nil {
+			if err := render.Weather(charts.Weather, surfaceSeries, sky, requestRenderOptions); err != nil {
 				charts.Weather, hasWeather = "", false
 			}
 		}
@@ -398,7 +407,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 				handler.logf("forecast request %d overall index calculation failed: %v", requestID, overallError)
 			} else {
 				charts.OverallIndex = filepath.Join(requestDirectory, "overall-astronomy-index-hourly.png")
-				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: 3200, Height: 960}); renderError == nil {
+				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: 3200, Height: 960, Language: language.renderCode()}); renderError == nil {
 					hasOverall = true
 				} else {
 					handler.logf("forecast request %d overall index render failed: %v", requestID, renderError)
@@ -407,7 +416,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		}
 		if hasCloud {
 			charts.CloudObstruction = filepath.Join(requestDirectory, "cloud-obstruction-height-hourly.png")
-			if err := render.CloudObstruction(charts.CloudObstruction, cloudSeries, handler.overallCalibration, render.Options{Width: 3200, Height: 1100}); err != nil {
+			if err := render.CloudObstruction(charts.CloudObstruction, cloudSeries, handler.overallCalibration, render.Options{Width: 3200, Height: 1100, Language: language.renderCode()}); err != nil {
 				charts.CloudObstruction, hasCloud = "", false
 			}
 		}
@@ -426,17 +435,19 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	if zoneError != nil {
 		locationZone = time.UTC
 	}
-	summary := fmt.Sprintf("ICON-EU run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
-		series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), handler.forecastMaxStaleAge), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
+	summary := fmt.Sprintf(language.text(
+		"ICON-EU run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
+		"ICON-EU run %s UTC\n%s\nPeriod: %s — %s\nGrid: %s\nOptical turbulence: %s; hybrid ICON model estimate using TKE up to dynamic MH 500–2000 m AGL and HMNSP99 above, with seeing and τ₀ at 500 nm."),
+		series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), handler.forecastMaxStaleAge, language), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
 		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion)
 	if lightPollutionChannel != nil {
 		select {
 		case result := <-lightPollutionChannel:
 			if result.err != nil {
 				handler.logf("forecast request %d light-pollution lookup failed: %v", requestID, result.err)
-				summary += "\nЗасветка: оценка временно недоступна."
+				summary += language.text("\nЗасветка: оценка временно недоступна.", "\nLight pollution: estimate temporarily unavailable.")
 			} else {
-				summary += fmt.Sprintf("\nЗасветка: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (Light Pollution Atlas %d, зенит, интерполяция 30″).",
+				summary += fmt.Sprintf(language.text("\nЗасветка: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (Light Pollution Atlas %d, зенит, интерполяция 30″).", "\nLight pollution: LPI %.2f, SQM %.2f mag/arcsec², Bortle reference %s (Light Pollution Atlas %d, zenith, 30″ interpolation)."),
 					result.estimate.LPI, result.estimate.SQM, result.estimate.BortleDisplay, result.estimate.Year)
 			}
 		case <-ctx.Done():
@@ -448,15 +459,15 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		case result := <-worldAtlasChannel:
 			if result.err != nil {
 				handler.logf("forecast request %d World Atlas 2015 lookup failed: %v", requestID, result.err)
-				summary += "\nСравнение World Atlas 2015: оценка временно недоступна."
+				summary += language.text("\nСравнение World Atlas 2015: оценка временно недоступна.", "\nWorld Atlas 2015 comparison: estimate temporarily unavailable.")
 			} else {
-				summary += fmt.Sprintf("\nСравнение World Atlas 2015: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (зенит, интерполяция 30″).", result.estimate.LPI, result.estimate.SQM, result.estimate.BortleDisplay)
+				summary += fmt.Sprintf(language.text("\nСравнение World Atlas 2015: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (зенит, интерполяция 30″).", "\nWorld Atlas 2015 comparison: LPI %.2f, SQM %.2f mag/arcsec², Bortle reference %s (zenith, 30″ interpolation)."), result.estimate.LPI, result.estimate.SQM, result.estimate.BortleDisplay)
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	if err := handler.messenger.SendMessage(ctx, chatID, summary, true); err != nil {
+	if err := handler.sendUserMessage(ctx, chatID, summary, true, language); err != nil {
 		return err
 	}
 	photos := make([]struct {
@@ -474,22 +485,22 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	number := 1
 	if hasWeather {
-		photos = append(photos, struct{ path, caption string }{charts.Weather, fmt.Sprintf("%d/%d · Почасовая погода и небесные события на 72 часа", number, total)})
+		photos = append(photos, struct{ path, caption string }{charts.Weather, fmt.Sprintf(language.text("%d/%d · Почасовая погода и небесные события на 72 часа", "%d/%d · Hourly weather and celestial events for 72 hours"), number, total)})
 		number++
 	}
 	if hasOverall {
-		photos = append(photos, struct{ path, caption string }{charts.OverallIndex, fmt.Sprintf("%d/%d · Общий почасовой индекс: ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, τ₀, облачная преграда и туман", number, total)})
+		photos = append(photos, struct{ path, caption string }{charts.OverallIndex, fmt.Sprintf(language.text("%d/%d · Общий почасовой индекс: ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, τ₀, облачная преграда и туман", "%d/%d · Overall hourly index: ICON TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above, τ₀, cloud obstruction, and fog"), number, total)})
 		number++
 	}
 	if hasCloud {
-		photos = append(photos, struct{ path, caption string }{charts.CloudObstruction, fmt.Sprintf("%d/%d · Эффективная облачная преграда ICON: покрытие и жидкий/ледяной конденсат по фактической высоте", number, total)})
+		photos = append(photos, struct{ path, caption string }{charts.CloudObstruction, fmt.Sprintf(language.text("%d/%d · Эффективная облачная преграда ICON: покрытие и жидкий/ледяной конденсат по фактической высоте", "%d/%d · ICON effective cloud obstruction: cover and liquid/ice condensate by actual height"), number, total)})
 		number++
 	}
 	photos = append(photos,
-		struct{ path, caption string }{charts.WindSpeed, fmt.Sprintf("%d/%d · Скорость ветра по уровням давления", number, total)},
-		struct{ path, caption string }{charts.VectorShear, fmt.Sprintf("%d/%d · Вертикальный векторный сдвиг ветра, м/с на км", number+1, total)},
-		struct{ path, caption string }{charts.DirectionDelta, fmt.Sprintf("%d/%d · Изменение направления между соседними уровнями", number+2, total)},
-		struct{ path, caption string }{charts.SeeingIndex, fmt.Sprintf("%d/%d · Прогнозный индекс сиинга по ветру; уверенность — только по дальности срока и в Overall Index не входит", number+3, total)},
+		struct{ path, caption string }{charts.WindSpeed, fmt.Sprintf(language.text("%d/%d · Скорость ветра по уровням давления", "%d/%d · Wind speed by pressure level"), number, total)},
+		struct{ path, caption string }{charts.VectorShear, fmt.Sprintf(language.text("%d/%d · Вертикальный векторный сдвиг ветра, м/с на км", "%d/%d · Vertical vector wind shear, m/s per km"), number+1, total)},
+		struct{ path, caption string }{charts.DirectionDelta, fmt.Sprintf(language.text("%d/%d · Изменение направления между соседними уровнями", "%d/%d · Wind direction change between adjacent levels"), number+2, total)},
+		struct{ path, caption string }{charts.SeeingIndex, fmt.Sprintf(language.text("%d/%d · Прогнозный индекс сиинга по ветру; уверенность — только по дальности срока и в Overall Index не входит", "%d/%d · Forecast wind seeing index; confidence depends only on lead time and is not part of the Overall Index"), number+3, total)},
 	)
 	sendStarted := time.Now()
 	failed := 0
@@ -499,8 +510,8 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		}
 	}
 	if failed > 0 {
-		return handler.messenger.SendMessage(ctx, chatID,
-			fmt.Sprintf("Не удалось отправить %d из %d графиков. Попробуйте повторить запрос позже.", failed, len(photos)), true)
+		return handler.sendUserMessage(ctx, chatID,
+			fmt.Sprintf(language.text("Не удалось отправить %d из %d графиков. Попробуйте повторить запрос позже.", "Could not send %d of %d charts. Please try again later."), failed, len(photos)), true, language)
 	}
 	handler.logf("forecast request %d complete data=%s render=%s render_cache_hit=%t send=%s total=%s",
 		requestID, dataDuration.Round(time.Millisecond), renderDuration.Round(time.Millisecond), renderCacheHit,
@@ -509,7 +520,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	return nil
 }
 
-func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration) string {
+func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration, language userLanguage) string {
 	if maxAge <= 0 {
 		maxAge = defaultForecastMaxStaleAge
 	}
@@ -517,15 +528,15 @@ func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration) string
 	if age < 0 {
 		age = 0
 	}
-	ageText := formatForecastAge(age)
-	thresholdText := formatForecastAge(maxAge)
+	ageText := formatForecastAge(age, language)
+	thresholdText := formatForecastAge(maxAge, language)
 	if age > maxAge {
-		return fmt.Sprintf("⚠️ Данные устарели (stale run): возраст run %s, порог %s. Прогноз может не учитывать последние изменения атмосферы.", ageText, thresholdText)
+		return fmt.Sprintf(language.text("⚠️ Данные устарели (stale run): возраст run %s, порог %s. Прогноз может не учитывать последние изменения атмосферы.", "⚠️ Stale run: run age %s exceeds the %s threshold. The forecast may not reflect recent atmospheric changes."), ageText, thresholdText)
 	}
-	return fmt.Sprintf("Актуальность данных (freshness): run актуален, возраст %s (порог %s).", ageText, thresholdText)
+	return fmt.Sprintf(language.text("Актуальность данных (freshness): run актуален, возраст %s (порог %s).", "Data freshness: current run, age %s (threshold %s)."), ageText, thresholdText)
 }
 
-func formatForecastAge(age time.Duration) string {
+func formatForecastAge(age time.Duration, language userLanguage) string {
 	if age < 0 {
 		age = 0
 	}
@@ -533,6 +544,15 @@ func formatForecastAge(age time.Duration) string {
 	days := totalMinutes / (24 * 60)
 	hours := totalMinutes/60 - days*24
 	minutes := totalMinutes % 60
+	if language == languageEnglish {
+		if days > 0 {
+			return fmt.Sprintf("%dd %dh %dmin", days, hours, minutes)
+		}
+		if hours > 0 {
+			return fmt.Sprintf("%dh %dmin", hours, minutes)
+		}
+		return fmt.Sprintf("%dmin", minutes)
+	}
 	if days > 0 {
 		return fmt.Sprintf("%d д %d ч %d мин", days, hours, minutes)
 	}
@@ -542,21 +562,30 @@ func formatForecastAge(age time.Duration) string {
 	return fmt.Sprintf("%d мин", minutes)
 }
 
-func safeForecastError(err error) string {
+func safeForecastError(err error, language userLanguage) string {
 	text := strings.TrimSpace(err.Error())
 	if strings.Contains(text, "outside the current ICON-EU domain") {
-		return "точка находится вне домена ICON-EU; fallback ICON Global ещё не подключён."
+		return language.text("точка находится вне домена ICON-EU; fallback ICON Global ещё не подключён.", "the location is outside the ICON-EU domain; the ICON Global fallback is not connected yet.")
 	}
 	if strings.Contains(text, "current ICON-EU run") {
-		return "текущий run ещё не опубликован."
+		return language.text("текущий run ещё не опубликован.", "the current run has not been published yet.")
 	}
-	return "внутренняя ошибка данных."
+	return language.text("внутренняя ошибка данных.", "internal data error.")
 }
 
-func (handler *Handler) sendMainKeyboard(ctx context.Context, chatID int64, text string, userID int64) error {
-	k := DefaultKeyboard()
+func (handler *Handler) sendUserMessage(ctx context.Context, chatID int64, text string, locationButton bool, language userLanguage) error {
+	if locationButton {
+		if messenger, ok := handler.messenger.(KeyboardMessenger); ok {
+			return messenger.SendMessageWithKeyboard(ctx, chatID, text, defaultKeyboard(language))
+		}
+	}
+	return handler.messenger.SendMessage(ctx, chatID, text, locationButton)
+}
+
+func (handler *Handler) sendMainKeyboard(ctx context.Context, chatID int64, text string, userID int64, language userLanguage) error {
+	k := defaultKeyboard(language)
 	if _, ok := handler.admins[userID]; ok {
-		k = append(k, []Button{{Text: "📊 Статистика"}})
+		k = append(k, []Button{{Text: language.text("📊 Статистика", "📊 Statistics")}})
 	}
 	if m, ok := handler.messenger.(KeyboardMessenger); ok {
 		return m.SendMessageWithKeyboard(ctx, chatID, text, k)
@@ -564,8 +593,8 @@ func (handler *Handler) sendMainKeyboard(ctx context.Context, chatID int64, text
 	return handler.messenger.SendMessage(ctx, chatID, text, true)
 }
 
-func (handler *Handler) sendSaveKeyboard(ctx context.Context, chatID int64, text string) error {
-	k := Keyboard{{{Text: "📍 Отправить геопозицию", RequestLocation: true}}, {{Text: "⬅️ Назад"}, {Text: "❌ Отмена"}}}
+func (handler *Handler) sendSaveKeyboard(ctx context.Context, chatID int64, text string, language userLanguage) error {
+	k := Keyboard{{{Text: language.text("📍 Отправить геопозицию", "📍 Share location"), RequestLocation: true}}, {{Text: language.text("⬅️ Назад", "⬅️ Back")}, {Text: language.text("❌ Отмена", "❌ Cancel")}}}
 	if m, ok := handler.messenger.(KeyboardMessenger); ok {
 		return m.SendMessageWithKeyboard(ctx, chatID, text, k)
 	}
@@ -599,14 +628,14 @@ func (handler *Handler) clearSession(id int64) {
 	delete(handler.sessions, id)
 }
 
-func (handler *Handler) handleSaveSession(ctx context.Context, m *Message, userID int64, s saveSession) error {
-	if strings.TrimSpace(m.Text) == "❌ Отмена" {
+func (handler *Handler) handleSaveSession(ctx context.Context, m *Message, userID int64, s saveSession, language userLanguage) error {
+	if isButton(strings.TrimSpace(m.Text), "❌ Отмена", "❌ Cancel") {
 		handler.clearSession(userID)
-		return handler.sendMainKeyboard(ctx, m.Chat.ID, "Сохранение отменено.", userID)
+		return handler.sendMainKeyboard(ctx, m.Chat.ID, language.text("Сохранение отменено.", "Saving cancelled."), userID, language)
 	}
 	if handler.persistence == nil {
 		handler.clearSession(userID)
-		return handler.sendMainKeyboard(ctx, m.Chat.ID, "Хранилище точек временно недоступно.", userID)
+		return handler.sendMainKeyboard(ctx, m.Chat.ID, language.text("Хранилище точек временно недоступно.", "Saved locations are temporarily unavailable."), userID, language)
 	}
 	if s.Stage == 1 {
 		var lat, lon float64
@@ -617,40 +646,40 @@ func (handler *Handler) handleSaveSession(ctx context.Context, m *Message, userI
 			lat, lon, err = forecast.ParseLocationText(strings.TrimSpace(m.Text))
 		}
 		if err != nil || forecast.ValidateCoordinates(lat, lon) != nil {
-			return handler.sendSaveKeyboard(ctx, m.Chat.ID, "Координаты не распознаны. Отправьте геопозицию или, например: 59.9386, 30.3141")
+			return handler.sendSaveKeyboard(ctx, m.Chat.ID, language.text("Координаты не распознаны. Отправьте геопозицию или, например: 59.9386, 30.3141", "Coordinates not recognized. Share a location or send, for example: 59.9386, 30.3141"), language)
 		}
 		handler.setSession(userID, saveSession{Stage: 2, Latitude: lat, Longitude: lon})
-		return handler.messenger.SendMessage(ctx, m.Chat.ID, "Введите короткое название точки (до 64 символов).", false)
+		return handler.sendUserMessage(ctx, m.Chat.ID, language.text("Введите короткое название точки (до 64 символов).", "Enter a short location name (up to 64 characters)."), false, language)
 	}
 	name := strings.TrimSpace(m.Text)
 	if name == "" || len([]rune(name)) > 64 || strings.HasPrefix(name, "/") {
-		return handler.messenger.SendMessage(ctx, m.Chat.ID, "Название должно содержать от 1 до 64 символов.", false)
+		return handler.sendUserMessage(ctx, m.Chat.ID, language.text("Название должно содержать от 1 до 64 символов.", "The name must contain 1 to 64 characters."), false, language)
 	}
 	err := handler.persistence.SavePoint(ctx, userID, name, s.Latitude, s.Longitude)
 	if errors.Is(err, store.ErrPointLimit) {
-		return handler.sendMainKeyboard(ctx, m.Chat.ID, "Уже сохранено 10 точек. Удалите ненужную командой /deletepoint N.", userID)
+		return handler.sendMainKeyboard(ctx, m.Chat.ID, language.text("Уже сохранено 10 точек. Удалите ненужную командой /deletepoint N.", "You already have 10 saved locations. Delete one with /deletepoint N."), userID, language)
 	}
 	if err != nil {
 		handler.logf("save point: %v", err)
-		return handler.sendMainKeyboard(ctx, m.Chat.ID, "Не удалось сохранить точку. Возможно, такое название уже используется.", userID)
+		return handler.sendMainKeyboard(ctx, m.Chat.ID, language.text("Не удалось сохранить точку. Возможно, такое название уже используется.", "Could not save the location. That name may already be in use."), userID, language)
 	}
 	handler.clearSession(userID)
-	return handler.sendMainKeyboard(ctx, m.Chat.ID, fmt.Sprintf("Точка «%s» сохранена: %.4f, %.4f.", name, s.Latitude, s.Longitude), userID)
+	return handler.sendMainKeyboard(ctx, m.Chat.ID, fmt.Sprintf(language.text("Точка «%s» сохранена: %.4f, %.4f.", "Location “%s” saved: %.4f, %.4f."), name, s.Latitude, s.Longitude), userID, language)
 }
 
-func (handler *Handler) replyPoints(ctx context.Context, chatID, userID int64) error {
+func (handler *Handler) replyPoints(ctx context.Context, chatID, userID int64, language userLanguage) error {
 	if handler.persistence == nil {
-		return handler.sendMainKeyboard(ctx, chatID, "Хранилище точек временно недоступно.", userID)
+		return handler.sendMainKeyboard(ctx, chatID, language.text("Хранилище точек временно недоступно.", "Saved locations are temporarily unavailable."), userID, language)
 	}
 	points, err := handler.persistence.Points(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if len(points) == 0 {
-		return handler.sendMainKeyboard(ctx, chatID, "Сохранённых точек пока нет. Нажмите «💾 Сохранить координаты».", userID)
+		return handler.sendMainKeyboard(ctx, chatID, language.text("Сохранённых точек пока нет. Нажмите «💾 Сохранить координаты».", "There are no saved locations yet. Tap “💾 Save coordinates”."), userID, language)
 	}
 	var b strings.Builder
-	b.WriteString("Сохранённые точки:\n")
+	b.WriteString(language.text("Сохранённые точки:\n", "Saved locations:\n"))
 	k := Keyboard{}
 	for i, p := range points {
 		fmt.Fprintf(&b, "%d. %s — %.4f, %.4f\n", i+1, p.Name, p.Latitude, p.Longitude)
@@ -660,13 +689,13 @@ func (handler *Handler) replyPoints(ctx context.Context, chatID, userID int64) e
 		}
 		k = append(k, []Button{{Text: fmt.Sprintf("📌 %d. %s", i+1, string(name))}})
 	}
-	b.WriteString("\nДля удаления: /deletepoint N")
-	k = append(k, DefaultKeyboard()...)
-	k = append(k, []Button{{Text: "⬅️ Назад"}})
+	b.WriteString(language.text("\nДля удаления: /deletepoint N", "\nTo delete: /deletepoint N"))
+	k = append(k, defaultKeyboard(language)...)
+	k = append(k, []Button{{Text: language.text("⬅️ Назад", "⬅️ Back")}})
 	if m, ok := handler.messenger.(KeyboardMessenger); ok {
 		return m.SendMessageWithKeyboard(ctx, chatID, b.String(), k)
 	}
-	return handler.messenger.SendMessage(ctx, chatID, b.String(), true)
+	return handler.sendUserMessage(ctx, chatID, b.String(), true, language)
 }
 
 func (handler *Handler) selectedPoint(ctx context.Context, userID int64, text string) (store.Point, bool, error) {
@@ -692,45 +721,45 @@ func (handler *Handler) selectedPoint(ctx context.Context, userID int64, text st
 	return points[n-1], true, nil
 }
 
-func (handler *Handler) deletePoint(ctx context.Context, chatID, userID int64, text string) error {
+func (handler *Handler) deletePoint(ctx context.Context, chatID, userID int64, text string, language userLanguage) error {
 	fields := strings.Fields(text)
 	if len(fields) != 2 {
-		return handler.messenger.SendMessage(ctx, chatID, "Использование: /deletepoint N", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Использование: /deletepoint N", "Usage: /deletepoint N"), true, language)
 	}
 	n, err := strconv.Atoi(fields[1])
 	if err != nil || n < 1 {
-		return handler.messenger.SendMessage(ctx, chatID, "Номер точки указан неверно.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Номер точки указан неверно.", "Invalid location number."), true, language)
 	}
 	points, err := handler.persistence.Points(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if n > len(points) {
-		return handler.messenger.SendMessage(ctx, chatID, "Такой точки нет.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Такой точки нет.", "That saved location does not exist."), true, language)
 	}
 	ok, err := handler.persistence.DeletePoint(ctx, userID, points[n-1].ID)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return handler.messenger.SendMessage(ctx, chatID, "Точка уже удалена.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Точка уже удалена.", "The location has already been deleted."), true, language)
 	}
-	return handler.sendMainKeyboard(ctx, chatID, "Точка удалена.", userID)
+	return handler.sendMainKeyboard(ctx, chatID, language.text("Точка удалена.", "Location deleted."), userID, language)
 }
 
-func (handler *Handler) replyAdminStats(ctx context.Context, chatID, userID int64) error {
+func (handler *Handler) replyAdminStats(ctx context.Context, chatID, userID int64, language userLanguage) error {
 	if _, ok := handler.admins[userID]; !ok {
-		return handler.messenger.SendMessage(ctx, chatID, "Команда доступна только администратору.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Команда доступна только администратору.", "This command is available only to an administrator."), true, language)
 	}
 	if handler.persistence == nil {
-		return handler.messenger.SendMessage(ctx, chatID, "Статистика временно недоступна.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Статистика временно недоступна.", "Statistics are temporarily unavailable."), true, language)
 	}
 	users, days, err := handler.persistence.Stats(ctx)
 	if err != nil {
 		return err
 	}
 	if len(days) == 0 {
-		return handler.messenger.SendMessage(ctx, chatID, "Статистика пока пуста.", true)
+		return handler.sendUserMessage(ctx, chatID, language.text("Статистика пока пуста.", "There are no statistics yet."), true, language)
 	}
 	var total, successful, failed int64
 	for _, d := range days {
@@ -744,12 +773,12 @@ func (handler *Handler) replyAdminStats(ctx context.Context, chatID, userID int6
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "requests-30d.png")
-	if err := render.UsageStats(path, days); err != nil {
+	if err := render.UsageStats(path, days, language.renderCode()); err != nil {
 		return err
 	}
-	text := fmt.Sprintf("Пользователей бота: %d\nЗапросов прогноза за 30 дней: %d\nУспешно: %d · с ошибкой: %d\nСегодня: %d", users, total, successful, failed, days[len(days)-1].Requests)
-	if err := handler.messenger.SendMessage(ctx, chatID, text, true); err != nil {
+	text := fmt.Sprintf(language.text("Пользователей бота: %d\nЗапросов прогноза за 30 дней: %d\nУспешно: %d · с ошибкой: %d\nСегодня: %d", "Bot users: %d\nForecast requests in the last 30 days: %d\nSuccessful: %d · failed: %d\nToday: %d"), users, total, successful, failed, days[len(days)-1].Requests)
+	if err := handler.sendUserMessage(ctx, chatID, text, true, language); err != nil {
 		return err
 	}
-	return handler.messenger.SendPhoto(ctx, chatID, path, "Запросы прогноза: зелёный — успешно, красный — с ошибкой · MSK (UTC+3)")
+	return handler.messenger.SendPhoto(ctx, chatID, path, language.text("Запросы прогноза: зелёный — успешно, красный — с ошибкой · MSK (UTC+3)", "Forecast requests: green — successful, red — failed · MSK (UTC+3)"))
 }

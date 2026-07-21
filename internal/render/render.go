@@ -23,12 +23,20 @@ import (
 const (
 	DefaultWidth  = 1280
 	DefaultHeight = 960
-	Version       = "render-v9-dynamic-mh"
+	Version       = "render-v10-localized"
 )
 
 type Options struct {
-	Width  int
-	Height int
+	Width    int
+	Height   int
+	Language string
+}
+
+func localized(options Options, russian, english string) string {
+	if options.Language == "ru" {
+		return russian
+	}
+	return english
 }
 
 type Result struct {
@@ -81,9 +89,9 @@ func All(outputDirectory string, series forecast.VerticalSeries, options Options
 		SeeingIndex:    filepath.Join(outputDirectory, "forecast-seeing-index.png"),
 	}
 	specs := []heatSpec{
-		{fileName: result.WindSpeed, title: "Wind Speed vs Pressure", unit: "m/s", values: diagnostics.WindSpeedMS, minimum: 0, maximum: 60, decimals: 1},
-		{fileName: result.VectorShear, title: "Vertical Vector Wind Shear vs Pressure", unit: "m/s per km", values: diagnostics.VectorShearMSPerKM, minimum: 0, maximum: 20, decimals: 1},
-		{fileName: result.DirectionDelta, title: "Wind Direction Delta vs Pressure", unit: "degrees", values: diagnostics.DirectionDelta, minimum: 0, maximum: 120, decimals: 0},
+		{fileName: result.WindSpeed, title: localized(options, "Скорость ветра по уровням давления", "Wind Speed vs Pressure"), unit: localized(options, "м/с", "m/s"), values: diagnostics.WindSpeedMS, minimum: 0, maximum: 60, decimals: 1},
+		{fileName: result.VectorShear, title: localized(options, "Вертикальный векторный сдвиг ветра по уровням давления", "Vertical Vector Wind Shear vs Pressure"), unit: localized(options, "м/с на км", "m/s per km"), values: diagnostics.VectorShearMSPerKM, minimum: 0, maximum: 20, decimals: 1},
+		{fileName: result.DirectionDelta, title: localized(options, "Изменение направления ветра по уровням давления", "Wind Direction Delta vs Pressure"), unit: localized(options, "градусы", "degrees"), values: diagnostics.DirectionDelta, minimum: 0, maximum: 120, decimals: 0},
 	}
 	for _, spec := range specs {
 		if err := heatMap(spec, series, diagnostics, options); err != nil {
@@ -101,8 +109,8 @@ func heatMap(spec heatSpec, series forecast.VerticalSeries, diagnostics forecast
 	stylePlot(p)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, diagnostics.Times[0])
 	p.Title.Text = fmt.Sprintf("(%.2f, %.2f) %s (%s)\n%s", series.Location.Latitude, series.Location.Longitude, spec.title, spec.unit, timeZoneLabel)
-	p.X.Label.Text = footer(series, timeZoneLabel)
-	p.Y.Label.Text = "Pressure (hPa)"
+	p.X.Label.Text = footer(series, timeZoneLabel, options)
+	p.Y.Label.Text = localized(options, "Давление (гПа)", "Pressure (hPa)")
 	p.X.Min, p.X.Max = -0.5, float64(len(diagnostics.Times))-0.5
 	p.Y.Min, p.Y.Max = -0.5, float64(len(diagnostics.PressureHPA))-0.5
 	p.X.Tick.Marker = plot.ConstantTicks(timeTicks(diagnostics.Times, series.Location.TimeZone))
@@ -153,9 +161,9 @@ func CloudObstruction(destination string, series forecast.CloudSeries, calibrati
 	p := plot.New()
 	stylePlot(p)
 	zone := forecast.TimeZoneLabel(series.Location.TimeZone, diagnostics.Times[0])
-	p.Title.Text = fmt.Sprintf("(%.2f, %.2f) ICON Effective Cloud Obstruction: CLC + QC/QI (%%)\n%s", series.Location.Latitude, series.Location.Longitude, zone)
-	p.X.Label.Text = fmt.Sprintf("Hourly local time · %s  |  QC/QI visible optical depth + height-aware CLC uncertainty guard (low > middle > high)  |  run %s UTC  |  %s", zone, series.RunID, Version)
-	p.Y.Label.Text = "Pressure (hPa)"
+	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Эффективная облачная преграда ICON: CLC + QC/QI (%%)\n%s", "(%.2f, %.2f) ICON Effective Cloud Obstruction: CLC + QC/QI (%%)\n%s"), series.Location.Latitude, series.Location.Longitude, zone)
+	p.X.Label.Text = fmt.Sprintf(localized(options, "Почасовое местное время · %s  |  видимая оптическая толщина QC/QI + высотно-зависимая защита от неопределённости CLC (нижние > средние > верхние)  |  run %s UTC  |  %s", "Hourly local time · %s  |  QC/QI visible optical depth + height-aware CLC uncertainty guard (low > middle > high)  |  run %s UTC  |  %s"), zone, series.RunID, Version)
+	p.Y.Label.Text = localized(options, "Давление (гПа)", "Pressure (hPa)")
 	p.X.Min, p.X.Max = -0.5, float64(len(diagnostics.Times))-0.5
 	p.Y.Min, p.Y.Max = -0.5, float64(len(diagnostics.PressureHPA))-0.5
 	p.X.Tick.Marker = plot.ConstantTicks(timeTicks(diagnostics.Times, series.Location.TimeZone))
@@ -183,9 +191,9 @@ func seeingBars(fileName string, series forecast.VerticalSeries, diagnostics for
 	p := plot.New()
 	stylePlot(p)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, diagnostics.Times[0])
-	p.Title.Text = fmt.Sprintf("(%.2f, %.2f) Forecast Wind Seeing Index (prototype 1–10)\n%s · Confidence is conditional on lead time only; it is not part of Overall Astronomy Index", series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
-	p.X.Label.Text = footer(series, timeZoneLabel)
-	p.Y.Label.Text = "Forecast index (1–10)"
+	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Прогнозный индекс сиинга по ветру (прототип 1–10)\n%s · Условная уверенность зависит только от дальности срока и не входит в общий индекс пригодности", "(%.2f, %.2f) Forecast Wind Seeing Index (prototype 1–10)\n%s · Confidence is conditional on lead time only; it is not part of Overall Astronomy Index"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
+	p.X.Label.Text = footer(series, timeZoneLabel, options)
+	p.Y.Label.Text = localized(options, "Прогнозный индекс (1–10)", "Forecast index (1–10)")
 	p.X.Min, p.X.Max = -0.6, float64(len(diagnostics.Times))-0.4
 	p.Y.Min, p.Y.Max = 0, 10.6
 	p.X.Tick.Marker = plot.ConstantTicks(timeTicks(diagnostics.Times, series.Location.TimeZone))
@@ -381,8 +389,8 @@ func pressureTicks(pressures []float64) []plot.Tick {
 	return ticks
 }
 
-func footer(series forecast.VerticalSeries, timeZoneLabel string) string {
-	return fmt.Sprintf("Local time · %s  |  %s / %s  |  run %s UTC  |  grid %s  |  %s / %s",
+func footer(series forecast.VerticalSeries, timeZoneLabel string, options Options) string {
+	return fmt.Sprintf(localized(options, "Местное время · %s  |  %s / %s  |  run %s UTC  |  сетка %s  |  %s / %s", "Local time · %s  |  %s / %s  |  run %s UTC  |  grid %s  |  %s / %s"),
 		timeZoneLabel, series.Provider, series.Product, series.RunID, series.Grid, series.AlgorithmVersion, Version)
 }
 
@@ -431,7 +439,7 @@ func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights [
 	headingStyle := labelStyle
 	headingStyle.Font.Size = vg.Points(9)
 	headingStyle.Font.Weight = xfont.WeightSemiBold
-	full.FillText(headingStyle, vg.Point{X: axisX, Y: data.Max.Y + vg.Points(12)}, "Height (km)")
+	full.FillText(headingStyle, vg.Point{X: axisX, Y: data.Max.Y + vg.Points(12)}, localized(options, "Высота (км)", "Height (km)"))
 	barLeft, barRight := full.Min.X+vg.Points(130), full.Max.X-vg.Points(130)
 	barBottom, barTop := full.Min.Y+vg.Points(22), full.Min.Y+vg.Points(34)
 	items := colors.Colors()
@@ -442,11 +450,11 @@ func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights [
 	}
 	legendStyle := labelStyle
 	legendStyle.YAlign = draw.YBottom
-	full.FillText(legendStyle, vg.Point{X: barLeft, Y: barTop + vg.Points(3)}, fmt.Sprintf("%.0f %s · dark = low", minimum, unit))
+	full.FillText(legendStyle, vg.Point{X: barLeft, Y: barTop + vg.Points(3)}, fmt.Sprintf(localized(options, "%.0f %s · тёмный = мало", "%.0f %s · dark = low"), minimum, unit))
 	legendStyle.XAlign = draw.XCenter
 	full.FillText(legendStyle, vg.Point{X: (barLeft + barRight) / 2, Y: barTop + vg.Points(3)}, fmt.Sprintf("%.0f %s", (minimum+maximum)/2, unit))
 	legendStyle.XAlign = draw.XRight
-	full.FillText(legendStyle, vg.Point{X: barRight, Y: barTop + vg.Points(3)}, fmt.Sprintf("%.0f %s · light = high", maximum, unit))
+	full.FillText(legendStyle, vg.Point{X: barRight, Y: barTop + vg.Points(3)}, fmt.Sprintf(localized(options, "%.0f %s · светлый = много", "%.0f %s · light = high"), maximum, unit))
 	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err

@@ -39,9 +39,9 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	p := plot.New()
 	stylePlot(p)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, frames[0].ValidAt)
-	p.Title.Text = fmt.Sprintf("(%.2f, %.2f) Overall Astronomy Index (1–10)\n%s · hourly · ICON TKE to dynamic MH (500–2000 m AGL) + HMNSP99 aloft · seeing and tau0 at 500 nm · effective cloud obstruction + fog", series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
-	p.X.Label.Text = fmt.Sprintf("Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s", timeZoneLabel, Version)
-	p.Y.Label.Text = "Observing suitability (1–10)"
+	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Общий индекс пригодности для астрономии (1–10)\n%s · почасовой · ICON TKE до динамической MH (500–2000 м над землёй) + HMNSP99 выше · сиинг и τ₀ на 500 нм · эффективная облачная преграда + туман", "(%.2f, %.2f) Overall Astronomy Index (1–10)\n%s · hourly · ICON TKE to dynamic MH (500–2000 m AGL) + HMNSP99 aloft · seeing and tau0 at 500 nm · effective cloud obstruction + fog"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
+	p.X.Label.Text = fmt.Sprintf(localized(options, "Местное время · %s  |  подписи: сиинг″ / τ₀ мс / T%%; T = эффективное пропускание облаков; f/F = возможный/сильный туман; MH = почасовая глубина перемешанного слоя ICON  |  %s", "Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s"), timeZoneLabel, Version)
+	p.Y.Label.Text = localized(options, "Пригодность для наблюдений (1–10)", "Observing suitability (1–10)")
 	p.X.Min, p.X.Max = -0.6, float64(len(frames))-0.4
 	p.Y.Min, p.Y.Max = 0, 10.8
 	times := make([]time.Time, len(frames))
@@ -74,7 +74,7 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 		p.Add(bar)
 	}
 	addDayBoundaries(p, times, series.Location.TimeZone, 11)
-	top, inside, err := overallIndexLabels(frames, colors)
+	top, inside, err := overallIndexLabels(frames, colors, options)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func addSolarBackground(p *plot.Plot, frames []forecast.OverallIndexFrame, sky a
 	return nil
 }
 
-func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Palette) (*plotter.Labels, *plotter.Labels, error) {
+func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Palette, options Options) (*plotter.Labels, *plotter.Labels, error) {
 	topPoints := make(plotter.XYs, len(frames))
 	topText := make([]string, len(frames))
 	insidePoints := make(plotter.XYs, len(frames))
@@ -146,7 +146,7 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Pale
 		topPoints[index] = plotter.XY{X: float64(index), Y: frame.Index + 0.12}
 		topText[index] = fmt.Sprintf("%.1f", frame.Index)
 		insidePoints[index] = plotter.XY{X: float64(index), Y: 0.72}
-		seeing := "wind"
+		seeing := localized(options, "ветер", "wind")
 		if frame.PhysicalSeeing {
 			seeing = fmt.Sprintf("%.1f″", frame.SeeingArcsec)
 		}

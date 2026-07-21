@@ -115,7 +115,7 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 			CloudTransmissionPercent: 19.7, FogRisk: 2,
 		},
 	}
-	_, inside, err := overallIndexLabels(frames, magma(96))
+	_, inside, err := overallIndexLabels(frames, magma(96), Options{Language: "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestWeatherProducesHourlyLandscapePNG(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "weather-hourly.png")
-	if err := Weather(path, surface, sky); err != nil {
+	if err := Weather(path, surface, sky, Options{Language: "ru"}); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.Open(path)
