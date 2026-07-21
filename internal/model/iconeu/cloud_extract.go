@@ -1,0 +1,194 @@
+package iconeu
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"math"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"bot_astrosferum/internal/forecast"
+)
+
+const iconEUSurfaceHalfLevel = 75
+
+func (store VerticalStore) Cloud(ctx context.Context, location forecast.Location) (forecast.CloudSeries, error) {
+	manifest, err := LoadCurrent(store.DataRoot)
+	if err != nil {
+		return forecast.CloudSeries{}, err
+	}
+	if !manifest.HasHourlyCloud() {
+		return forecast.CloudSeries{}, fmt.Errorf("current ICON-EU run has no hourly cloud bundle")
+	}
+	if !manifest.Grid.Contains(location) {
+		return forecast.CloudSeries{}, fmt.Errorf("coordinates are outside the current ICON-EU domain")
+	}
+	runner := store.Runner
+	if runner == nil {
+		runner = execRunner{}
+	}
+	heights, err := extractCloudHeights(ctx, runner, filepath.Join(manifest.Directory, manifest.CloudGeometry.File), location)
+	if err != nil {
+		return forecast.CloudSeries{}, err
+	}
+	surfaceElevationM, err := cloudSurfaceElevation(heights)
+	if err != nil {
+		return forecast.CloudSeries{}, err
+	}
+	frames := make([]forecast.CloudFrame, len(manifest.CloudSteps))
+	workers := store.Workers
+	if workers < 1 {
+		workers = 4
+	}
+	type result struct {
+		index int
+		frame forecast.CloudFrame
+		err   error
+	}
+	workContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs, results := make(chan int), make(chan result, len(frames))
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for index := range jobs {
+				step := manifest.CloudSteps[index]
+				frame, extractionError := extractCloudFrame(workContext, runner, filepath.Join(manifest.Directory, step.File), location, step.ValidAt, manifest.CloudModelLevels, heights)
+				results <- result{index: index, frame: frame, err: extractionError}
+				if extractionError != nil {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for index := range frames {
+			select {
+			case jobs <- index:
+			case <-workContext.Done():
+				return
+			}
+		}
+	}()
+	go func() { group.Wait(); close(results) }()
+	completed := 0
+	for item := range results {
+		if item.err != nil {
+			return forecast.CloudSeries{}, item.err
+		}
+		frames[item.index] = item.frame
+		completed++
+	}
+	if completed != len(frames) {
+		return forecast.CloudSeries{}, fmt.Errorf("extracted %d of %d cloud frames", completed, len(frames))
+	}
+	return forecast.CloudSeries{
+		Location: location, Provider: manifest.Provider, Product: "ICON-EU native-layer CLC/QC/QI/T + lower-atmosphere U/V/TKE",
+		RunID: manifest.RunID, BaseTime: manifest.BaseTime, GeneratedAt: time.Now().UTC(),
+		SurfaceElevationM: surfaceElevationM, Frames: frames,
+	}, nil
+}
+
+func extractCloudHeights(ctx context.Context, runner CommandRunner, path string, location forecast.Location) (map[int]float64, error) {
+	values, err := extractCloudValues(ctx, runner, path, location)
+	if err != nil {
+		return nil, err
+	}
+	heights := make(map[int]float64, len(values))
+	for key, value := range values {
+		if key.name == "HHL" {
+			heights[key.level] = value
+		}
+	}
+	return heights, nil
+}
+
+func cloudSurfaceElevation(heights map[int]float64) (float64, error) {
+	value, ok := heights[iconEUSurfaceHalfLevel]
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("current ICON-EU cloud geometry has no valid HHL%d surface elevation", iconEUSurfaceHalfLevel)
+	}
+	return value, nil
+}
+
+func extractCloudFrame(ctx context.Context, runner CommandRunner, path string, location forecast.Location, validAt time.Time, modelLevels []int, heights map[int]float64) (forecast.CloudFrame, error) {
+	values, err := extractCloudValues(ctx, runner, path, location)
+	if err != nil {
+		return forecast.CloudFrame{}, err
+	}
+	frame := forecast.CloudFrame{ValidAt: validAt, Levels: make([]forecast.CloudLevel, 0, len(modelLevels))}
+	for _, level := range modelLevels {
+		cover, coverOK := values[cloudValueKey{"ccl", level}]
+		pressure, pressureOK := values[cloudValueKey{"pres", level}]
+		temperature, temperatureOK := values[cloudValueKey{"t", level}]
+		liquid, liquidOK := values[cloudValueKey{"qc", level}]
+		ice, iceOK := values[cloudValueKey{"qi", level}]
+		halfLevelA, halfLevelAOK := heights[level]
+		halfLevelB, halfLevelBOK := heights[level+1]
+		if !coverOK || !pressureOK || !temperatureOK || !liquidOK || !iceOK || !halfLevelAOK || !halfLevelBOK {
+			return forecast.CloudFrame{}, fmt.Errorf("%s is incomplete at model level %d", filepath.Base(path), level)
+		}
+		layerThicknessM := math.Abs(halfLevelA - halfLevelB)
+		if !finitePositiveCloudExtraction(pressure) || !finitePositiveCloudExtraction(temperature) || !finitePositiveCloudExtraction(layerThicknessM) {
+			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid pressure, temperature, or HHL thickness at model level %d", filepath.Base(path), level)
+		}
+		u, v, tke := math.NaN(), math.NaN(), math.NaN()
+		if isCloudGroundModelLevel(level) {
+			var uOK, vOK bool
+			u, uOK = values[cloudValueKey{"u", level}]
+			v, vOK = values[cloudValueKey{"v", level}]
+			lowerTKE, lowerTKEOK := values[cloudValueKey{"tke", level}]
+			upperTKE, upperTKEOK := values[cloudValueKey{"tke", level + 1}]
+			if !uOK || !vOK || !lowerTKEOK || !upperTKEOK {
+				return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete ground-layer dynamics at model level %d", filepath.Base(path), level)
+			}
+			tke = math.Max(0, (lowerTKE+upperTKE)/2)
+		}
+		frame.Levels = append(frame.Levels, forecast.CloudLevel{
+			ModelLevel: level, PressureHPA: pressure / 100, HeightM: (halfLevelA + halfLevelB) / 2, LayerThicknessM: layerThicknessM,
+			TemperatureK: temperature, UMS: u, VMS: v, TKEJkg: tke,
+			CoverPercent: cover, CloudLiquidKgKg: math.Max(0, liquid), CloudIceKgKg: math.Max(0, ice),
+		})
+	}
+	return frame, nil
+}
+
+func finitePositiveCloudExtraction(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0
+}
+
+type cloudValueKey struct {
+	name  string
+	level int
+}
+
+func extractCloudValues(ctx context.Context, runner CommandRunner, path string, location forecast.Location) (map[cloudValueKey]float64, error) {
+	coordinates := fmt.Sprintf("%.6f,%.6f,1", location.Latitude, location.Longitude)
+	output, err := runner.CombinedOutput(ctx, "grib_get", "-f", "-F", "%.10g", "-p", "shortName,level", "-l", coordinates, path)
+	if err != nil {
+		return nil, fmt.Errorf("extract cloud %s: %s", filepath.Base(path), limitedOutput(output))
+	}
+	values := make(map[cloudValueKey]float64)
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected cloud output in %s", filepath.Base(path))
+		}
+		level, levelError := strconv.Atoi(fields[1])
+		value, valueError := strconv.ParseFloat(fields[2], 64)
+		if levelError != nil || valueError != nil {
+			return nil, fmt.Errorf("invalid cloud output in %s", filepath.Base(path))
+		}
+		values[cloudValueKey{canonicalCloudShortName(fields[0]), level}] = value
+	}
+	return values, scanner.Err()
+}

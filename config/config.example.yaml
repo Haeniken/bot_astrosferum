@@ -1,0 +1,87 @@
+app:
+  locale: ru
+  horizon: 72h
+  step: 3h
+  workers: 6
+  eccodes_workers: 8
+  point_cache_entries: 512
+  point_cache_memory_limit: 20GiB
+  request_timeout: 3m
+
+paths:
+  data: /app/data
+  temp: /app/data/tmp
+
+providers:
+  icon_eu:
+    enabled: true
+    role: primary
+    keep_runs: 2
+    max_stale_age: 12h
+  icon_global:
+    enabled: true
+    role: fallback
+    keep_runs: 2
+    max_stale_age: 18h
+  icon_ru:
+    enabled: true
+    role: shadow
+    keep_runs: 1
+    max_stale_age: 18h
+  light_pollution:
+    atlas_year: 2024
+
+sync:
+  poll_interval: 15m
+  download_parallelism: 4
+  min_free_space: 150GiB
+
+algorithms:
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v4
+  dew_version: dew-v1
+  conditions_version: conditions-v4-dynamic-mh-cloud-guard
+  overall_seeing_weight: 1.0
+  overall_cloud_weight: 2.0
+  overall_coherence_time_weight: 0.25
+  overall_possible_fog_factor: 0.75
+  overall_high_fog_factor: 0.10
+  # Kept under its historical name for compatibility; this is now the
+  # best-seeing saturation threshold rather than a generic "good" threshold.
+  overall_good_seeing_arcsec: 0.5
+  overall_bad_seeing_arcsec: 2.0
+  overall_best_coherence_time_ms: 5.2
+  overall_bad_coherence_time_ms: 1.6
+  # ICON hourly MH is clamped to this AGL range before the TKE integral.
+  overall_boundary_layer_min_m: 500
+  overall_boundary_layer_top_m: 2000
+  overall_ground_cn2_scale: 1.0
+  # Low-cloud CLC uncertainty guard; middle/high use 55%/18% of it.
+  overall_unresolved_cloud_obstruction: 0.45
+  overall_surface_wind_max_penalty: 0.20
+  overall_surface_wind_start_ms: 8.5
+  overall_surface_wind_full_ms: 15.0
+  overall_surface_gust_start_ms: 12.0
+  overall_surface_gust_full_ms: 22.0
+  cloud_liquid_radius_micrometers: 10
+  cloud_ice_radius_micrometers: 25
+
+render:
+  version: render-v9-dynamic-mh
+  width: 1280
+  height: 960
+
+database:
+  host: postgres
+  port: 5432
+  name: bot_astrosferum
+  user: bot_astrosferum
+  max_conns: 10
+
+platforms:
+  telegram:
+    enabled: true
+    token_file: /run/secrets/telegram_token
+    admin_ids: [] # overridden by ASTRO_TELEGRAM_ADMIN_IDS
+  vk:
+    enabled: false
+    token_file: /run/secrets/vk_token

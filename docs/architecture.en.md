@@ -1,0 +1,1080 @@
+# bot_astrosferum: KISS architecture
+
+Status: implemented MVP, architecture revision 0.2; the
+`surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production
+External sources last checked: 2026-07-19; last revision: 2026-07-21
+Deployment target: operator-managed host
+Deployment directory: `/opt/docker/bot_astrosferum`
+
+## 1. Decision in one paragraph
+
+`bot_astrosferum` is one Go binary running in one main Docker container. It serves Telegram and VK through long polling, updates ICON, calculates conditions, renders PNG charts, and returns them to the user. PostgreSQL stores users, saved points, and daily aggregates; Redis, a message broker, Kubernetes, a separate Python renderer, and a public HTTP port are unnecessary. Every bind mount remains below `/opt/docker/bot_astrosferum`.
+
+### PostgreSQL, saved points, and statistics
+
+PostgreSQL 18 is an internal Compose service with a `./data/postgres` bind mount. The application applies an idempotent schema on startup. It stores Telegram IDs, at most 10 named coordinates per user, and one daily forecast-count aggregate per user. Administrators are configured through `ASTRO_TELEGRAM_ADMIN_IDS` and receive the user count and a 30-day PNG usage chart.
+
+Daily aggregates older than 90 days are removed at startup and once a day; incomplete point-saving conversations expire after two hours.
+
+### Light-pollution atlases
+
+The primary line uses Light Pollution Atlas 2024 with lazy, atomic 30-arcsecond tile downloads. A separate comparison line uses the Falchi/GFZ World Atlas 2015. The mandatory GeoTIFF is checked at startup; when missing, the official ZIP is downloaded, safely extracted, and removed. Light pollution is not part of the Overall Astronomy Index.
+
+The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coordinates are sampled bilinearly from a 2×2 source GeoTIFF window.
+
+## 2. Core decisions
+
+| Area | MVP decision | Reason |
+|---|---|---|
+| Executable | One `bot_astrosferum` Go binary | One build and one domain implementation |
+| Toolchain | Go `1.26.5`, pinned in `go.mod` and the Docker builder | Reproducible current build |
+| Runtime | One main `app` container | Minimal operational dependencies |
+| Telegram | Bot API long polling | No ingress or webhook required |
+| VK | Bots Long Poll API | No public callback endpoint required |
+| Scheduler | Embedded in `bot_astrosferum serve` | No host cron or scheduler container |
+| Operations | `sync`, `doctor`, `render-sample` subcommands | Production code and image are reused |
+| GRIB2 | ecCodes, plus CDO only for ICON Global remapping | No custom decoder; ICON-EU remains direct |
+| Priority model in western Russia | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
+| Model elsewhere in Russia | DWD ICON Global | Stable, global, official open GRIB feed |
+| ICON-Ru | Shadow provider until locally verified | Its public WIS product is coarser and has fewer fields than the native model |
+| Application storage | Atomic files | A database is unnecessary for one instance |
+| Point cache | Versioned `gob.gz` plus an in-memory LRU | Preserves `NaN`, stays compact, and needs no Redis |
+| Render cache | PNG files | Directly uploadable to both platforms |
+| Work queue | Bounded Go channel plus per-key `singleflight` | No external queue is needed |
+| Rendering | Deterministic pure-Go 1280×960 PNG | One image, no Python service |
+| Logs | Structured JSON to stdout | Docker handles collection and rotation |
+
+## 3. Model choice: accuracy and availability
+
+Higher spatial resolution alone does not prove better accuracy for every variable. The final routing policy must be supported by local verification against observations. The initial provider should nevertheless have the strongest technical fit and the complete fields needed by the product.
+
+### 3.1. ICON-EU is the primary candidate for priority regions
+
+DWD publishes ICON-EU on a regular `0.0625°` output grid, approximately 7 km. A server-side spike on 2026-07-19 confirmed that the current open element packages contain `1377 × 657` points and cover `23.5° W–62.5° E`, `29.5°–70.5° N`. Saint Petersburg and Moscow are all inside this actual product domain. Geometry is still read from each manifest rather than hard-coded into routing.
+
+Relevant properties:
+
+- native 6.5 km grid, regular open output at about 7 km;
+- four main runs at `00`, `06`, `12`, and `18 UTC` through +120 h;
+- hourly output through +78 h, then every three hours;
+- additional `03`, `09`, `15`, and `21 UTC` short runs through +30 h;
+- surface fields and model-level `U`, `V`, `T`, `P`, `QV`, `TKE`, and `HHL` are present in DWD Open Data;
+- weather, dew, vertical charts, and seeing features can use one physically consistent model run.
+
+Sources: [DWD — NWP forecast data](https://www.dwd.de/EN/ourservices/nwp_forecast_data/nwp_forecast_data.html) and [DWD Open Data — ICON-EU GRIB](https://opendata.dwd.de/weather/nwp/icon-eu/grib/).
+
+ICON-EU is therefore the default production provider for the four priority regions and other points inside the open domain. This is a justified starting point, not a claim that it is universally more accurate; the provider remains under continuous verification.
+
+### 3.2. ICON Global is the Russia-wide fallback
+
+ICON Global has a coarser grid of roughly 13 km, but covers all of Russia, has a stable official DWD GRIB feed, and supplies the required class of fields. It is used:
+
+- for any point outside the available ICON-EU domain;
+- when the current ICON-EU run is incomplete or stale;
+- as the mandatory baseline in local verification;
+- optionally for an extended forecast horizon.
+
+Open ICON Global files use an `unstructured_grid`, for which ecCodes 2.28 does not implement nearest-neighbour lookup. The provider therefore uses CDO with the official DWD `ICON_GLOBAL2WORLD_0125_EASY` weights to remap onto a regular `0.125°` grid, validates the result, and then invokes the shared ecCodes extractor. This is an in-container preprocessing step, not a separate service.
+
+Source: [DWD Open Data — ICON Global GRIB](https://opendata.dwd.de/weather/nwp/icon/grib/).
+
+### 3.3. ICON-Ru: capable native model, limited public product
+
+The native `ICON-Ru13/6N29` configuration and the publicly distributed product must not be conflated.
+
+The Hydrometcentre describes a computational domain of `29.5°–90° N` across all longitudes, approximately 6.5 km grid spacing, 74 levels, four runs per day, and a +120 h horizon. The documented public WIS 2.0 product, however, has:
+
+- a regular `0.25° × 0.25°` grid rather than the native 6.5 km grid;
+- coverage of `35°–87° N`, `19.5°–193.5° E`;
+- only `00` and `12 UTC` runs through +72 h;
+- upper-air wind and temperature only at `925`, `850`, `700`, `500`, and `250 hPa`;
+- no published TKE, HHL, or complete model-level output.
+
+The discovery spike confirmed origin topic
+`origin/a/wis2/ru-roshydromet/data/core/weather/prediction/forecast/short-range/deterministic/limited-area`. The production shadow adapter subscribes to the equivalent `cache/a/...` topic on a TLS WIS 2.0 Global Broker rather than depending on the unencrypted `mqtt://wis2box.mecom.ru:1883` origin.
+
+The current official system description also states that data assimilation is not yet used and initial conditions come from DWD ICON Global. A nested model can still improve mesoscale processes, but that benefit cannot be assumed for a public product regridded to 0.25°.
+
+Sources: [Hydrometcentre — system description](https://mpr.meteoinfo.ru/en/srf-system-about), [ICON-Ru products for WIS 2.0](https://meteoinfo.ru/en/wis2-srf-products-of-wipps-dc-moscow), and the [Roshydromet product catalogue](https://meteoinfo.ru/images/media/books-docs/RHM/catalog-ASDT-20260116.pdf).
+
+ICON-Ru WIS is therefore attached as a **shadow provider**. Forecasts for control locations are collected and scored against observations but are not returned to users by default. If verification demonstrates a stable advantage for a specific region, variable, and lead-time band, the router can promote it. A future stable native 6.5 km feed must be evaluated as a separate product.
+
+### 3.4. Initial production policy
+
+```text
+point inside open ICON-EU domain -> ICON-EU for the complete bundle
+point outside ICON-EU domain     -> ICON Global for the complete bundle
+ICON-EU unavailable or stale     -> ICON Global, explicitly disclosed
+ICON-Ru WIS                      -> shadow verification only
+```
+
+Using one provider for a production bundle keeps surface and upper-air fields physically consistent and simplifies the MVP. Every user response exposes the exact product, grid, and base time.
+
+### 3.5. Proving which model is more accurate
+
+The production host should retain matching ICON-EU, ICON Global, and ICON-Ru WIS forecast slices for control points in Saint Petersburg and Moscow. After valid time, forecasts are joined with trustworthy SYNOP, METAR, or equivalent observations.
+
+Minimum metrics:
+
+- temperature and dew-point MAE/bias;
+- wind-speed MAE and circular wind-direction error;
+- gust error;
+- Brier score and contingency metrics for precipitation and cloud thresholds;
+- separate scoring for `0–24`, `24–48`, and `48–72 h` lead times;
+- separate statistics by region and season.
+
+An initial decision may be reviewed after 30 days, but the router must not flap on a small sample. Verification continues indefinitely. Seeing requires a separate calibration source such as observing logs, DIMM/MASS, or at least upper-air observations; good surface-temperature scores do not prove seeing-index quality.
+
+## 4. MVP boundaries
+
+### Included
+
+- Telegram and VK with equivalent commands and output;
+- geo attachments and textual `latitude, longitude` input;
+- a 72-hour horizon: hourly surface weather and three-hourly upper-air profiles;
+- separate **Weather** and **Dew** text lines;
+- a `1…10` forecast seeing index;
+- an hourly `1…10` overall astronomy-suitability index;
+- seven charts: hourly weather, the hourly overall index, hourly model-layer cloud, and four upper-air/seeing charts;
+- automatic run synchronization and safe use of the last complete run;
+- Russian UI with a clean path to English localization;
+- explicit model, run, grid, and freshness information;
+- shadow model verification for the priority regions.
+
+### Excluded
+
+- claims of physically measured seeing or a calibrated Pickering scale;
+- telescope-specific optical predictions;
+- web UI, accounts, payments, and subscriptions;
+- long-term storage of conversations or exact user coordinates;
+- non-ICON model families;
+- a default user response beyond 72 hours;
+- distributed multi-instance execution.
+
+## 5. System context
+
+```text
+DWD ICON-EU -------------+
+                         |     +-------------------+
+DWD ICON Global ---------+---->| Model providers   |
+                         |     +---------+---------+
+ICON-Ru WIS (shadow) ----+               |
+                                         v
+                               +-------------------+
+                               | Atomic model store|
+                               +---------+---------+
+                                         |
+Telegram long polling ---+               v
+                          |     +-------------------+
+VK Bots Long Poll --------+---->| bot_astrosferum serve    |
+                                | request pipeline  |
+                                +---------+---------+
+                                          |
+                     +--------------------+-------------------+
+                     v                    v                   v
+               point cache        forecast calculator   PNG renderer
+                     +--------------------+-------------------+
+                                          |
+                                          v
+                                 Telegram / VK response
+```
+
+Everything after external APIs runs in one process. Components are Go packages, not networked microservices.
+
+## 6. Binary and execution modes
+
+```text
+bot_astrosferum serve          # bots, scheduler, and request workers
+bot_astrosferum sync           # one manual synchronization cycle
+bot_astrosferum doctor         # config, secrets, ecCodes, disk, and run checks
+bot_astrosferum render-sample  # render fixture charts without network access
+```
+
+`serve` starts:
+
+1. configuration and directory validation;
+2. Telegram poller;
+3. VK poller;
+4. bounded user-request worker pool;
+5. model synchronization scheduler;
+6. run and cache retention task;
+7. `SIGTERM/SIGINT` graceful shutdown.
+
+Manual `sync` and the embedded scheduler share one file lock so two refreshes cannot mutate the store concurrently.
+
+## 7. Repository layout
+
+```text
+bot_astrosferum/
+├── cmd/bot_astrosferum/              # main and subcommand parsing
+├── internal/
+│   ├── app/                   # dependency composition and lifecycle
+│   ├── bot/
+│   │   ├── telegram/          # Telegram API adapter
+│   │   └── vk/                # VK API adapter
+│   ├── config/                # configuration loading/validation
+│   ├── model/                 # providers, sync, GRIB extraction
+│   ├── forecast/              # weather, dew, wind, seeing, astro score
+│   ├── render/                # PNG and color scales
+│   ├── store/                 # atomic files and caches
+│   └── verify/                # shadow forecasts and model scoring
+├── config/
+│   ├── config.example.yaml    # tracked
+│   └── config.yaml            # runtime, untracked
+├── secrets/                   # tokens, untracked
+├── docs/
+│   ├── architecture.ru.md
+│   └── architecture.en.md
+├── data/                      # runtime only
+├── logs/                      # reserved for optional file logs
+├── Dockerfile
+├── docker-compose.yml
+├── go.mod
+└── .gitignore
+```
+
+Packages represent useful responsibilities. The project will not create ceremonial `entities/usecases/repositories` layers around every object.
+
+## 8. Runtime directories on the production host
+
+```text
+/opt/docker/bot_astrosferum/
+├── docker-compose.yml
+├── Dockerfile
+├── config/
+│   ├── config.example.yaml
+│   └── config.yaml
+├── secrets/
+│   ├── telegram_token
+│   └── vk_token
+├── data/
+│   ├── state/                         # polling offsets and health state
+│   ├── models/
+│   │   ├── icon-eu/
+│   │   │   ├── incoming/<run-id>/
+│   │   │   ├── runs/<run-id>/
+│   │   │   └── current.json
+│   │   ├── icon-global/
+│   │   │   ├── incoming/<run-id>/
+│   │   │   ├── runs/<run-id>/
+│   │   │   └── current.json
+│   │   └── icon-ru/                    # shadow data only
+│   ├── cache/
+│   │   ├── points/
+│   │   └── renders/
+│   ├── light-pollution/
+│   │   └── lorenz-atlas/<year>/       # requested 5-degree tiles only
+│   ├── verification/                  # forecasts, observations, metrics
+│   └── tmp/
+└── logs/
+```
+
+Compose uses only project-local bind mounts:
+
+```yaml
+volumes:
+  - ./config:/app/config:ro
+  - ./secrets:/run/secrets:ro
+  - ./data:/app/data
+```
+
+There are no named or external Docker volumes. Token files are mounted at `/run/secrets`, have mode `0600`, and remain outside Git.
+
+## 9. Minimal domain model
+
+```go
+type Location struct {
+    Latitude  float64
+    Longitude float64 // canonical range: -180..180
+    TimeZone  string  // IANA name; UTC on resolver failure
+}
+
+type RunRef struct {
+    Provider string
+    RunID    string
+    BaseTime time.Time
+    Grid     string
+    Horizon  time.Duration
+}
+
+type ForecastFrame struct {
+    ValidAt time.Time
+    Surface SurfaceFields
+    Levels  []PressureLevel
+    Astro   AstroFields
+}
+
+type ForecastBundle struct {
+    Location Location
+    Run      RunRef
+    Frames   []ForecastFrame
+}
+
+type AstroConditions struct {
+    SeeingIndex     float64 // 1..10 forecast index
+    ConditionsScore float64 // 1..10 overall astronomy suitability
+    Weather         WeatherSummary
+    Dew             DewRisk
+    Algorithm       string
+}
+```
+
+Internal fields use SI units. Celsius, hPa, compass names, and localized strings are introduced only at response/render boundaries.
+
+Every derived series retains provenance: provider, run ID, grid, selected cell coordinates, extraction time, and field-set version.
+
+## 10. Provider boundary
+
+The one important extension interface is a model source:
+
+```go
+type Provider interface {
+    Name() string
+    Coverage() Coverage
+    ProbeLatest(context.Context) (RemoteRun, error)
+    Sync(context.Context, RemoteRun, string) (Manifest, error)
+    ExtractPoint(context.Context, Manifest, Location) (PointSeries, error)
+}
+```
+
+MVP implementations:
+
+- `iconeu`: primary DWD ICON-EU provider within the available domain;
+- `iconglobal`: DWD ICON Global provider for the rest of Russia and fallback;
+- `iconruwis`: ICON-Ru WIS shadow-verification provider.
+
+`Coverage` records domain geometry and longitude normalization, available fields and levels, forecast steps, horizon, and actual product resolution.
+
+A future native ICON-Ru adapter can be added without changing platform handlers, calculations, or rendering.
+
+## 11. Provider routing
+
+| Condition | Production bundle | Notes |
+|---|---|---|
+| Point inside available ICON-EU element-package domain | ICON-EU | Surface and atmosphere from one run |
+| Point outside available ICON-EU domain | ICON Global | Remaining Russian territory |
+| ICON-EU incomplete or older than `max_stale_age` | ICON Global | Explicitly disclosed fallback |
+| Lead time beyond the 72-hour main horizon | Provider-specific through +120 h | Future/optional response |
+| ICON-Ru WIS | Not selected | Verification pipeline only |
+
+The domain comes from the actual product manifest. The spike confirmed an open boundary through `62.5° E`, but the router does not assume it can never change.
+
+Fallback is never silent: provider, grid, and run are shown in text and in each chart footer. The initial router does not blend providers inside one production bundle.
+
+## 12. Model synchronization
+
+### 12.1. Complete cycle
+
+1. The provider discovers the newest candidate run.
+2. It confirms the mandatory final step and required field inventory exist remotely.
+3. It creates `data/models/<provider>/incoming/<run-id>/`.
+4. Files download to `*.part` names with bounded parallelism.
+5. HTTP size, decompression, `grib_ls`, parameters, levels, and steps are validated. Valid time is derived from `step`, `stepUnits`, and `stepRange`; live DWD files may encode `180 m` instead of `3 h`.
+6. ICON Global is remapped with official DWD weights while ICON-EU skips that step. Independently validated messages are then grouped into `surface/fNNN.grib2` and `atmosphere/fNNN.grib2` per forecast step.
+7. `manifest.json` is written and critical files are synced.
+8. `incoming/<run-id>` is renamed to `runs/<run-id>`.
+9. `current.json.tmp` atomically replaces `current.json`.
+10. Old runs and invalidated caches are pruned after publication.
+
+An incomplete run can never become current.
+
+The current hourly ICON-EU contract consists of two independently validated
+sets. `surface-hourly-v17` contains 17 single-level messages at every
+`f000…f078`, including `MH`/`mld` in metres. `cloud-hourly-v4` contains exactly
+187 messages per hour: `CLC/P/T/QC/QI` on all 27 retained full levels, `U/V`
+on consecutive lower levels `58…74`, and `TKE` on half levels `58…75`; a
+separate time-invariant bundle carries the required `HHL`. The manifest
+switches only after every file passes message-count, shortName, level, size,
+and SHA-256 validation.
+
+### 12.2. Run states
+
+```text
+discovered -> downloading -> validating -> ready -> published
+                    |              |
+                    +---- failed --+
+```
+
+State is written to `manifest.json`, allowing a restart to resume safe downloads without refetching already validated files.
+
+### 12.3. Manifest
+
+The manifest contains:
+
+- provider and product;
+- run ID and UTC base time;
+- actual domain/grid;
+- fields, levels, and forecast steps;
+- final file size and SHA-256;
+- preprocessing field-set version;
+- download and validation times;
+- a final `complete` flag.
+
+### 12.4. Retention and disk policy
+
+- retain two complete published runs for production providers;
+- retain one ICON-Ru shadow run or only extracted control-point series;
+- remove abandoned `incoming` directories older than 24 hours;
+- retain at most two point-cache runs and 512 cells per run; retain at most 256 render bundles for 48 hours;
+- remove incomplete cache/render staging files after one hour and model `incoming` directories after 24 hours;
+- do not begin sync below `min_free_space`;
+- start with `min_free_space: 150GiB` on the production host;
+- download only required fields and three-hour upper-air steps first;
+- on low disk, remove disposable cache, then an old run; never delete current first.
+
+## 13. Point extraction
+
+No custom GRIB parser is required. ecCodes supports nearest-point access on regular grids through `grib_get -l latitude,longitude,1`; see the [official ecCodes documentation](https://confluence.ecmwf.int/display/ECC/grib_get). ICON-EU is regular already; ICON Global reaches this common path only after validated CDO remapping to `0.125°`.
+
+Flow:
+
+1. Normalize and validate input coordinates.
+2. The provider selects the nearest point on its grid.
+3. Derive grid cell ID from provider, grid identity, and selected grid coordinates.
+4. Check point cache.
+5. On a miss, invoke ecCodes for each merged `fNNN.grib2`.
+6. Validate units, missing values, and ranges.
+7. Convert output to a common `PointSeries`.
+8. Atomically write `gob.gz` to point cache and place the bundle in a bounded in-memory LRU.
+
+User coordinates are never manually rounded. Nearby users share a cache entry only when the provider selects the same model cell.
+
+Point cache key:
+
+```text
+point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
+```
+
+## 14. Normalization and quality checks
+
+Before calculations:
+
+- normalize longitude and UTC timestamps;
+- perform explicit K/°C and Pa/hPa conversions;
+- require monotonically increasing valid time;
+- convert accumulated precipitation to interval precipitation;
+- reject cloud/humidity outside `0…100%`;
+- preserve GRIB missing values as a mask rather than zero;
+- reject physically impossible values;
+- preserve the hourly surface/cloud timeline and interpolate the three-hour
+  pressure-level profile only to those valid times;
+- carry source and confidence metadata forward.
+
+If one optional field is unavailable, its metric becomes `unavailable`; the complete response should not fail because a nonessential layer is missing.
+
+## 15. Calculations
+
+### 15.1. Wind
+
+```go
+speed := math.Hypot(u, v)
+direction := math.Mod(math.Atan2(-u, -v)*180/math.Pi+360, 360)
+```
+
+Minimum angular difference:
+
+```go
+d := math.Mod(math.Abs(a-b), 360)
+if d > 180 {
+    d = 360 - d
+}
+```
+
+Primary dynamic feature between adjacent levels:
+
+```text
+vector shear = hypot(u₂-u₁, v₂-v₁) / abs(z₂-z₁ in km)
+```
+
+Scalar speed delta is no longer plotted because unequal vertical spacing makes it misleading. When `min(speed₁,speed₂) < 2 m/s`, direction delta is displayed as `0°`: near-calm direction is unstable and its observational impact is small. `NaN` remains reserved for genuinely missing model data.
+
+### 15.2. Vertical scale
+
+Target chart levels:
+
+```text
+1000, 975, 950, 925, 900,
+850, 800, 750, 700, 650,
+600, 550, 500, 450, 400,
+350, 300, 250, 200, 150,
+100, 70, 50 hPa
+```
+
+Pressure is labeled on the left. Every heatmap shows actual mean geopotential height `FI/g` on a second right axis. The cloud chart uses full-layer midpoint height from adjacent `HHL` values; a standard-atmosphere conversion is only a legacy fallback.
+
+The cloud/PBL input subset retains sparse free-atmosphere levels and a
+continuous lower section:
+
+```text
+25, 30, 35, 40, 45, 48, 50, 52, 54, 56, 58, 59, 60, 61, 62,
+63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74
+```
+
+Every one of the 27 levels carries `CLC/P/T/QC/QI`; consecutive full levels
+`58…74` also carry `U/V`, while TKE comes from bounding half levels `58…75`.
+`HHL` provides actual
+geometry and the model surface. The continuous lower section is required for
+the centred `theta` gradient and trapezoidal PBL integration; sparse levels
+aloft support the cloud chart. The subset is versioned and every run manifest
+records its exact list.
+
+Model-level data are interpolated to this scale only within the actual source range. No vertical extrapolation is allowed; cells beyond available data remain missing.
+
+### 15.3. Forecast Wind Seeing Index
+
+UI name: **Forecast Wind Seeing Index**, not “exact seeing” or “Pickering scale.”
+
+This is the retained comparative wind-only diagnostic, not the physical
+seeing used by Overall.
+
+`seeing-v1` features:
+
+- vector shear between adjacent upper-air levels;
+- jet-region wind, primarily around 300–200 hPa;
+- potential-temperature gradient/static stability;
+- lower/free-atmosphere TKE when genuinely available;
+- surface wind and gusts;
+- penalties for missing fields and stale runs.
+
+Each feature maps to a configurable piecewise-linear `0…1` penalty:
+
+```text
+penalty = weighted_mean(available feature penalties)
+seeing  = clamp(1, 10, 10 - 9 * penalty)
+```
+
+Unavailable-feature weights are excluded from the denominator, while confidence drops. Output includes `confidence: low|medium|high`. Thresholds and weights are versioned and included in cache hashes.
+
+Until compared with DIMM/MASS or observing logs, this is a comparative
+heuristic forecast. Overall does not multiply by it: vector shear already
+enters HMNSP99 and wind additionally enters physical `tau0`, so a second full
+penalty would double-count the same flow.
+
+### 15.4. Weather — mandatory separate line
+
+`WeatherSummary` is calculated independently of seeing and overall score.
+
+Classification order:
+
+1. Determine precipitation type and intensity.
+2. If precipitation is insignificant, classify total cloud cover.
+3. Add notable gust/fog modifiers.
+
+Initial configurable cloud categories:
+
+- `0–20%`: clear;
+- `20–50%`: partly/variably cloudy;
+- `50–80%`: cloudy;
+- `80–100%`: overcast/heavily cloudy.
+
+Required response example:
+
+```text
+Weather: cloudy 21:00–03:00, light rain after 03:00; gusts up to 9 m/s.
+```
+
+### 15.5. Dew — mandatory separate line
+
+The bot must not output an uncalibrated percentage probability. It reports `low / medium / high` risk plus an expected window.
+
+`dew-v1` features:
+
+- `T₂m - Td₂m` spread;
+- relative humidity;
+- surface temperature `T_G` when available;
+- surface wind;
+- low cloud and precipitation;
+- recent temperature and spread trends.
+
+If `T_G` is unavailable, spread/RH/wind are used and confidence is reduced. Thresholds are configuration/domain logic, never platform-adapter logic.
+
+Required response example:
+
+```text
+Dew: high risk 00:00–05:00; minimum T−Td 0.8 °C.
+```
+
+Dew risk is an operational advisory only: it helps the observer prepare a heater, dew shield, or lens-care supplies. It does not reduce forecast seeing, lower the overall conditions score, or act as a hard gate; observing can remain fully worthwhile when the equipment is protected.
+
+### 15.6. Hourly overall suitability index
+
+This is neither another physical “seeing” scale nor a universal scientific
+`1…10` scale. It is an auditable mapping of hourly suitability for visual
+astronomy and astrophotography. Dew does not enter the index.
+
+Optical turbulence uses a hybrid calculation. Each hour takes its PBL boundary
+from single-level `ICON MH` and applies
+`h_PBL=clamp(MH,500,2000) m AGL`. From the surface to `h_PBL`, native ICON
+`T/P/TKE/HHL` supplies `Cn²` through the Masciadri expression
+`3.35e−6·P^[2(1−2R/cp)]·theta^(−10/3)·|dtheta/dz|^(4/3)·TKE^(2/3)`;
+the centred gradient is evaluated on consecutive model levels `58…74`, then
+integrated trapezoidally from `HHL75`. Above that same hourly `h_PBL`, HMNSP99
+uses pressure-level `T/U/V/FI`. `J_total=J_ground+J_free` becomes zenith long-exposure seeing at
+`500 nm` through the standard integral. Wind enters
+`tau0=0.058·lambda^(6/5)·[integral(Cn²·|V|^(5/3)dz)]^(−3/5)`. HMNSP99 vector
+shear already includes direction changes, so no separate `direction delta`
+multiplier is added.
+
+Seeing and `tau0` map logarithmically between `.env` boundaries
+`0.5…2.0 arcsec` and `5.2…1.6 ms`; `tau0` may only lower seeing quality with
+a mild weight of `0.25`. These anchors follow
+[ESO categories](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html),
+but the composition itself remains an engineering mapping.
+
+Overall uses phase-resolved optical depth from `TQC/TQI`:
+`tau_phase=3·Qext·CWP/(4·rho·r_eff)` and
+`B_cond=C·(1−exp(−tau/C))`. Diagnostic `CLC/CLCT` may coexist with almost zero
+grid-scale condensate, so a tier-aware unresolved-cloud guard is applied: low
+`0.45·C`, middle `0.55·0.45·C=0.2475·C`, and high
+`0.18·0.45·C=0.081·C`. These are conservative engineering uncertainty
+factors, not assigned physical opacity for the three tiers; physical
+`B_cond` always wins when stronger. Overall combines the
+`CLCL/CLCM/CLCH` tier guards with random overlap and caps them by
+diagnosed cover.
+
+The heatmap applies the same optical-depth kernel and tier-aware guard at each
+native level. Its condensate path uses `QC/QI` and that layer's actual mass,
+`m_air=P_Pa/(287.05·T)·abs(HHL[k]−HHL[k+1])`, rather than `Delta p` inferred
+between sparsely sampled levels. Because the heatmap is native-level while
+Overall is total-column, their values need not be numerically identical; the
+shared contract is the optical physics and guard policy.
+
+The tier-aware guard remains a configurable fallback: matching diagnostic `QC_DIA/QI_DIA`
+is absent from public ICON-EU Open Data, while available `CLCT_MOD` is a
+visualization field that DWD documents as ignoring cirrus when only high cloud
+is present—unacceptable for astronomy.
+
+Possible/high fog multiplies by `0.75/0.10`. Surface wind is only a mild
+practical factor: smoothstep starts at `8.5 m/s` mean wind and `12 m/s` gust,
+reaches its maximum at `15/22 m/s`, and the total penalty is capped at 20%.
+With defaults `w_seeing=1` and `w_cloud=2`:
+
+```text
+normalized = q_seeing^w_seeing * [1−0.25·(1−q_tau)] * q_cloud^w_cloud
+             * q_surface_wind * q_fog
+index = 1 + 9 * clamp(normalized, 0, 1)
+```
+
+All thresholds and multipliers enter the cache/version hash. An anonymized
+historical control case demonstrates the old bias: pressure-level
+HMNSP99 gave about `0.70…0.77″` without the PBL. A fixed-2-km diagnostic gave
+`2.221″/3.644″`; after adding hourly `MH=396 m`, the clamp-500 rule gave
+`1.9145″` at `f042` and `2.5478″` at `f048`. These are server-only regression
+checks, not observational calibration. Production run `2026072106` is
+published and passed post-deploy control validation. Absolute accuracy still requires DIMM/MASS/SCIDAR
+or observing logs in the target regions, and the UI continues to label the
+result model-derived. Full derivation and sources are in the
+[scientific method and calculation note](scientific-method.en.md).
+
+### 15.7. Point light pollution
+
+Light pollution is a static site property rather than an hourly meteorological variable. It is shown in the text block and **does not enter the Overall Astronomy Index**.
+
+The source is the latest published [David Lorenz Light Pollution Atlas](https://djlorenz.github.io/astronomy/lp/). As of 21 July 2026 this is Atlas 2024: annual 2024 VIIRS source radiance is transformed by a light-transfer, extinction, and atmospheric-scattering model into artificial zenith sky brightness. This is more current than World Atlas 2015 and more physically appropriate than directly converting a fresh VIIRS pixel: the satellite measures surface emissions, while an observer receives scattered light from surrounding sources.
+
+Numeric tiles use a `1/120°`, approximately `30″`, grid. At the exact submitted coordinates the service bilinearly interpolates the four surrounding **LPI** values and computes `SQM = 22 − 2.5·log10(1+LPI)` in `mag/arcsec²`. LPI is artificial brightness divided by the adopted natural background. The response gives LPI, SQM, atlas year, and an approximate Bortle reference.
+
+Bortle is a subjective all-sky visual classification, whereas the atlas models zenith only. The UI therefore says “approximate Bortle”, never presents it as a measurement, and merges the brightest conditions into `8–9`, where SQM alone cannot honestly distinguish the two classes. Actual conditions vary with transparency, aerosol, snow, immediate lamps, and the direction of light domes; only a site SQM/all-sky measurement can improve on the map.
+
+The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / `ASTRO_LIGHT_POLLUTION_ATLAS_YEAR`; production currently uses `2024`. Runtime neither searches for nor enables a new version automatically: an operator changes the year only after validating the source and a test query. Only the coordinate's `5°×5°` tile is downloaded and atomically cached below `data/light-pollution/lorenz-atlas/<year>`. At most two annual directories are retained, bounding disk growth.
+
+## 16. Astronomy and local time
+
+- all internal calculations use UTC;
+- each request resolves timezone from the coordinates submitted by that user;
+- display uses the IANA timezone of that exact point, including the date-specific UTC offset;
+- timezone is resolved offline; uncertain resolution falls back to explicitly labelled UTC;
+- polygon lookup uses `tzf v1.2.3` with embedded boundary data and no network API;
+- Go timezone data are embedded through `time/tzdata`;
+- sunrise, sunset, moonrise, moonset, phase, illumination, and lunar-cycle day are calculated offline with Meeus algorithms (`github.com/soniakeys/meeus/v3`, MIT); horizon crossings are refined to the second inside each local civil day and rounded to the minute by the UI;
+- a Saint Petersburg 20 July 2026 regression test limits every one of the four events to two minutes from the supplied reference;
+- an independent Moscow (`55.7558, 37.6173`) regression on the same date uses the [USNO Complete Sun and Moon Data for One Day service](https://aa.usno.navy.mil/data/api.html): reference Sun `04:14/20:57`, Moon `12:25/22:33`; the pure-Go result stays within two minutes;
+- every timestamp and chart in a response uses and labels the same resolved point timezone, for example `Europe/Moscow · MSK (UTC+3)` or fallback `UTC`.
+
+## 17. Reference charts and render contract
+
+The MVP renders seven images:
+
+1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Jupiter, and Saturn rows contain only event icons and times; Moon phase stays separate.
+2. **Overall Astronomy Index** — hourly `1…10` bars; the top label is the result, the in-bar label is `ε/T%` (hybrid seeing and effective cloud transmission), and `F` marks high fog risk. The formula also contains `tau0`, possible fog, and the mild surface-wind factor. Background bands derived from actual solar altitude distinguish day, civil (`0…−6°`), nautical (`−6…−12°`), astronomical twilight (`−12…−18°`), and astronomical night (`<−18°`) without changing the score.
+3. **Effective ICON cloud obstruction vs height/time** — hourly blocked-sky fraction across 27 model levels: sparse in the free atmosphere and consecutive `58…74` below. Each cell uses direct `CLC`, `T`, liquid `QC`, ice `QI`, and native thickness `|HHL[k]−HHL[k+1]|`; air mass is `P/(Rd·T)·dz`. Base obstruction `C·(1−exp(−τ_layer/C))` receives tier-aware low/middle/high guards of `45%/24.75%/8.1%` of `C`, while stronger physical `QC/QI` obstruction always remains. These percentages express engineering uncertainty, not opacity. Overall uses total-column fields and random overlap of the three aggregated tiers, so its `T%` need not equal a heatmap cell. Color and label show effective obstruction `0…100%`, not cover or volumetric density.
+4. **Wind speed vs pressure/time** — wind-speed heatmap in m/s.
+5. **Vertical vector wind shear** — `hypot(Δu,Δv)/|Δz|` in m/s/km.
+6. **Wind direction delta** — adjacent-level minimum angle; weak wind below `2 m/s` is displayed as `0°`.
+7. **Forecast Wind Seeing Index** — the retained wind-only `1…10` diagnostic; in-bar text such as `96%` shows the lead-time confidence heuristic.
+
+PNG contract:
+
+- `3200×1080` weather, `3200×960` overall index, `3200×1100` cloud, and `1280×960` remaining charts;
+- labels readable on a phone;
+- pressure axis with `50 hPa` at top and `1000 hPa` at bottom;
+- hourly weather axis and three-hour upper-air axes;
+- in-cell values only at adequate contrast;
+- missing cells shown gray with `×`, never zero;
+- calendar-day boundaries and daylight shading;
+- every heatmap has a continuous color legend with minimum, midpoint, maximum, and dark/light meaning;
+- coordinates displayed at limited precision;
+- footer with provider/product, UTC base run, grid, algorithm version, and generation time;
+- stable color scales within one renderer version;
+- no `Pickering Scale` label until physically calibrated.
+
+The weather legend also includes two fog levels. High risk requires direct `ICON VIS <1 km`, `RH ≥95%`, and `T−Td ≤1.5°C`; possible fog uses `VIS <5 km`, `RH ≥90%`, and `T−Td ≤2.5°C`. Saturation guards against calling smoke, dry haze, or precipitation fog solely from low visibility. The 1 km boundary follows the [WMO International Cloud Atlas](https://cloudatlas.wmo.int/fog-compared-with-mist.html). Official `CLCL/CLCM/CLCH` cover remains white below `10%`, blue at `10–49%`, and orange at `≥50%`; [ESO notes](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html) that even thin cirrus can vary transparency by more than 10%.
+
+The displayed `Transparency %` row is a versioned heuristic, not physical transmission. Its dominant factor is the maximum of `CLCT/CLCL/CLCM/CLCH`, refined by surface horizontal visibility `VIS` and total-column water vapour `TQV`/PWV. For `transparency-proxy-v0`, `C=max(CLCT,CLCL,CLCM,CLCH)`, `V=clip((VIS_km−5)/45)`, `W=1−clip((PWV_mm−5)/35)`, and the result is `100·(1−C/100)·(0.65+0.25V+0.10W)`. The coefficients are an uncalibrated KISS ordering aid, so the legend and `/start` retain the proxy qualification even though the compact row label says “Transparency %”.
+
+DWD defines [`VIS` in metres and `TQV` in kg/m²](https://isabel.dwd.de/DWD/publikationen/dokumentation/grib/DWD_GRIB2_PARAMETER.htm); kg/m² is numerically equivalent to mm PWV. True optical transparency needs direct AOD/extinction observations: [DWD derives AOD and PWV through Sun, Moon, and stellar photometry](https://www.dwd.de/EN/research/observing_atmosphere/lindenberg_column/radiation/photometry.html). The proxy is therefore only for comparing hours in one forecast and is unsuitable for absolute photometry.
+
+A droplet means a small `T−Td` spread and possible dew and never penalizes seeing. Each event icon is placed at its actual X position. The pure-Go Jupiter/Saturn approximation uses mean orbital elements plus a light-time iteration. It is explicitly an approximate planning aid; scientific validation should compare it against [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/manual.html) for the site and date.
+
+Preferred implementation: one pure-Go renderer based on `gonum/plot` and `golang.org/x/image` with an embedded Cyrillic-capable font. A Python/Matplotlib container is unnecessary.
+
+Render cache key:
+
+```text
+telegram-render-v6-dynamic-mh/<bundle-hash>/<grid-cell>/<horizon>/<locale>/<renderer-version>/<chart>.png
+```
+
+## 18. User flow
+
+### 18.1. Input
+
+MVP accepts coordinates through two equivalent input paths:
+
+1. **Native location sharing:** Telegram `location` or a VK `geo` attachment. The bot offers the platform-native “Share location” button where supported.
+2. **Plain text:** `59.9386, 30.3141` or `59.9386 30.3141`. `/forecast 59.9386 30.3141` remains an optional convenience syntax, not a requirement.
+
+Both paths produce the same `Location` and enter the same pipeline. The bot confirms parsed latitude/longitude and the resolved timezone before or together with the result.
+
+City names and street addresses are not parsed in the MVP because an address geocoder would add an external dependency and coordinate ambiguity.
+
+### 18.2. Processing
+
+1. Platform adapter converts an update to common `IncomingRequest`.
+2. Coordinates and rate limits are validated.
+3. Local timezone is resolved.
+4. Router selects provider and compatible current run.
+5. Render cache is checked.
+6. On a miss, point cache is loaded or extracted.
+7. Data are normalized, calculated, and rendered.
+8. Concise text is sent first, then a media group/attachments.
+9. Platform adapter translates common `BotResponse` into API calls.
+
+### 18.3. Response contract
+
+```text
+📍 59.9386, 30.3141 · MSK (UTC+3)
+Period: 19–22 July; hourly weather, three-hourly upper-air profiles
+Sun: rise 04:13, set 21:57. Moon: rise 13:06, set 22:50; waxing crescent, 42% illuminated.
+Weather: cloudy overnight, light rain after 03:00; gusts up to 9 m/s.
+Dew: high risk 00:00–05:00; minimum T−Td 0.8 °C.
+Seeing: forecast index 3.1/10, medium confidence.
+Conditions: best window 22:00–00:00, 54/100.
+Data: DWD ICON-EU 0.0625° (~7 km), run 2026-07-19 12 UTC.
+Light pollution: LPI 12.34, SQM 19.19 mag/arcsec², approximate Bortle 6 (Light Pollution Atlas 2024, zenith, 30″ interpolation).
+```
+
+Only platform adapters handle attachment-count and message-length limits. Domain text and charts remain shared.
+
+## 19. Caching, queueing, and concurrency
+
+- point cache keys use actual model cells, not rounded user coordinates;
+- render cache includes run ID plus algorithm/renderer versions;
+- one point bundle contains wind, surface, and cloud data; all three ecCodes extractions run concurrently;
+- the RAM LRU is bounded by both 512 cells and an estimated 20 GiB; `GOMEMLIMIT=24GiB` leaves headroom for ecCodes and the runtime;
+- identical concurrent point misses collapse through a per-key flight;
+- six chat-affine Telegram workers process different chats concurrently while preserving per-chat ordering;
+- the queue is bounded and returns a friendly busy response when full;
+- ecCodes has a shared eight-process semaphore;
+- publishing a new run cannot alter an in-flight immutable manifest reference;
+- every cache write uses `temp + fsync + rename`.
+- light-pollution tiles are cached independently of forecasts; the atlas year changes only through an operator action, and at most two years are retained.
+
+Redis provides no useful benefit for one process.
+
+## 20. Resilience and fallback
+
+| Failure | Behavior |
+|---|---|
+| Candidate run incomplete | Previous current remains active |
+| Provider unreachable | Use last complete run within `max_stale_age` |
+| ICON-EU unavailable | Use ICON Global and disclose fallback |
+| ICON-Ru shadow unavailable | Production unaffected; verification records a gap |
+| Some upper levels missing | Missing cells and lower confidence |
+| One chart fails | Send text and remaining charts |
+| Telegram unavailable | VK continues, and vice versa |
+| Container restarts | Polling offsets/state load from atomic files |
+| Low disk | Do not sync; prune disposable cache; preserve current |
+| ecCodes error | Mark file/run invalid and do not cache success |
+
+Freshness limits are configured per provider. Base time is always visible so stale data cannot masquerade as current.
+
+## 21. Configuration
+
+Proposed minimal `config.yaml`:
+
+```yaml
+app:
+  locale: ru
+  horizon: 72h
+  step: 3h
+  workers: 6
+  eccodes_workers: 8
+  point_cache_entries: 512
+  point_cache_memory_limit: 20GiB
+  request_timeout: 3m
+
+paths:
+  data: /app/data
+  temp: /app/data/tmp
+
+providers:
+  icon_eu:
+    enabled: true
+    role: primary
+    keep_runs: 2
+    max_stale_age: 12h
+  icon_global:
+    enabled: true
+    role: fallback
+    keep_runs: 2
+    max_stale_age: 18h
+  icon_ru:
+    enabled: true
+    role: shadow
+    mode: wis
+    keep_runs: 1
+    max_stale_age: 18h
+
+sync:
+  poll_interval: 15m
+  download_parallelism: 4
+  min_free_space: 150GiB
+
+algorithms:
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v4
+  dew_version: dew-v1
+  conditions_version: conditions-v4-dynamic-mh-cloud-guard
+  overall_seeing_weight: 1.0
+  overall_cloud_weight: 2.0
+  overall_coherence_time_weight: 0.25
+  overall_possible_fog_factor: 0.75
+  overall_high_fog_factor: 0.10
+  overall_good_seeing_arcsec: 0.5 # compatibility name: best threshold
+  overall_bad_seeing_arcsec: 2.0
+  overall_best_coherence_time_ms: 5.2
+  overall_bad_coherence_time_ms: 1.6
+  overall_boundary_layer_min_m: 500
+  overall_boundary_layer_top_m: 2000
+  overall_ground_cn2_scale: 1.0
+  overall_unresolved_cloud_obstruction: 0.45
+  overall_surface_wind_max_penalty: 0.20
+  overall_surface_wind_start_ms: 8.5
+  overall_surface_wind_full_ms: 15.0
+  overall_surface_gust_start_ms: 12.0
+  overall_surface_gust_full_ms: 22.0
+  cloud_liquid_radius_micrometers: 10
+  cloud_ice_radius_micrometers: 25
+
+render:
+  version: render-v9-dynamic-mh
+  width: 1280
+  height: 960
+
+platforms:
+  telegram:
+    enabled: true
+    token_file: /run/secrets/telegram_token
+  vk:
+    enabled: true
+    token_file: /run/secrets/vk_token
+```
+
+Every listed calibration parameter also has a matching `ASTRO_OVERALL_*`
+environment variable, enters the version/cache key, and is test-covered. The
+historical `overall_good_seeing_arcsec` name remains for compatibility but now
+means the best saturation threshold, `0.5″`. Startup logs effective
+configuration with all secrets redacted.
+
+## 22. Docker deployment on the production host
+
+### 22.1. Image
+
+Multi-stage Dockerfile:
+
+1. Go builder compiles `bot_astrosferum`.
+2. Debian 12 runtime contains CA certificates, timezone data, ecCodes tools, and fonts.
+3. Process runs as non-root.
+4. No public port is declared.
+
+The same image runs `serve`, `sync`, `doctor`, and fixture rendering.
+
+### 22.2. Compose
+
+Initial Compose has one `app` service:
+
+- `restart: unless-stopped`;
+- `init: true`;
+- graceful `stop_grace_period`;
+- project-local bind mounts only;
+- bounded Docker log rotation;
+- healthcheck using `bot_astrosferum doctor --quick`;
+- host-compatible UID/GID.
+
+No nginx dependency or host-port collision is introduced.
+
+### 22.3. Backup
+
+Back up:
+
+- source repository, Compose, and configuration;
+- secret files through the existing secure secret backup process;
+- `data/state` if user preferences are later introduced.
+
+Downloaded GRIB, point cache, render cache, and verification raw cache are reproducible and need not be in mandatory backups.
+
+Runtime retention is two model runs, at most 512 point bundles per run, at most 256 render bundles no older than 48 hours, and three Docker log files of 10 MiB each. Cache staging files older than one hour are removed at startup and on later writes. GRIB remains persistent on disk while Linux page cache uses spare RAM without a second tmpfs copy.
+
+## 23. Observability
+
+Structured events include:
+
+- `sync_started`, `sync_completed`, `sync_failed`;
+- provider, run ID, bytes, duration, and file count;
+- `request_received`, `request_completed`, `request_failed`;
+- platform, coarse region, cache status, and stage durations;
+- current-run age and free disk;
+- queue depth and active workers;
+- verification joins and model scores.
+
+Do not log tokens, full update payloads, private message text, or exact user coordinates. Use a grid cell ID or coarse region for diagnostics.
+
+`doctor` checks configuration, secret readability, data write access, ecCodes version, disk space, current manifests, provider freshness, and fixture rendering.
+
+## 24. Secure and private defaults
+
+- non-root container with no Docker socket;
+- no published TCP ports;
+- token files only in untracked `secrets/` with mode `0600`;
+- outbound requests have timeouts and size limits;
+- update IDs are deduplicated;
+- per-user/per-chat rate limits and a global bounded queue;
+- command length and coordinate-range validation;
+- `os/exec` receives an argument slice; user input never enters a shell command;
+- downloaded GRIB is validated before publication;
+- exact coordinates are stored only after an explicit save action; unsaved coordinates are not associated with the user ID;
+- debug output omits internal paths, secrets, and commands.
+
+## 25. Testing
+
+### Unit tests
+
+- longitude normalization and coverage, including the date line;
+- wind direction and angular difference around `0/360°`;
+- vector shear and vertical interpolation;
+- accumulated-to-interval precipitation;
+- weather, dew, seeing, and conditions thresholds;
+- provider routing/fallback and cache versioning.
+
+### Fixture and integration tests
+
+- small fixed GRIB2 fixtures for ecCodes;
+- incomplete/corrupt runs never publish;
+- atomic `current.json` survives restart;
+- equivalent locations select the same cell;
+- Telegram/VK adapters use redacted recorded API responses;
+- graceful shutdown during sync and rendering.
+
+### Golden image tests
+
+- five baseline PNGs;
+- dimensions, axes, labels, footer, and missing cells;
+- Cyrillic and mobile readability review;
+- explicit golden updates only with a renderer-version change.
+
+### Model verification tests
+
+- forecasts are stored before their valid time and cannot be backfilled with observations;
+- observation joins use station/time tolerances explicitly;
+- circular metrics are used for wind direction;
+- score reports include sample count and confidence interval;
+- router promotion requires a configured minimum sample and stable margin.
+
+## 26. Delivery stages
+
+### Stage 0 — mandatory data-source spike
+
+Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#12-data-source-selection-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global CDO remapping is validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
+
+1. Download a minimal complete ICON-EU field set and record real filenames/GRIB keys.
+2. Confirm the open data geometry contains Saint Petersburg and Moscow.
+3. Verify model-level `U/V/T/P/QV/TKE/HHL`, surface fields, units, and publication delay.
+4. Download an equivalent minimal ICON Global set for fallback and baseline.
+5. Connect to ICON-Ru WIS 2.0 for shadow verification.
+6. Measure run size, download time, and `grib_get -l` latency on the production host.
+
+Exit criterion: one fixture plus a reviewed “required field → actual GRIB key/source” table. `seeing-v1` must not be finalized without it.
+
+### Stage 1 — vertical slice
+
+- Go module and config loader;
+- primary ICON-EU provider;
+- manual synchronization of one forecast step;
+- one-point extraction;
+- five fixture PNGs;
+- `doctor`.
+
+### Stage 2 — complete data path
+
+- atomic runs and scheduler;
+- ICON Global fallback adapter;
+- ICON-Ru WIS shadow adapter;
+- domain-based routing and single-provider bundles;
+- point/render cache;
+- weather/dew/seeing/conditions-v4-dynamic-mh-cloud-guard;
+- verification storage and scoring.
+
+### Stage 3 — platform adapters
+
+- common request/response contract;
+- Telegram adapter;
+- VK adapter;
+- rate limits, retries, media upload, and polling offsets.
+
+### Stage 4 — production
+
+- Dockerfile and Compose;
+- deploy below `/opt/docker/bot_astrosferum`;
+- healthcheck and log rotation;
+- restart/incomplete-sync recovery checks;
+- disk and retention limits;
+- first control-station verification dashboard/report.
+
+## 27. MVP acceptance criteria
+
+- the same coordinates produce equivalent Telegram and VK results;
+- Saint Petersburg and Moscow use a complete ICON-EU production bundle unless verification changes policy;
+- outside the available ICON-EU domain, ICON Global is used;
+- ICON-Ru WIS runs in shadow mode and cannot silently affect production;
+- provider, grid, run, and freshness are visible;
+- Weather and Dew are separate lines;
+- one readable `3200×1080` weather PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
+- seeing is called a forecast index and includes confidence;
+- incomplete runs never publish;
+- current manifests and polling state survive restart;
+- tokens are absent from Git and logs;
+- every bind mount is below `/opt/docker/bot_astrosferum`;
+- failure of one platform API does not stop the other;
+- the application publishes no host TCP port.
+
+## 28. Open questions that must be measured
+
+1. Actual size and wall time of a complete 72-hour ICON-EU synchronization; the current figure is sample-based.
+2. ICON-Ru WIS broker and topic are known; object URLs, names, sizes, and redelivery behavior still require a real notification.
+3. Whether a stable native 6.5 km ICON-Ru product can be legally and operationally accessed by this project.
+4. Which observation feeds can be used reliably and lawfully for automated verification in the four priority regions.
+5. Whether ICON-Ru demonstrates a statistically stable advantage over ICON-EU/Global for any field and lead-time band.
+6. The user-data export/deletion policy before public launch; individual point deletion is already available.
+7. Which observations will calibrate `seeing-v1` and `dew-v1`.
+8. Whether users prefer four separate images or a combined two-page report; rendering can support either without changing calculations.
+
+These items are resolved through the data-source spike and measured operation. They do not require changing the overall architecture.

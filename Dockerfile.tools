@@ -1,0 +1,15 @@
+FROM debian:13-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bzip2 \
+        ca-certificates \
+        cdo \
+        curl \
+        libeccodes-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/spike-icon-eu.sh /usr/local/bin/spike-icon-eu
+RUN chmod 0755 /usr/local/bin/spike-icon-eu
+
+ENTRYPOINT ["/usr/local/bin/spike-icon-eu"]
