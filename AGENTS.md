@@ -5,10 +5,11 @@
 - Keep the design KISS. Prefer a direct function or a consumer-owned interface over a framework, service locator, event bus, or speculative abstraction.
 - Preserve the current dependency direction:
   - `cmd/bot_astrosferum` is the composition root and CLI;
+  - `internal/app/bot` owns the shared platform-neutral command, forecast, localization, and persistence workflow;
   - `internal/forecast` and `internal/astronomy` contain provider-neutral calculations;
   - `internal/model` and its subpackages acquire and extract model data;
   - `internal/render` renders already-computed data and does not perform network access;
-  - `internal/platform` adapts external messaging platforms and defines the interfaces it consumes.
+  - `internal/platform` contains peer Telegram/VK adapters; neither adapter may import the other, and both implement the small messenger interfaces owned by `internal/app/bot`.
 - Do not create a package only to hold one wrapper or one interface. Introduce a shared provider abstraction when the real ICON Global implementation defines the common contract, not before.
 - Keep scientific formulas provider-neutral and covered by regression tests. Do not hide calibration changes inside transport or rendering code.
 - Model data, caches, generated charts, credentials, `.env`, and live configuration never belong in Git.
@@ -33,3 +34,9 @@ docker run --rm -v "$PWD:/app:ro" -w /app \
 ```
 
 Review the final diff for architecture drift before pushing. In particular, reject new cross-layer imports, duplicated provider contracts, and abstractions without a current caller.
+
+## Safe server synchronization
+
+- Before synchronization, verify the local repository root, remote repository root, and current working directory so files are sent to the intended project and directory level.
+- Run and inspect an itemized dry run, checking that nested files retain their expected paths instead of landing in the repository root.
+- After synchronization, verify representative destination paths before building or restarting production.
