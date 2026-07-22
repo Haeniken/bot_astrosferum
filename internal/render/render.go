@@ -2,7 +2,9 @@ package render
 
 import (
 	"fmt"
+	"image"
 	"image/color"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -400,31 +402,17 @@ func footer(series forecast.VerticalSeries, timeZoneLabel string, options Option
 }
 
 func saveAtomic(p *plot.Plot, options Options, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
-		return fmt.Errorf("create chart directory: %w", err)
-	}
-	temporary := destination + ".part.png"
-	defer func() { _ = os.Remove(temporary) }()
 	width := vg.Length(float64(options.Width)/96) * vg.Inch
 	height := vg.Length(float64(options.Height)/96) * vg.Inch
-	if err := p.Save(width, height, temporary); err != nil {
+	imageCanvas := vgimg.NewWith(vgimg.UseWH(width, height), vgimg.UseDPI(96), vgimg.UseBackgroundColor(color.White))
+	p.Draw(draw.New(imageCanvas))
+	if err := savePNGImageAtomic(imageCanvas.Image(), destination); err != nil {
 		return fmt.Errorf("render %s: %w", filepath.Base(destination), err)
-	}
-	if err := os.Chmod(temporary, 0o640); err != nil {
-		return fmt.Errorf("set chart permissions: %w", err)
-	}
-	if err := os.Rename(temporary, destination); err != nil {
-		return fmt.Errorf("publish %s: %w", filepath.Base(destination), err)
 	}
 	return nil
 }
 
 func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights []float64, colors palette.Palette, minimum, maximum float64, unit string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
-		return err
-	}
-	temporary := destination + ".part.png"
-	defer func() { _ = os.Remove(temporary) }()
 	width := vg.Length(float64(options.Width)/96) * vg.Inch
 	height := vg.Length(float64(options.Height)/96) * vg.Inch
 	imageCanvas := vgimg.NewWith(vgimg.UseWH(width, height), vgimg.UseDPI(96), vgimg.UseBackgroundColor(color.White))
@@ -464,19 +452,38 @@ func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights [
 	full.FillText(legendStyle, vg.Point{X: (barLeft + barRight) / 2, Y: barTop + vg.Points(3)}, fmt.Sprintf("%.0f %s", (minimum+maximum)/2, unit))
 	legendStyle.XAlign = draw.XRight
 	full.FillText(legendStyle, vg.Point{X: barRight, Y: barTop + vg.Points(3)}, fmt.Sprintf(localized(options, "%.0f %s · светлый = много", "%.0f %s · light = high"), maximum, unit))
+	if err := savePNGImageAtomic(imageCanvas.Image(), destination); err != nil {
+		return fmt.Errorf("render %s: %w", filepath.Base(destination), err)
+	}
+	return nil
+}
+
+func savePNGImageAtomic(source image.Image, destination string) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+		return fmt.Errorf("create chart directory: %w", err)
+	}
+	temporary := destination + ".part.png"
+	defer func() { _ = os.Remove(temporary) }()
 	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
 	}
-	_, writeError := (vgimg.PngCanvas{Canvas: imageCanvas}).WriteTo(file)
-	closeError := file.Close()
-	if writeError != nil {
-		return fmt.Errorf("render %s: %w", filepath.Base(destination), writeError)
+	encoder := png.Encoder{CompressionLevel: png.BestCompression}
+	if err := encoder.Encode(file, source); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("encode lossless PNG: %w", err)
 	}
-	if closeError != nil {
-		return closeError
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
 	}
-	return os.Rename(temporary, destination)
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		return fmt.Errorf("publish PNG: %w", err)
+	}
+	return nil
 }
 
 type matrixGrid struct {

@@ -21,6 +21,11 @@ import (
 	"gonum.org/v1/plot/vg/draw"
 )
 
+const (
+	OverallWidth  = 3840
+	OverallHeight = 1200
+)
+
 // OverallIndex renders the hourly observing-suitability index. The main label
 // is the 1..10 result; the compact label inside each bar exposes the two model
 // inputs so a low value is not presented as a black box.
@@ -29,19 +34,19 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 		return fmt.Errorf("overall index chart requires at least two frames")
 	}
 	if options.Width == 0 {
-		options.Width = 3200
+		options.Width = OverallWidth
 	}
 	if options.Height == 0 {
-		options.Height = 960
+		options.Height = OverallHeight
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
 		return err
 	}
 	p := plot.New()
 	stylePlot(p)
-	p.Title.TextStyle.Font.Size = vg.Points(19)
-	p.X.Label.TextStyle.Font.Size = vg.Points(12)
-	p.Y.Label.TextStyle.Font.Size = vg.Points(14)
+	p.Title.TextStyle.Font.Size = vg.Points(22)
+	p.X.Label.TextStyle.Font.Size = vg.Points(15)
+	p.Y.Label.TextStyle.Font.Size = vg.Points(17)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, frames[0].ValidAt)
 	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Общий индекс пригодности для астрономии (1–10)\n%s · почасовой · ICON TKE до динамической MH (500–2000 м над землёй) + HMNSP99 выше · сиинг и τ₀ на 500 нм · эффективная облачная преграда + туман", "(%.2f, %.2f) Overall Astronomy Index (1–10)\n%s · hourly · ICON TKE to dynamic MH (500–2000 m AGL) + HMNSP99 aloft · seeing and tau0 at 500 nm · effective cloud obstruction + fog"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
 	p.X.Label.Text = fmt.Sprintf(localized(options, "Местное время · %s  |  подписи: сиинг″ / τ₀ мс / T%%; T = эффективное пропускание облаков; f/F = возможный/сильный туман; MH = почасовая глубина перемешанного слоя ICON  |  %s", "Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s"), timeZoneLabel, Version)
@@ -56,8 +61,8 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	p.X.Tick.Label.Rotation = math.Pi / 3
 	p.X.Tick.Label.XAlign = draw.XRight
 	p.X.Tick.Label.YAlign = draw.YCenter
-	p.X.Tick.Label.Font.Size = vg.Points(16)
-	p.Y.Tick.Label.Font.Size = vg.Points(16)
+	p.X.Tick.Label.Font.Size = vg.Points(18)
+	p.Y.Tick.Label.Font.Size = vg.Points(18)
 	p.Y.Tick.Marker = plot.ConstantTicks([]plot.Tick{{Value: 0, Label: "0"}, {Value: 2, Label: "2"}, {Value: 4, Label: "4"}, {Value: 6, Label: "6"}, {Value: 8, Label: "8"}, {Value: 10, Label: "10"}})
 	if err := addSolarBackground(p, frames, sky); err != nil {
 		return err
@@ -68,7 +73,7 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	p.Add(grid)
 	colors := magma(96)
 	for index, frame := range frames {
-		bar, err := plotter.NewBarChart(plotter.Values{frame.Index}, vg.Points(29))
+		bar, err := plotter.NewBarChart(plotter.Values{frame.Index}, vg.Points(38))
 		if err != nil {
 			return err
 		}
@@ -150,7 +155,7 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Pale
 	for index, frame := range frames {
 		topPoints[index] = plotter.XY{X: float64(index), Y: frame.Index + 0.12}
 		topText[index] = fmt.Sprintf("%.1f", frame.Index)
-		insidePoints[index] = plotter.XY{X: float64(index), Y: 0.72}
+		insidePoints[index] = plotter.XY{X: float64(index), Y: 0.52}
 		seeing := localized(options, "ветер", "wind")
 		if frame.PhysicalSeeing {
 			seeing = fmt.Sprintf("%.1f″", frame.SeeingArcsec)
@@ -167,7 +172,7 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Pale
 			fog = " F"
 		}
 		insideText[index] = fmt.Sprintf("%s\n%s\nT%d%%%s", seeing, coherence, int(math.Round(frame.CloudTransmissionPercent)), fog)
-		labelFont := font.From(plot.DefaultFont, vg.Points(12.5))
+		labelFont := font.From(plot.DefaultFont, vg.Points(17))
 		labelFont.Weight = xfont.WeightSemiBold
 		insideStyles[index] = text.Style{Color: contrastColor(paletteColor(colors, frame.Index, 1, 10)), Font: labelFont, XAlign: draw.XCenter, YAlign: draw.YCenter, Handler: plot.DefaultTextHandler}
 	}
@@ -176,7 +181,7 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Pale
 		return nil, nil, err
 	}
 	for index := range top.TextStyle {
-		top.TextStyle[index].Font.Size = vg.Points(14)
+		top.TextStyle[index].Font.Size = vg.Points(18)
 		top.TextStyle[index].Font.Weight = xfont.WeightSemiBold
 		top.TextStyle[index].XAlign = draw.XCenter
 		top.TextStyle[index].YAlign = draw.YBottom

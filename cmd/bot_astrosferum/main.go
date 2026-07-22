@@ -260,7 +260,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
-	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960, Language: *language}); err != nil {
+	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: *language}); err != nil {
 		return err
 	}
 	return writeJSON(stdout, struct {
@@ -434,7 +434,7 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
-	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: 3200, Height: 960, Language: *language}); err != nil {
+	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: *language}); err != nil {
 		return err
 	}
 	return writeJSON(stdout, struct {

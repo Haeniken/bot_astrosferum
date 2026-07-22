@@ -34,6 +34,50 @@ func TestWindArrowsAreDrawnForAllEightDirections(t *testing.T) {
 	}
 }
 
+func TestLosslessPNGCompressionPreservesPixels(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 640, 320))
+	for y := range 320 {
+		for x := range 640 {
+			shade := uint8((x/16 + y/16) % 4 * 60)
+			source.SetRGBA(x, y, color.RGBA{R: shade, G: 255 - shade, B: uint8(y % 32), A: 255})
+		}
+	}
+	destination := filepath.Join(t.TempDir(), "lossless.png")
+	if err := savePNGImageAtomic(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := png.Decode(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Bounds() != source.Bounds() {
+		t.Fatalf("decoded bounds = %v, want %v", decoded.Bounds(), source.Bounds())
+	}
+	for y := range 320 {
+		for x := range 640 {
+			if decoded.At(x, y) != source.At(x, y) {
+				t.Fatalf("pixel (%d,%d) changed", x, y)
+			}
+		}
+	}
+	var defaultPNG bytes.Buffer
+	if err := png.Encode(&defaultPNG, source); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > int64(defaultPNG.Len()) {
+		t.Fatalf("best-compression PNG size = %d, default = %d", info.Size(), defaultPNG.Len())
+	}
+}
+
 func TestWindArrowsUseStableCompassSectors(t *testing.T) {
 	shade := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 	draw := func(degrees float64) *image.RGBA {
@@ -77,6 +121,59 @@ func TestCelestialEventArrowsAreThickAndVisible(t *testing.T) {
 		if colored < 55 {
 			t.Fatalf("rising=%v arrow contains only %d pixels", rising, colored)
 		}
+	}
+}
+
+func TestFogPictogramIsThickAndVisible(t *testing.T) {
+	canvas := image.NewRGBA(image.Rect(0, 0, 80, 50))
+	shade := color.RGBA{R: 64, G: 192, B: 236, A: 255}
+	drawFog(canvas, 15, 12, 13, shade)
+	colored := 0
+	for y := range 50 {
+		for x := range 80 {
+			if canvas.RGBAAt(x, y) == shade {
+				colored++
+			}
+		}
+	}
+	if colored < 120 {
+		t.Fatalf("fog pictogram contains only %d colored pixels", colored)
+	}
+}
+
+func TestWeatherIconIncludesFogRiskPictogram(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame forecast.SurfaceFrame
+		shade color.RGBA
+	}{
+		{
+			name:  "possible",
+			frame: forecast.SurfaceFrame{VisibilityKM: 3, RelativeHumidityPercent: 92, TemperatureC: 8, DewPointC: 6, TransparencyAvailable: true},
+			shade: weatherCyan,
+		},
+		{
+			name:  "high",
+			frame: forecast.SurfaceFrame{VisibilityKM: 0.5, RelativeHumidityPercent: 98, TemperatureC: 8, DewPointC: 7.5, TransparencyAvailable: true},
+			shade: weatherOrange,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			canvas := image.NewRGBA(image.Rect(0, 0, 80, 80))
+			drawWeatherIcon(canvas, 40, 30, 13, test.frame, false)
+			colored := 0
+			for y := 48; y < 75; y++ {
+				for x := 20; x < 60; x++ {
+					if canvas.RGBAAt(x, y) == test.shade {
+						colored++
+					}
+				}
+			}
+			if colored < 100 {
+				t.Fatalf("weather fog marker contains only %d colored pixels", colored)
+			}
+		})
 	}
 }
 
@@ -125,10 +222,10 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 	if got, want := inside.Labels[1], "1.0″\nτ2.0\nT20% F"; got != want {
 		t.Fatalf("strict hybrid label = %q, want %q", got, want)
 	}
-	if inside.TextStyle[0].Font.Size < 12 {
+	if inside.TextStyle[0].Font.Size < 16 {
 		t.Fatalf("overall input label is too small: %v", inside.TextStyle[0].Font.Size)
 	}
-	if top.TextStyle[0].Font.Size < 13 {
+	if top.TextStyle[0].Font.Size < 17 {
 		t.Fatalf("overall index label is too small: %v", top.TextStyle[0].Font.Size)
 	}
 }

@@ -5,10 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/png"
 	"math"
-	"os"
-	"path/filepath"
 	"time"
 
 	"bot_astrosferum/internal/astronomy"
@@ -247,10 +244,10 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) 
 	drawText(canvas, fonts.small, 2072, 895+weatherPostCloudShift, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
 	drawDrop(canvas, 2650, 884+weatherPostCloudShift, 8, weatherOrange)
 	drawText(canvas, fonts.small, 2672, 895+weatherPostCloudShift, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
-	drawFog(canvas, 140, 916+weatherPostCloudShift, 13, weatherCyan)
-	drawText(canvas, fonts.small, 174, 930+weatherPostCloudShift, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
-	drawFog(canvas, 1200, 916+weatherPostCloudShift, 13, weatherOrange)
-	drawText(canvas, fonts.small, 1234, 930+weatherPostCloudShift, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
+	drawFog(canvas, 140, 914+weatherPostCloudShift, 18, weatherCyan)
+	drawText(canvas, fonts.small, 190, 930+weatherPostCloudShift, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
+	drawFog(canvas, 1200, 914+weatherPostCloudShift, 18, weatherOrange)
+	drawText(canvas, fonts.small, 1250, 930+weatherPostCloudShift, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
 	drawText(canvas, fonts.normal, 22, 958+weatherPostCloudShift, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
 	drawText(canvas, fonts.normal, 22, 986+weatherPostCloudShift, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
 }
@@ -303,12 +300,16 @@ func drawWeatherIcon(canvas *image.RGBA, centerX, centerY, radius int, frame for
 func drawFog(canvas *image.RGBA, x, y, radius int, shade color.RGBA) {
 	width := maxInt(8, radius*2)
 	for offset := range 3 {
-		yLine := y + offset*4
+		yLine := y + offset*5
 		shift := 0
 		if offset == 1 {
 			shift = width / 4
 		}
+		for stroke := -1; stroke <= 2; stroke++ {
+			drawLine(canvas, x+shift-1, yLine+stroke, x+width-shift+1, yLine+stroke, weatherBackground)
+		}
 		drawLine(canvas, x+shift, yLine, x+width-shift, yLine, shade)
+		drawLine(canvas, x+shift, yLine+1, x+width-shift, yLine+1, shade)
 	}
 }
 
@@ -490,31 +491,8 @@ func newWeatherFonts() (weatherFonts, func(), error) {
 }
 
 func saveWeatherAtomic(canvas image.Image, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
-		return fmt.Errorf("create weather chart directory: %w", err)
-	}
-	temporary := destination + ".part.png"
-	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
-	if err != nil {
-		return err
-	}
-	if err := png.Encode(file, canvas); err != nil {
-		_ = file.Close()
-		_ = os.Remove(temporary)
+	if err := savePNGImageAtomic(canvas, destination); err != nil {
 		return fmt.Errorf("encode weather chart: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Rename(temporary, destination); err != nil {
-		_ = os.Remove(temporary)
-		return err
 	}
 	return nil
 }
