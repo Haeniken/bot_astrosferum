@@ -6,7 +6,7 @@ Research-oriented Go bot for astronomy-condition forecasts.
 
 **[Русская версия README](README.ru.md)**
 
-`bot_astrosferum` combines ICON-EU weather fields, model-derived optical turbulence, effective cloud obstruction, fog, wind diagnostics, and ephemerides into hourly planning charts. It is scientific software, but not a calibrated measuring instrument: seeing and the Overall Astronomy Index remain model estimates until validated against observations. See [Scientific status and reproducibility](docs/scientific-method.en.md).
+`bot_astrosferum` combines DWD ICON-EU and ICON Global weather fields, model-derived optical turbulence, effective cloud obstruction, fog, wind diagnostics, and ephemerides into hourly planning charts. ICON-EU is selected inside its European domain, while ICON Global provides worldwide fallback coverage outside it. It is scientific software, but not a calibrated measuring instrument: seeing and the Overall Astronomy Index remain model estimates until validated against observations. See [Scientific status and reproducibility](docs/scientific-method.en.md).
 
 ## Saint Petersburg example
 
