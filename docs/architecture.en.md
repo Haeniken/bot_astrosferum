@@ -1,8 +1,8 @@
 # bot_astrosferum: KISS architecture
 
-Status: implemented MVP, architecture revision 0.2; the
+Status: implemented MVP, architecture revision 0.3; the
 `surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production
-External sources last checked: 2026-07-19; last revision: 2026-07-21
+External sources last checked: 2026-07-19; last revision: 2026-07-22
 Deployment target: operator-managed host
 Deployment directory: `/opt/docker/bot_astrosferum`
 
@@ -12,7 +12,7 @@ Deployment directory: `/opt/docker/bot_astrosferum`
 
 ### PostgreSQL, saved points, and statistics
 
-PostgreSQL 18 is an internal Compose service with a `./data/postgres` bind mount. The application applies an idempotent schema on startup. It stores Telegram IDs, at most 10 named coordinates per user, and one daily forecast-count aggregate per user. Administrators are configured through `ASTRO_TELEGRAM_ADMIN_IDS` and receive the user count and a 30-day PNG usage chart.
+PostgreSQL 18 is an internal Compose service with a `./data/postgres` bind mount. The application applies an idempotent schema on startup. It stores platform-namespaced numeric user keys, at most 10 named coordinates per user, and one daily forecast-count aggregate per user. Telegram and VK administrators are configured independently through `ASTRO_TELEGRAM_ADMIN_IDS` and `ASTRO_VK_ADMIN_IDS` and receive the user count and a 30-day PNG usage chart.
 
 Daily aggregates older than 90 days are removed at startup and once a day; incomplete point-saving conversations expire after two hours.
 
@@ -36,13 +36,13 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 | GRIB2 | ecCodes, plus CDO only for ICON Global point extraction | No custom decoder; ICON-EU remains direct |
 | Priority model inside the European domain | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
 | Model outside the European domain | DWD ICON Global | Stable worldwide official open GRIB feed |
-| ICON-Ru | Shadow provider until locally verified | Its public WIS product is coarser and has fewer fields than the native model |
-| Application storage | Atomic files | A database is unnecessary for one instance |
+| ICON-Ru | Documented candidate for a future shadow adapter | Its public WIS product is coarser and has fewer fields than the native model |
+| Application storage | PostgreSQL for users; atomic files for model/cache data | Durable user state without adding Redis or a broker |
 | Point cache | Versioned `gob.gz` plus an in-memory LRU | Preserves `NaN`, stays compact, and needs no Redis |
 | Render cache | PNG files | Directly uploadable to both platforms |
 | Work queue | Bounded Go channel plus per-key `singleflight` | No external queue is needed |
-| Rendering | Deterministic pure-Go 1280×960 PNG | One image, no Python service |
-| Logs | Structured JSON to stdout | Docker handles collection and rotation |
+| Rendering | Deterministic pure-Go mixed-size PNG | Readable 72-hour tables without a Python service |
+| Logs | Plain structured messages to stdout | Docker handles collection and rotation |
 
 ## 3. Model choice: accuracy and availability
 
@@ -90,20 +90,20 @@ The Hydrometcentre describes a computational domain of `29.5°–90° N` across 
 - no published TKE, HHL, or complete model-level output.
 
 The discovery spike confirmed origin topic
-`origin/a/wis2/ru-roshydromet/data/core/weather/prediction/forecast/short-range/deterministic/limited-area`. The production shadow adapter subscribes to the equivalent `cache/a/...` topic on a TLS WIS 2.0 Global Broker rather than depending on the unencrypted `mqtt://wis2box.mecom.ru:1883` origin.
+`origin/a/wis2/ru-roshydromet/data/core/weather/prediction/forecast/short-range/deterministic/limited-area`. A future shadow adapter should subscribe to the equivalent `cache/a/...` topic on a TLS WIS 2.0 Global Broker rather than depend on the unencrypted `mqtt://wis2box.mecom.ru:1883` origin.
 
 The current official system description also states that data assimilation is not yet used and initial conditions come from DWD ICON Global. A nested model can still improve mesoscale processes, but that benefit cannot be assumed for a public product regridded to 0.25°.
 
 Sources: [Hydrometcentre — system description](https://mpr.meteoinfo.ru/en/srf-system-about), [ICON-Ru products for WIS 2.0](https://meteoinfo.ru/en/wis2-srf-products-of-wipps-dc-moscow), and the [Roshydromet product catalogue](https://meteoinfo.ru/images/media/books-docs/RHM/catalog-ASDT-20260116.pdf).
 
-ICON-Ru WIS is therefore attached as a **shadow provider**. Forecasts for control locations are collected and scored against observations but are not returned to users by default. If verification demonstrates a stable advantage for a specific region, variable, and lead-time band, the router can promote it. A future stable native 6.5 km feed must be evaluated as a separate product.
+ICON-Ru WIS is therefore only a **candidate for a future shadow provider**. No production code currently downloads or scores it. If a later implementation and verification demonstrate a stable advantage for a specific region, variable, and lead-time band, routing can be reconsidered. A stable native 6.5 km feed must be evaluated as a separate product.
 
 ### 3.4. Initial production policy
 
 ```text
 point inside open ICON-EU domain -> ICON-EU for the complete bundle
 point outside ICON-EU domain     -> ICON Global for the complete bundle
-ICON-Ru WIS                      -> shadow verification only
+ICON-Ru WIS                      -> not wired; future shadow study only
 ```
 
 Using one provider for a production bundle keeps surface and upper-air fields physically consistent and simplifies the MVP. Every user response exposes the exact product, grid, and base time.
@@ -130,14 +130,13 @@ An initial decision may be reviewed after 30 days, but the router must not flap 
 - Telegram and VK with equivalent commands and output;
 - geo attachments and textual `latitude, longitude` input;
 - a 72-hour horizon: hourly surface weather and three-hourly upper-air profiles;
-- separate **Weather** and **Dew** text lines;
+- weather, cloud-tier, dew-risk, fog-risk, and celestial-event information in the first chart;
 - a `1…10` forecast seeing index;
 - an hourly `1…10` overall astronomy-suitability index;
 - seven charts: hourly weather, the hourly overall index, hourly model-layer cloud, and four upper-air/seeing charts;
 - automatic run synchronization and safe use of the last complete run;
-- Russian UI with a clean path to English localization;
-- explicit model, run, grid, and freshness information;
-- shadow model verification for the priority regions.
+- localized Russian/English UI: Telegram uses `language_code`, while VK currently defaults to Russian because Group Long Poll does not carry it;
+- explicit model, run, grid, and freshness information.
 
 ### Excluded
 
@@ -147,7 +146,8 @@ An initial decision may be reviewed after 30 days, but the router must not flap 
 - long-term storage of conversations or exact user coordinates;
 - non-ICON model families;
 - a default user response beyond 72 hours;
-- distributed multi-instance execution.
+- distributed multi-instance execution;
+- automated ICON-Ru shadow ingestion and observational scoring: the source study is documented, but no production adapter exists yet.
 
 ## 5. System context
 
@@ -156,7 +156,7 @@ DWD ICON-EU -------------+
                          |     +-------------------+
 DWD ICON Global ---------+---->| Model providers   |
                          |     +---------+---------+
-ICON-Ru WIS (shadow) ----+               |
+ICON-Ru WIS (planned) ---+               |
                                          v
                                +-------------------+
                                | Atomic model store|
@@ -206,12 +206,13 @@ Manual `sync` and the embedded scheduler share one file lock so two refreshes ca
 bot_astrosferum/
 ├── cmd/bot_astrosferum/              # main and subcommand parsing
 ├── internal/
-│   ├── app/                   # dependency composition and lifecycle
-│   ├── bot/
-│   │   ├── telegram/          # Telegram API adapter
-│   │   └── vk/                # VK API adapter
+│   ├── app/                   # lifecycle and shared bot application handler
+│   │   └── bot/               # platform-neutral commands, forecast, persistence
 │   ├── config/                # configuration loading/validation
 │   ├── model/                 # providers, sync, GRIB extraction
+│   ├── platform/
+│   │   ├── telegram/          # Telegram Bot API adapter
+│   │   └── vk/                # VK Group Long Poll/API adapter
 │   ├── forecast/              # weather, dew, wind, seeing, astro score
 │   ├── render/                # PNG and color scales
 │   ├── store/                 # atomic files and caches
@@ -246,7 +247,6 @@ Packages represent useful responsibilities. The project will not create ceremoni
 │   ├── telegram_token
 │   └── vk_token
 ├── data/
-│   ├── state/                         # polling offsets and health state
 │   ├── models/
 │   │   ├── icon-eu/
 │   │   │   ├── incoming/<run-id>/
@@ -256,7 +256,7 @@ Packages represent useful responsibilities. The project will not create ceremoni
 │   │   │   ├── incoming/<run-id>/
 │   │   │   ├── runs/<run-id>/
 │   │   │   └── current.json
-│   │   └── icon-ru/                    # shadow data only
+│   │   └── icon-ru/                    # reserved; not created by current code
 │   ├── cache/
 │   │   ├── points/
 │   │   └── renders/
@@ -323,27 +323,25 @@ Every derived series retains provenance: provider, run ID, grid, selected cell c
 
 ## 10. Provider boundary
 
-The one important extension interface is a model source:
+The implemented serving boundary is deliberately smaller than a general provider framework:
 
 ```go
-type Provider interface {
-    Name() string
-    Coverage() Coverage
-    ProbeLatest(context.Context) (RemoteRun, error)
-    Sync(context.Context, RemoteRun, string) (Manifest, error)
-    ExtractPoint(context.Context, Manifest, Location) (PointSeries, error)
+type ForecastStore interface {
+    Vertical(context.Context, forecast.Location) (forecast.VerticalSeries, error)
+    Surface(context.Context, forecast.Location) (forecast.SurfaceSeries, error)
+    Cloud(context.Context, forecast.Location) (forecast.CloudSeries, error)
 }
 ```
 
-MVP implementations:
+Implemented stores:
 
 - `iconeu`: primary DWD ICON-EU provider within the available domain;
-- `iconglobal`: DWD ICON Global provider outside the ICON-EU domain and fallback;
-- `iconruwis`: ICON-Ru WIS shadow-verification provider.
+- `iconglobal`: DWD ICON Global store outside the ICON-EU domain;
+- `model.CoverageFallback`: the small two-way router between them.
 
-`Coverage` records domain geometry and longitude normalization, available fields and levels, forecast steps, horizon, and actual product resolution.
+Synchronization clients and schedulers remain concrete because only two real providers need them. `Coverage` records geometry and longitude normalization for routing.
 
-A future native ICON-Ru adapter can be added without changing platform handlers, calculations, or rendering.
+A future verified provider can implement `ForecastStore` without changing platform handlers, calculations, or rendering; no speculative adapter exists today.
 
 ## 11. Provider routing
 
@@ -751,7 +749,7 @@ Preferred implementation: one pure-Go renderer based on `gonum/plot` and `golang
 Render cache key:
 
 ```text
-telegram-render-v6-dynamic-mh/<bundle-hash>/<grid-cell>/<horizon>/<locale>/<renderer-version>/<chart>.png
+shared-render-v1/<sha256-bundle-key>/<chart>.png
 ```
 
 ## 18. User flow
@@ -769,28 +767,27 @@ City names and street addresses are not parsed in the MVP because an address geo
 
 ### 18.2. Processing
 
-1. Platform adapter converts an update to common `IncomingRequest`.
-2. Coordinates and rate limits are validated.
+1. A platform adapter converts an update to the common `bot.Update`.
+2. Coordinates and command syntax are validated.
 3. Local timezone is resolved.
 4. Router selects provider and compatible current run.
 5. Render cache is checked.
 6. On a miss, point cache is loaded or extracted.
 7. Data are normalized, calculated, and rendered.
-8. Concise text is sent first, then a media group/attachments.
-9. Platform adapter translates common `BotResponse` into API calls.
+8. A concise model/freshness/light-pollution summary is sent first, then seven sequential attachments: the three large charts as documents and four smaller diagnostics as photos.
+9. The shared handler calls a small messenger interface implemented by the active platform adapter.
 
 ### 18.3. Response contract
 
 ```text
-📍 59.9386, 30.3141 · MSK (UTC+3)
-Period: 19–22 July; hourly weather, three-hourly upper-air profiles
-Sun: rise 04:13, set 21:57. Moon: rise 13:06, set 22:50; waxing crescent, 42% illuminated.
-Weather: cloudy overnight, light rain after 03:00; gusts up to 9 m/s.
-Dew: high risk 00:00–05:00; minimum T−Td 0.8 °C.
-Seeing: forecast index 3.1/10, medium confidence.
-Conditions: best window 22:00–00:00, 54/100.
-Data: DWD ICON-EU 0.0625° (~7 km), run 2026-07-19 12 UTC.
-Light pollution: LPI 12.34, SQM 19.19 mag/arcsec², approximate Bortle 6 (Light Pollution Atlas 2024, zenith, 30″ interpolation).
+ICON-EU run 2026072206 UTC
+Data freshness: 7 h 59 min
+Period: 22.07 09:00 — 25.07 09:00
+Grid: ICON-EU 0.0625°
+Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v4; hybrid ICON model estimate …
+
+Light pollution: Bortle reference 8–9 (LPI …, SQM …, Light Pollution Atlas 2024).
+Light pollution comparison: Bortle reference 8–9 (LPI …, SQM …, World Atlas 2015).
 ```
 
 Only platform adapters handle attachment-count and message-length limits. Domain text and charts remain shared.
@@ -802,8 +799,8 @@ Only platform adapters handle attachment-count and message-length limits. Domain
 - one point bundle contains wind, surface, and cloud data; all three ecCodes extractions run concurrently;
 - the RAM LRU is bounded by both 512 cells and an estimated 20 GiB; `GOMEMLIMIT=24GiB` leaves headroom for ecCodes and the runtime;
 - identical concurrent point misses collapse through a per-key flight;
-- six chat-affine Telegram workers process different chats concurrently while preserving per-chat ordering;
-- the queue is bounded and returns a friendly busy response when full;
+- each enabled platform has six peer-affine workers, so different peers run concurrently while each peer stays ordered;
+- each adapter queue is bounded and applies backpressure to its own poller when full;
 - ecCodes has a shared eight-process semaphore;
 - publishing a new run cannot alter an in-flight immutable manifest reference;
 - every cache write uses `temp + fsync + rename`.
@@ -816,17 +813,26 @@ Redis provides no useful benefit for one process.
 | Failure | Behavior |
 |---|---|
 | Candidate run incomplete | Previous current remains active |
-| Provider unreachable | Use last complete run within `max_stale_age` |
+| Provider unreachable | Keep using the last complete run and visibly warn when its age exceeds `max_stale_age` |
 | Point outside ICON-EU coverage | Use ICON Global and disclose the selected model |
-| ICON-Ru shadow unavailable | Production unaffected; verification records a gap |
+| ICON-Ru research source unavailable | Production unaffected; no production adapter depends on it |
 | Some upper levels missing | Missing cells and lower confidence |
-| One chart fails | Send text and remaining charts |
+| One chart cannot render or upload | Send the summary and every successful chart; report failures after attempting all attachments |
 | Telegram unavailable | VK continues, and vice versa |
-| Container restarts | Polling offsets/state load from atomic files |
+| Container restarts | Each adapter requests a fresh long-poll cursor from its platform; no local offset file is maintained |
 | Low disk | Do not sync; prune disposable cache; preserve current |
 | ecCodes error | Mark file/run invalid and do not cache success |
 
 Freshness limits are warning thresholds configured per provider; they do not select or pin a cache entry. Base time and run ID are always visible. Point and render cache keys include run ID, so publication of a newer complete run automatically bypasses every artifact from the previous run.
+
+VK media upload uses at most three attempts. Each failed attempt waits `1 s`,
+then `2 s`, and requests a fresh platform upload URL before retrying. Incomplete
+upload responses are rejected before `photos.saveMessagesPhoto`/`docs.save`;
+the retry loop remains bounded by the request context and never applies to
+arbitrary external hosts. Successful VK media deliveries are paced at a
+minimum `150 ms` interval within one sequential forecast delivery. There is no
+shared lock, so concurrent VK requests do not block each other; the delay
+exists only in the VK adapter and does not affect Telegram.
 
 ## 21. Configuration
 
@@ -907,6 +913,7 @@ platforms:
   vk:
     enabled: true
     token_file: /run/secrets/vk_token
+    group_id: <community-id>
 ```
 
 Every listed calibration parameter also has a matching `ASTRO_OVERALL_*`
@@ -922,22 +929,31 @@ configuration with all secrets redacted.
 Multi-stage Dockerfile:
 
 1. Go builder compiles `bot_astrosferum`.
-2. Debian 12 runtime contains CA certificates, timezone data, ecCodes tools, and fonts.
-3. Process runs as non-root.
-4. No public port is declared.
+2. The OSGeo GDAL Ubuntu runtime contains CA certificates, timezone data, ecCodes/CDO tools, and fonts.
+3. Public Russian Trusted Root/Sub CA files are embedded only in the VK adapter's TLS pool; its transport accepts only `vk.ru`, `*.vk.ru`, `vk.com`, and `*.vk.com`, and VK API calls use `https://api.vk.ru`.
+4. Process runs as non-root.
+5. No public port is declared.
+
+The Russian CA extension is not installed container-wide. It is compiled into
+the VK adapter and combined with the system pool only for that adapter's
+private transport. The transport rejects redirects and upload/Long Poll URLs
+outside `vk.ru`, `*.vk.ru`, `vk.com`, and `*.vk.com`. Hostname and expiry
+checks remain enabled. This only permits an alternative chain when VK serves
+one; it does not manufacture a replacement for a revoked leaf, and Go does not
+perform general CRL/OCSP revocation checking automatically.
 
 The same image runs `serve`, `sync`, `doctor`, and fixture rendering.
 
 ### 22.2. Compose
 
-Initial Compose has one `app` service:
+Compose has PostgreSQL plus one application service:
 
 - `restart: unless-stopped`;
 - `init: true`;
 - graceful `stop_grace_period`;
 - project-local bind mounts only;
 - bounded Docker log rotation;
-- healthcheck using `bot_astrosferum doctor --quick`;
+- PostgreSQL healthcheck gates application startup;
 - host-compatible UID/GID.
 
 No nginx dependency or host-port collision is introduced.
@@ -976,8 +992,8 @@ Do not log tokens, full update payloads, private message text, or exact user coo
 - no published TCP ports;
 - token files only in untracked `secrets/` with mode `0600`;
 - outbound requests have timeouts and size limits;
-- update IDs are deduplicated;
-- per-user/per-chat rate limits and a global bounded queue;
+- platform-provided long-poll cursors prevent normal replay during a running process;
+- bounded per-platform peer-affine queues prevent unbounded in-process request accumulation;
 - command length and coordinate-range validation;
 - `os/exec` receives an argument slice; user input never enters a shell command;
 - downloaded GRIB is validated before publication;
@@ -1040,31 +1056,31 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - primary ICON-EU provider;
 - manual synchronization of one forecast step;
 - one-point extraction;
-- five fixture PNGs;
+- seven fixture PNGs;
 - `doctor`.
 
 ### Stage 2 — complete data path
 
 - atomic runs and scheduler;
 - ICON Global fallback adapter (implemented);
-- ICON-Ru WIS shadow adapter;
+- ICON-Ru WIS source study; a shadow adapter remains planned;
 - domain-based routing and single-provider bundles;
 - point/render cache;
 - weather/dew/seeing/conditions-v4-dynamic-mh-cloud-guard;
-- verification storage and scoring.
+- observational verification storage and scoring remain planned.
 
 ### Stage 3 — platform adapters
 
 - common request/response contract;
 - Telegram adapter;
 - VK adapter;
-- rate limits, retries, media upload, and polling offsets.
+- independent retry supervisors, bounded worker queues, native location conversion, and media upload.
 
 ### Stage 4 — production
 
 - Dockerfile and Compose;
 - deploy below `/opt/docker/bot_astrosferum`;
-- healthcheck and log rotation;
+- PostgreSQL healthcheck and log rotation;
 - restart/incomplete-sync recovery checks;
 - disk and retention limits;
 - first control-station verification dashboard/report.
@@ -1074,13 +1090,13 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - the same coordinates produce equivalent Telegram and VK results;
 - Saint Petersburg and Moscow use a complete ICON-EU production bundle unless verification changes policy;
 - outside the available ICON-EU domain, ICON Global is used;
-- ICON-Ru WIS runs in shadow mode and cannot silently affect production;
+- ICON-Ru WIS cannot affect production because its shadow adapter is not yet implemented;
 - provider, grid, run, and freshness are visible;
-- Weather and Dew are separate lines;
-- one readable `3200×1080` weather PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
+- weather, dew, and fog information is visible in the first chart;
+- one readable `3200×1080` weather PNG, one `3840×1200` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
 - seeing is called a forecast index and includes confidence;
 - incomplete runs never publish;
-- current manifests and polling state survive restart;
+- current model manifests survive restart; platform cursors are reacquired from the APIs;
 - tokens are absent from Git and logs;
 - every bind mount is below `/opt/docker/bot_astrosferum`;
 - failure of one platform API does not stop the other;

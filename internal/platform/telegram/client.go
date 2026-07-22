@@ -15,39 +15,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"bot_astrosferum/internal/app/bot"
 )
-
-type Update struct {
-	ID      int64    `json:"update_id"`
-	Message *Message `json:"message"`
-}
-
-type Message struct {
-	ID       int64     `json:"message_id"`
-	Chat     Chat      `json:"chat"`
-	Text     string    `json:"text"`
-	Location *Location `json:"location"`
-	From     *User     `json:"from"`
-}
-
-type User struct {
-	ID           int64  `json:"id"`
-	LanguageCode string `json:"language_code"`
-}
-
-type Chat struct {
-	ID int64 `json:"id"`
-}
-
-type Location struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
-}
 
 type Client struct {
 	httpClient *http.Client
 	endpoint   string
 }
+
+var (
+	_ bot.Messenger             = (*Client)(nil)
+	_ bot.KeyboardMessenger     = (*Client)(nil)
+	_ bot.HTMLKeyboardMessenger = (*Client)(nil)
+)
 
 func NewClient(token string) (*Client, error) {
 	token = strings.TrimSpace(token)
@@ -60,7 +41,7 @@ func NewClient(token string) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) Run(ctx context.Context, handler *Handler, workers int, requestTimeout time.Duration, logf func(string, ...any)) error {
+func (client *Client) Run(ctx context.Context, handler *bot.Handler, workers int, requestTimeout time.Duration, logf func(string, ...any)) error {
 	if handler == nil {
 		return errors.New("telegram handler is required")
 	}
@@ -73,12 +54,12 @@ func (client *Client) Run(ctx context.Context, handler *Handler, workers int, re
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	queues := make([]chan Update, workers)
+	queues := make([]chan bot.Update, workers)
 	var workerGroup sync.WaitGroup
 	for index := range queues {
-		queues[index] = make(chan Update, 8)
+		queues[index] = make(chan bot.Update, 8)
 		workerGroup.Add(1)
-		go func(queue <-chan Update) {
+		go func(queue <-chan bot.Update) {
 			defer workerGroup.Done()
 			for update := range queue {
 				started := time.Now()
@@ -126,7 +107,7 @@ func (client *Client) Run(ctx context.Context, handler *Handler, workers int, re
 	}
 }
 
-func updateShard(update Update, workers int) int {
+func updateShard(update bot.Update, workers int) int {
 	if workers <= 1 || update.Message == nil {
 		return 0
 	}
@@ -135,30 +116,20 @@ func updateShard(update Update, workers int) int {
 
 func (client *Client) SendMessage(ctx context.Context, chatID int64, text string, locationButton bool) error {
 	if locationButton {
-		return client.SendMessageWithKeyboard(ctx, chatID, text, DefaultKeyboard())
+		return client.SendMessageWithKeyboard(ctx, chatID, text, bot.DefaultKeyboard())
 	}
 	return client.SendMessageWithKeyboard(ctx, chatID, text, nil)
 }
 
-type Button struct {
-	Text            string
-	RequestLocation bool
-}
-type Keyboard [][]Button
-
-func DefaultKeyboard() Keyboard {
-	return Keyboard{{{Text: "📍 Отправить геопозицию", RequestLocation: true}}, {{Text: "💾 Сохранить координаты"}, {Text: "📌 Мои точки"}}}
-}
-
-func (client *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard) error {
+func (client *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard bot.Keyboard) error {
 	return client.sendMessageWithKeyboard(ctx, chatID, text, keyboard, "")
 }
 
-func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard) error {
+func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard bot.Keyboard) error {
 	return client.sendMessageWithKeyboard(ctx, chatID, text, keyboard, "HTML")
 }
 
-func (client *Client) sendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard, parseMode string) error {
+func (client *Client) sendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard bot.Keyboard, parseMode string) error {
 	payload := struct {
 		ChatID      int64  `json:"chat_id"`
 		Text        string `json:"text"`
@@ -250,13 +221,13 @@ func (client *Client) SendDocument(ctx context.Context, chatID int64, path, capt
 	return client.callBody(ctx, "sendDocument", writer.FormDataContentType(), &body, nil)
 }
 
-func (client *Client) getUpdates(ctx context.Context, offset int64) ([]Update, error) {
+func (client *Client) getUpdates(ctx context.Context, offset int64) ([]bot.Update, error) {
 	payload := struct {
 		Offset         int64    `json:"offset"`
 		Timeout        int      `json:"timeout"`
 		AllowedUpdates []string `json:"allowed_updates"`
 	}{Offset: offset, Timeout: 25, AllowedUpdates: []string{"message"}}
-	var updates []Update
+	var updates []bot.Update
 	if err := client.call(ctx, "getUpdates", payload, &updates); err != nil {
 		return nil, err
 	}

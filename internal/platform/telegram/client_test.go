@@ -9,7 +9,20 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"bot_astrosferum/internal/app/bot"
 )
+
+func TestUpdateShardPreservesChatAffinity(t *testing.T) {
+	first := bot.Update{ID: 1, Message: &bot.Message{Chat: bot.Chat{ID: -12345}}}
+	second := bot.Update{ID: 2, Message: &bot.Message{Chat: bot.Chat{ID: -12345}}}
+	if updateShard(first, 6) != updateShard(second, 6) {
+		t.Fatal("updates for one chat must use one worker")
+	}
+	if updateShard(bot.Update{ID: 3}, 6) != 0 {
+		t.Fatal("updates without messages must use shard zero")
+	}
+}
 
 func TestSendHTMLMessageWithKeyboardUsesHTMLParseMode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -32,7 +45,7 @@ func TestSendHTMLMessageWithKeyboardUsesHTMLParseMode(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{httpClient: server.Client(), endpoint: server.URL + "/"}
-	if err := client.SendHTMLMessageWithKeyboard(context.Background(), 42, "Bortle <b>8–9</b>", DefaultKeyboard()); err != nil {
+	if err := client.SendHTMLMessageWithKeyboard(context.Background(), 42, "Bortle <b>8–9</b>", bot.DefaultKeyboard()); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -114,6 +114,7 @@ type PlatformsConfig struct {
 type PlatformConfig struct {
 	Enabled   bool    `yaml:"enabled"`
 	TokenFile string  `yaml:"token_file"`
+	GroupID   int64   `yaml:"group_id,omitempty"`
 	AdminIDs  []int64 `yaml:"admin_ids"`
 }
 
@@ -240,18 +241,30 @@ func (c *Config) applyEnvironment() error {
 	if value, exists := os.LookupEnv("ASTRO_DB_PASSWORD"); exists {
 		c.Database.Password = value
 	}
-	if value, exists := os.LookupEnv("ASTRO_TELEGRAM_ADMIN_IDS"); exists {
-		c.Platforms.Telegram.AdminIDs = nil
-		if strings.TrimSpace(value) == "" {
-			return nil
+	if err := applyAdminIDs("ASTRO_TELEGRAM_ADMIN_IDS", &c.Platforms.Telegram.AdminIDs); err != nil {
+		return err
+	}
+	if err := applyAdminIDs("ASTRO_VK_ADMIN_IDS", &c.Platforms.VK.AdminIDs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyAdminIDs(environmentName string, target *[]int64) error {
+	value, exists := os.LookupEnv(environmentName)
+	if !exists {
+		return nil
+	}
+	*target = nil
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	for _, item := range strings.Split(value, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(item), 10, 64)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("parse %s: invalid id %q", environmentName, item)
 		}
-		for _, item := range strings.Split(value, ",") {
-			id, err := strconv.ParseInt(strings.TrimSpace(item), 10, 64)
-			if err != nil || id <= 0 {
-				return fmt.Errorf("parse ASTRO_TELEGRAM_ADMIN_IDS: invalid id %q", item)
-			}
-			c.Platforms.Telegram.AdminIDs = append(c.Platforms.Telegram.AdminIDs, id)
-		}
+		*target = append(*target, id)
 	}
 	return nil
 }
@@ -383,6 +396,9 @@ func (c Config) Validate() error {
 	}
 	validatePlatform("telegram", c.Platforms.Telegram)
 	validatePlatform("vk", c.Platforms.VK)
+	if c.Platforms.VK.Enabled && c.Platforms.VK.GroupID <= 0 {
+		problems = append(problems, "platforms.vk.group_id must be positive when enabled")
+	}
 	if strings.TrimSpace(c.Database.Host) == "" || c.Database.Port < 1 || c.Database.Port > 65535 || strings.TrimSpace(c.Database.Name) == "" || strings.TrimSpace(c.Database.User) == "" {
 		problems = append(problems, "database host, valid port, name and user are required")
 	}

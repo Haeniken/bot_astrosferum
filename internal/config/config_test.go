@@ -134,12 +134,26 @@ func TestLightPollutionAtlasYearEnvironmentOverride(t *testing.T) {
 func TestDatabaseAndAdminEnvironment(t *testing.T) {
 	t.Setenv("ASTRO_DB_PASSWORD", "secret-for-test")
 	t.Setenv("ASTRO_TELEGRAM_ADMIN_IDS", "1001,1002")
+	t.Setenv("ASTRO_VK_ADMIN_IDS", "2001,2002")
 	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Database.Password != "secret-for-test" || cfg.Database.Host != "postgres" || len(cfg.Platforms.Telegram.AdminIDs) != 2 || cfg.Platforms.Telegram.AdminIDs[1] != 1002 {
-		t.Fatalf("unexpected database/admin configuration: %+v %+v", cfg.Database, cfg.Platforms.Telegram.AdminIDs)
+	if cfg.Database.Password != "secret-for-test" || cfg.Database.Host != "postgres" || len(cfg.Platforms.Telegram.AdminIDs) != 2 || cfg.Platforms.Telegram.AdminIDs[1] != 1002 || len(cfg.Platforms.VK.AdminIDs) != 2 || cfg.Platforms.VK.AdminIDs[1] != 2002 {
+		t.Fatalf("unexpected database/admin configuration: %+v telegram=%v vk=%v", cfg.Database, cfg.Platforms.Telegram.AdminIDs, cfg.Platforms.VK.AdminIDs)
+	}
+}
+
+func TestEnabledVKRequiresGroupID(t *testing.T) {
+	cfg := Defaults()
+	cfg.Platforms.VK.Enabled = true
+	cfg.Platforms.VK.TokenFile = "/run/secrets/vk_token"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platforms.vk.group_id") {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	cfg.Platforms.VK.GroupID = 240376006
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid VK configuration rejected: %v", err)
 	}
 }
 
