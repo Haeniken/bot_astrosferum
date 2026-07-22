@@ -1,4 +1,4 @@
-package telegram
+package bot
 
 import (
 	"context"
@@ -65,7 +65,7 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 		}
 	}
 	if len([]byte(messenger.messages[0].text)) > 4096 {
-		t.Fatalf("Telegram help is too long: %d bytes", len([]byte(messenger.messages[0].text)))
+		t.Fatalf("Russian help is too long: %d bytes", len([]byte(messenger.messages[0].text)))
 	}
 }
 
@@ -85,7 +85,7 @@ func TestNonRussianClientReceivesEnglishHelp(t *testing.T) {
 		t.Fatalf("English reply contains Russian help: %q", messenger.messages[0].text)
 	}
 	if len([]byte(messenger.messages[0].text)) > 4096 {
-		t.Fatalf("English Telegram help is too long: %d bytes", len([]byte(messenger.messages[0].text)))
+		t.Fatalf("English help is too long: %d bytes", len([]byte(messenger.messages[0].text)))
 	}
 }
 

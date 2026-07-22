@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"bot_astrosferum/internal/app"
+	"bot_astrosferum/internal/app/bot"
 	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/config"
 	"bot_astrosferum/internal/forecast"
@@ -25,6 +27,7 @@ import (
 	"bot_astrosferum/internal/model/iconeu"
 	"bot_astrosferum/internal/model/iconglobal"
 	"bot_astrosferum/internal/platform/telegram"
+	vkplatform "bot_astrosferum/internal/platform/vk"
 	"bot_astrosferum/internal/render"
 	pgstore "bot_astrosferum/internal/store"
 )
@@ -286,20 +289,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	if !cfg.Platforms.Telegram.Enabled {
-		return errors.New("telegram is disabled in configuration")
-	}
-	token, err := os.ReadFile(cfg.Platforms.Telegram.TokenFile)
-	if err != nil {
-		return fmt.Errorf("read Telegram token file: %w", err)
-	}
-	client, err := telegram.NewClient(string(token))
-	if err != nil {
-		return err
-	}
-	handler, err := telegram.NewHandler(client)
-	if err != nil {
-		return err
+	if !cfg.Platforms.Telegram.Enabled && !cfg.Platforms.VK.Enabled {
+		return errors.New("at least one messaging platform must be enabled")
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
 	iconEUStore := iconeu.NewCachedStore(
@@ -313,24 +304,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore, Fallback: globalStore,
 		}
 	}
-	handler.SetLogger(logf)
 	database, err := pgstore.Open(ctx, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name, cfg.Database.User, cfg.Database.Password, cfg.Database.MaxConns)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 	go database.RunMaintenance(ctx, logf)
-	if err := handler.EnablePersistence(database, cfg.Platforms.Telegram.AdminIDs); err != nil {
-		return err
-	}
 	lightAtlas, err := lightpollution.NewAtlas(
 		filepath.Join(cfg.Paths.Data, "light-pollution", "lorenz-atlas"),
 		lightpollution.Options{AtlasYear: cfg.Providers.LightPollution.AtlasYear}, logf,
 	)
 	if err != nil {
-		return err
-	}
-	if err := handler.EnableLightPollution(lightAtlas); err != nil {
 		return err
 	}
 	worldPath, err := lightpollution.EnsureWorldAtlas2015(ctx, filepath.Join(cfg.Paths.Data, "light-pollution", "world-atlas-2015"), logf)
@@ -342,29 +326,85 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("open World Atlas 2015: %w", err)
 	}
 	defer func() { _ = worldAtlas.Close() }()
-	if err := handler.EnableWorldAtlas2015(worldAtlas); err != nil {
-		return err
-	}
-	if err := handler.SetOverallIndexCalibration(overallCalibration(cfg.Algorithms)); err != nil {
-		return err
-	}
-	if err := handler.EnableForecast(
-		forecastStore,
-		filepath.Join(cfg.Paths.Temp, "telegram-renders"),
-		render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height},
-	); err != nil {
-		return err
-	}
-	if err := handler.SetForecastMaxStaleAge(cfg.Providers.ICONEU.MaxStaleAge.Duration); err != nil {
-		return err
-	}
-	if cfg.Providers.ICONGlobal.Enabled {
-		if err := handler.SetFallbackForecastMaxStaleAge(cfg.Providers.ICONGlobal.MaxStaleAge.Duration); err != nil {
+	configureHandler := func(handler *bot.Handler, adminIDs []int64, renderDirectory string) error {
+		handler.SetLogger(logf)
+		if err := handler.EnablePersistence(database, adminIDs); err != nil {
 			return err
 		}
+		if err := handler.EnableLightPollution(lightAtlas); err != nil {
+			return err
+		}
+		if err := handler.EnableWorldAtlas2015(worldAtlas); err != nil {
+			return err
+		}
+		if err := handler.SetOverallIndexCalibration(overallCalibration(cfg.Algorithms)); err != nil {
+			return err
+		}
+		if err := handler.EnableForecast(forecastStore, filepath.Join(cfg.Paths.Temp, renderDirectory), render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height}); err != nil {
+			return err
+		}
+		if err := handler.SetForecastMaxStaleAge(cfg.Providers.ICONEU.MaxStaleAge.Duration); err != nil {
+			return err
+		}
+		if cfg.Providers.ICONGlobal.Enabled {
+			if err := handler.SetFallbackForecastMaxStaleAge(cfg.Providers.ICONGlobal.MaxStaleAge.Duration); err != nil {
+				return err
+			}
+		}
+		return handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "shared-render-v1"))
 	}
-	if err := handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "telegram-render-v1")); err != nil {
-		return err
+	type platformAdapter struct {
+		name string
+		run  func(context.Context) error
+	}
+	adapters := make([]platformAdapter, 0, 2)
+	if cfg.Platforms.Telegram.Enabled {
+		token, err := os.ReadFile(cfg.Platforms.Telegram.TokenFile)
+		if err != nil {
+			return fmt.Errorf("read Telegram token file: %w", err)
+		}
+		client, err := telegram.NewClient(string(token))
+		if err != nil {
+			return err
+		}
+		handler, err := bot.NewHandler(client)
+		if err != nil {
+			return err
+		}
+		if err := configureHandler(handler, cfg.Platforms.Telegram.AdminIDs, "telegram-renders"); err != nil {
+			return err
+		}
+		adapters = append(adapters, platformAdapter{name: "Telegram", run: func(runContext context.Context) error {
+			return client.Run(runContext, handler, cfg.App.Workers, cfg.App.RequestTimeout.Duration, logf)
+		}})
+	}
+	if cfg.Platforms.VK.Enabled {
+		token, err := os.ReadFile(cfg.Platforms.VK.TokenFile)
+		if err != nil {
+			return fmt.Errorf("read VK token file: %w", err)
+		}
+		client, err := vkplatform.NewClient(string(token), cfg.Platforms.VK.GroupID)
+		if err != nil {
+			return err
+		}
+		handler, err := bot.NewHandler(client)
+		if err != nil {
+			return err
+		}
+		adminIDs := make([]int64, 0, len(cfg.Platforms.VK.AdminIDs))
+		for _, id := range cfg.Platforms.VK.AdminIDs {
+			key, keyError := vkplatform.UserKey(id)
+			if keyError != nil {
+				return keyError
+			}
+			adminIDs = append(adminIDs, key)
+		}
+		if err := configureHandler(handler, adminIDs, "vk-renders"); err != nil {
+			return err
+		}
+		adapters = append(adapters, platformAdapter{name: "VK", run: func(runContext context.Context) error {
+			return client.Run(runContext, handler, cfg.App.Workers, cfg.App.RequestTimeout.Duration, logf)
+		}})
 	}
 	syncClient := iconeu.NewClient()
 	syncClient.Workers = cfg.Sync.DownloadParallelism
@@ -389,10 +429,37 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}
 		go globalScheduler.Run(ctx)
 	}
-	if _, err := fmt.Fprintln(stdout, "Telegram long polling started"); err != nil {
-		return err
+	for _, adapter := range adapters {
+		if _, err := fmt.Fprintf(stdout, "%s long polling starting\n", adapter.name); err != nil {
+			return err
+		}
 	}
-	return client.Run(ctx, handler, cfg.App.Workers, cfg.App.RequestTimeout.Duration, logf)
+	var adapterGroup sync.WaitGroup
+	for _, adapter := range adapters {
+		adapterGroup.Add(1)
+		go func() {
+			defer adapterGroup.Done()
+			for ctx.Err() == nil {
+				err := adapter.run(ctx)
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					logf("%s adapter stopped: %v; retrying", adapter.name, err)
+				} else {
+					logf("%s adapter stopped unexpectedly; retrying", adapter.name)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}()
+	}
+	<-ctx.Done()
+	adapterGroup.Wait()
+	return nil
 }
 
 func runRenderSample(args []string, stdout, stderr io.Writer) error {

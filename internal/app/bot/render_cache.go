@@ -1,4 +1,4 @@
-package telegram
+package bot
 
 import (
 	"crypto/sha256"
@@ -15,7 +15,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "telegram-render-v15-visible-fog-icons"
+const renderCacheVersion = "shared-render-v16-vk-adapter"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}

@@ -85,3 +85,5 @@ platforms:
   vk:
     enabled: false
     token_file: /run/secrets/vk_token
+    group_id: 0
+    admin_ids: [] # overridden by ASTRO_VK_ADMIN_IDS

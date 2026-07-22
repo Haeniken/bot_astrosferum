@@ -1,4 +1,4 @@
-package telegram
+package bot
 
 import (
 	"os"
@@ -88,16 +88,5 @@ func TestRenderCacheKeyIncludesLanguage(t *testing.T) {
 	english := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "en"}, calibration)
 	if russian == english {
 		t.Fatal("render cache key ignored language")
-	}
-}
-
-func TestUpdateShardPreservesChatAffinity(t *testing.T) {
-	first := Update{ID: 1, Message: &Message{Chat: Chat{ID: -12345}}}
-	second := Update{ID: 2, Message: &Message{Chat: Chat{ID: -12345}}}
-	if updateShard(first, 6) != updateShard(second, 6) {
-		t.Fatal("updates for one chat must use one worker")
-	}
-	if updateShard(Update{ID: 3}, 6) != 0 {
-		t.Fatal("updates without messages must use shard zero")
 	}
 }

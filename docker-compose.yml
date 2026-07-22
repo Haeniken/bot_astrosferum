@@ -64,12 +64,14 @@ services:
       ASTRO_LIGHT_POLLUTION_ATLAS_YEAR: ${ASTRO_LIGHT_POLLUTION_ATLAS_YEAR:-2024}
       ASTRO_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       ASTRO_TELEGRAM_ADMIN_IDS: ${ASTRO_TELEGRAM_ADMIN_IDS-}
+      ASTRO_VK_ADMIN_IDS: ${ASTRO_VK_ADMIN_IDS-}
     security_opt:
       - no-new-privileges:true
     volumes:
       - ./config/config.yaml:/app/config/config.yaml:ro
       - ./data:/app/data
       - ./secrets/telegram_token:/run/secrets/telegram_token:ro
+      - ./secrets/vk_token:/run/secrets/vk_token:ro
     tmpfs:
       - /tmp:size=64m,mode=1777
     logging:

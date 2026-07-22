@@ -1,4 +1,4 @@
-package telegram
+package bot
 
 import (
 	"context"
@@ -126,13 +126,13 @@ func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot str
 		return fmt.Errorf("forecast provider is required")
 	}
 	if strings.TrimSpace(renderRoot) == "" {
-		return fmt.Errorf("telegram render root is required")
+		return fmt.Errorf("render root is required")
 	}
 	handler.provider = provider
 	handler.renderRoot = renderRoot
 	handler.renderOptions = options
 	if err := os.MkdirAll(renderRoot, 0o750); err != nil {
-		return fmt.Errorf("create Telegram render root: %w", err)
+		return fmt.Errorf("create render root: %w", err)
 	}
 	pruneRenderCache(renderRoot, time.Hour, 0)
 	return nil
@@ -140,10 +140,10 @@ func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot str
 
 func (handler *Handler) EnableRenderCache(root string) error {
 	if strings.TrimSpace(root) == "" {
-		return fmt.Errorf("telegram render cache root is required")
+		return fmt.Errorf("render cache root is required")
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
-		return fmt.Errorf("create Telegram render cache root: %w", err)
+		return fmt.Errorf("create render cache root: %w", err)
 	}
 	pruneRenderCache(root, 48*time.Hour, 256)
 	handler.renderCacheRoot = root
@@ -231,7 +231,7 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 	}
 	if handler.persistence != nil {
 		if err := handler.persistence.TouchUser(ctx, userID); err != nil {
-			handler.logf("touch Telegram user %d: %v", userID, err)
+			handler.logf("touch platform user: %v", err)
 		}
 	}
 	text := strings.TrimSpace(message.Text)
