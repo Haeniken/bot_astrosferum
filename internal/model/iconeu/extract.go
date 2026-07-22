@@ -21,6 +21,11 @@ type VerticalStore struct {
 	Workers  int
 }
 
+type verticalVector struct {
+	u, v, height, temperature float64
+	hasU, hasV, hasZ, hasT    bool
+}
+
 func (store VerticalStore) Vertical(ctx context.Context, location forecast.Location) (forecast.VerticalSeries, error) {
 	manifest, err := LoadCurrent(store.DataRoot)
 	if err != nil {
@@ -110,11 +115,7 @@ func ExtractFrame(ctx context.Context, runner CommandRunner, path string, locati
 	if err != nil {
 		return forecast.VerticalFrame{}, fmt.Errorf("extract %s: %s", filepath.Base(path), limitedOutput(output))
 	}
-	type vector struct {
-		u, v, height, temperature float64
-		hasU, hasV, hasZ, hasT    bool
-	}
-	vectors := make(map[float64]vector)
+	vectors := make(map[float64]verticalVector)
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
@@ -141,10 +142,17 @@ func ExtractFrame(ctx context.Context, runner CommandRunner, path string, locati
 		}
 		vectors[level] = item
 	}
+	if err := scanner.Err(); err != nil {
+		return forecast.VerticalFrame{}, err
+	}
+	return verticalFrameFromVectors(vectors, step, filepath.Base(path))
+}
+
+func verticalFrameFromVectors(vectors map[float64]verticalVector, step StepFile, sourceName string) (forecast.VerticalFrame, error) {
 	levels := make([]forecast.VerticalLevel, 0, len(vectors))
 	for pressure, vector := range vectors {
 		if !vector.hasU || !vector.hasV {
-			return forecast.VerticalFrame{}, fmt.Errorf("incomplete wind vector at %.0f hPa", pressure)
+			return forecast.VerticalFrame{}, fmt.Errorf("%s has incomplete wind vector at %.0f hPa", sourceName, pressure)
 		}
 		height := vector.height
 		if !vector.hasZ {
@@ -162,7 +170,7 @@ func ExtractFrame(ctx context.Context, runner CommandRunner, path string, locati
 		expectedLevels = step.Messages / 4
 	}
 	if len(levels) != expectedLevels {
-		return forecast.VerticalFrame{}, fmt.Errorf("%s produced %d pressure levels, expected %d", filepath.Base(path), len(levels), expectedLevels)
+		return forecast.VerticalFrame{}, fmt.Errorf("%s produced %d pressure levels, expected %d", sourceName, len(levels), expectedLevels)
 	}
 	confidence := math.Max(0.65, 0.96-0.26*float64(step.ForecastHour)/72)
 	return forecast.VerticalFrame{ValidAt: step.ValidAt, Levels: levels, Confidence: confidence}, nil

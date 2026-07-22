@@ -34,7 +34,12 @@ type longPollEvent struct {
 	Type    string `json:"type"`
 	GroupID int64  `json:"group_id"`
 	Object  struct {
-		Message incomingMessage `json:"message"`
+		Message               incomingMessage `json:"message"`
+		UserID                int64           `json:"user_id"`
+		PeerID                int64           `json:"peer_id"`
+		EventID               string          `json:"event_id"`
+		Payload               json.RawMessage `json:"payload"`
+		ConversationMessageID int64           `json:"conversation_message_id"`
 	} `json:"object"`
 }
 
@@ -53,10 +58,11 @@ type incomingMessage struct {
 
 func (client *Client) EnableLongPoll(ctx context.Context) error {
 	values := url.Values{
-		"group_id":    {strconv.FormatInt(client.groupID, 10)},
-		"enabled":     {"1"},
-		"api_version": {apiVersion},
-		"message_new": {"1"},
+		"group_id":      {strconv.FormatInt(client.groupID, 10)},
+		"enabled":       {"1"},
+		"api_version":   {apiVersion},
+		"message_new":   {"1"},
+		"message_event": {"1"},
 	}
 	return client.call(ctx, "groups.setLongPollSettings", values, nil)
 }
@@ -155,7 +161,7 @@ func (client *Client) Run(ctx context.Context, handler *bot.Handler, workers int
 			if !ok {
 				continue
 			}
-			shard := int(uint64(update.Message.Chat.ID) % uint64(workers))
+			shard := vkUpdateShard(update, workers)
 			select {
 			case queues[shard] <- update:
 			case <-ctx.Done():
@@ -185,7 +191,9 @@ func (client *Client) poll(ctx context.Context, server longPollServer) (longPoll
 		if ctx.Err() != nil {
 			return longPollResponse{}, ctx.Err()
 		}
-		return longPollResponse{}, fmt.Errorf("poll VK events: %w", err)
+		// net/http transport errors include the complete request URL. The VK
+		// Long Poll URL carries the secret key in its query, so never wrap it.
+		return longPollResponse{}, errors.New("poll VK events transport failed")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -199,8 +207,14 @@ func (client *Client) poll(ctx context.Context, server longPollServer) (longPoll
 }
 
 func (client *Client) convertEvent(event longPollEvent) (bot.Update, bool) {
+	if event.GroupID != client.groupID {
+		return bot.Update{}, false
+	}
+	if event.Type == "message_event" {
+		return client.convertMessageEvent(event)
+	}
 	message := event.Object.Message
-	if event.Type != "message_new" || event.GroupID != client.groupID || message.PeerID == 0 || message.FromID <= 0 {
+	if event.Type != "message_new" || message.PeerID == 0 || message.FromID <= 0 {
 		return bot.Update{}, false
 	}
 	userID, err := UserKey(message.FromID)
@@ -224,6 +238,70 @@ func (client *Client) convertEvent(event longPollEvent) (bot.Update, bool) {
 		}
 	}
 	return bot.Update{ID: message.ID, Message: converted}, true
+}
+
+func (client *Client) convertMessageEvent(event longPollEvent) (bot.Update, bool) {
+	object := event.Object
+	if object.PeerID == 0 || object.UserID <= 0 || strings.TrimSpace(object.EventID) == "" {
+		return bot.Update{}, false
+	}
+	data, ok := decodeMessageEventPayload(object.Payload)
+	if !ok {
+		return bot.Update{}, false
+	}
+	userID, err := UserKey(object.UserID)
+	if err != nil {
+		return bot.Update{}, false
+	}
+	token, err := encodeActionToken(object.EventID, object.UserID, object.PeerID)
+	if err != nil {
+		return bot.Update{}, false
+	}
+	return bot.Update{
+		ID: object.ConversationMessageID,
+		Action: &bot.ActionInvocation{
+			Token: token,
+			Data:  data,
+			Chat:  bot.Chat{ID: object.PeerID},
+			From:  &bot.User{ID: userID, LanguageCode: "ru"},
+		},
+	}, true
+}
+
+func decodeMessageEventPayload(encoded json.RawMessage) (string, bool) {
+	if len(encoded) == 0 || len(encoded) > 1024 {
+		return "", false
+	}
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err == nil && payload.Action != "" {
+		return payload.Action, true
+	}
+	var nested string
+	if err := json.Unmarshal(encoded, &nested); err != nil || nested == "" {
+		return "", false
+	}
+	if err := json.Unmarshal([]byte(nested), &payload); err != nil || payload.Action == "" {
+		return "", false
+	}
+	return payload.Action, true
+}
+
+func vkUpdateShard(update bot.Update, workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	var chatID int64
+	switch {
+	case update.Message != nil:
+		chatID = update.Message.Chat.ID
+	case update.Action != nil:
+		chatID = update.Action.Chat.ID
+	default:
+		return 0
+	}
+	return int(uint64(chatID) % uint64(workers))
 }
 
 func namespaceVKUserID(externalID int64) (int64, bool) {

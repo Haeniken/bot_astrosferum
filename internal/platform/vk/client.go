@@ -3,6 +3,7 @@ package vk
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,7 +39,15 @@ var (
 	_ bot.Messenger             = (*Client)(nil)
 	_ bot.KeyboardMessenger     = (*Client)(nil)
 	_ bot.HTMLKeyboardMessenger = (*Client)(nil)
+	_ bot.ActionMessenger       = (*Client)(nil)
 )
+
+type actionToken struct {
+	Version int    `json:"v"`
+	EventID string `json:"event_id"`
+	UserID  int64  `json:"user_id"`
+	PeerID  int64  `json:"peer_id"`
+}
 
 type apiError struct {
 	Code    int    `json:"error_code"`
@@ -135,6 +144,37 @@ func (client *Client) SendMessageWithKeyboard(ctx context.Context, peerID int64,
 
 func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, peerID int64, text string, keyboard bot.Keyboard) error {
 	return client.SendMessageWithKeyboard(ctx, peerID, plainText(text), keyboard)
+}
+
+func (client *Client) SendMessageWithActions(ctx context.Context, peerID int64, text string, keyboard bot.ActionKeyboard) error {
+	encoded, err := encodeActionKeyboard(keyboard)
+	if err != nil {
+		return err
+	}
+	return client.send(ctx, peerID, plainText(text), "", encoded)
+}
+
+func (client *Client) AnswerAction(ctx context.Context, token, text string) error {
+	decoded, err := decodeActionToken(token)
+	if err != nil {
+		return err
+	}
+	values := url.Values{
+		"event_id": {decoded.EventID},
+		"user_id":  {strconv.FormatInt(decoded.UserID, 10)},
+		"peer_id":  {strconv.FormatInt(decoded.PeerID, 10)},
+	}
+	if text = strings.TrimSpace(plainText(text)); text != "" {
+		eventData, err := json.Marshal(struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{Type: "show_snackbar", Text: truncateRunes(text, 90)})
+		if err != nil {
+			return fmt.Errorf("encode VK action answer: %w", err)
+		}
+		values.Set("event_data", string(eventData))
+	}
+	return client.call(ctx, "messages.sendMessageEventAnswer", values, nil)
 }
 
 func (client *Client) SendPhoto(ctx context.Context, peerID int64, path, caption string) error {
@@ -341,7 +381,12 @@ func (client *Client) uploadFile(ctx context.Context, endpoint, field, path stri
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response, err := client.apiHTTP.Do(request)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// VK upload endpoints may carry a signed query string. net/http embeds
+		// the URL in transport errors, so return a stable secret-free error.
+		return errors.New("VK upload transport failed")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -394,6 +439,80 @@ func encodeKeyboard(keyboard bot.Keyboard) (json.RawMessage, error) {
 		return nil, fmt.Errorf("encode VK keyboard: %w", err)
 	}
 	return encoded, nil
+}
+
+func encodeActionKeyboard(keyboard bot.ActionKeyboard) (json.RawMessage, error) {
+	if len(keyboard) == 0 {
+		return nil, nil
+	}
+	type button struct {
+		Action map[string]string `json:"action"`
+		Color  string            `json:"color,omitempty"`
+	}
+	payload := struct {
+		Inline  bool       `json:"inline"`
+		Buttons [][]button `json:"buttons"`
+	}{Inline: true, Buttons: make([][]button, 0, len(keyboard))}
+	for _, row := range keyboard {
+		encodedRow := make([]button, 0, len(row))
+		for _, item := range row {
+			label := truncateRunes(strings.TrimSpace(item.Text), 40)
+			if label == "" {
+				return nil, errors.New("VK action button text is required")
+			}
+			if len(item.Data) == 0 || len(item.Data) > 64 {
+				return nil, errors.New("VK callback data must contain 1 to 64 bytes")
+			}
+			callbackPayload, err := json.Marshal(struct {
+				Action string `json:"action"`
+			}{Action: item.Data})
+			if err != nil {
+				return nil, fmt.Errorf("encode VK action payload: %w", err)
+			}
+			encodedRow = append(encodedRow, button{
+				Action: map[string]string{
+					"type":    "callback",
+					"label":   label,
+					"payload": string(callbackPayload),
+				},
+				Color: "primary",
+			})
+		}
+		if len(encodedRow) > 0 {
+			payload.Buttons = append(payload.Buttons, encodedRow)
+		}
+	}
+	if len(payload.Buttons) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode VK action keyboard: %w", err)
+	}
+	return encoded, nil
+}
+
+func encodeActionToken(eventID string, userID, peerID int64) (string, error) {
+	if strings.TrimSpace(eventID) == "" || userID <= 0 || peerID == 0 {
+		return "", errors.New("invalid VK action token fields")
+	}
+	encoded, err := json.Marshal(actionToken{Version: 1, EventID: eventID, UserID: userID, PeerID: peerID})
+	if err != nil {
+		return "", fmt.Errorf("encode VK action token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeActionToken(value string) (actionToken, error) {
+	encoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return actionToken{}, errors.New("invalid VK action token")
+	}
+	var token actionToken
+	if err := json.Unmarshal(encoded, &token); err != nil || token.Version != 1 || strings.TrimSpace(token.EventID) == "" || token.UserID <= 0 || token.PeerID == 0 {
+		return actionToken{}, errors.New("invalid VK action token")
+	}
+	return token, nil
 }
 
 func attachmentID(kind string, ownerID, id int64, accessKey string) string {

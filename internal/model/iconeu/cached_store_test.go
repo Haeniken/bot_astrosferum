@@ -16,6 +16,7 @@ type countingPointSource struct {
 	mu                       sync.Mutex
 	vertical, surface, cloud int
 	delay                    time.Duration
+	runID                    string
 }
 
 func (source *countingPointSource) Vertical(ctx context.Context, location forecast.Location) (forecast.VerticalSeries, error) {
@@ -24,9 +25,12 @@ func (source *countingPointSource) Vertical(ctx context.Context, location foreca
 	}
 	source.mu.Lock()
 	source.vertical++
+	runID := source.currentRunLocked()
 	source.mu.Unlock()
 	value := forecast.SyntheticVerticalFixture()
 	value.Location = location
+	value.RunID = runID
+	value.AlgorithmVersion = "cached-legacy-seeing-version"
 	return value, nil
 }
 
@@ -36,9 +40,11 @@ func (source *countingPointSource) Surface(ctx context.Context, location forecas
 	}
 	source.mu.Lock()
 	source.surface++
+	runID := source.currentRunLocked()
 	source.mu.Unlock()
 	value := forecast.SyntheticSurfaceFixture()
 	value.Location = location
+	value.RunID = runID
 	return value, nil
 }
 
@@ -48,10 +54,25 @@ func (source *countingPointSource) Cloud(ctx context.Context, location forecast.
 	}
 	source.mu.Lock()
 	source.cloud++
+	runID := source.currentRunLocked()
 	source.mu.Unlock()
 	value := forecast.SyntheticCloudFixture()
 	value.Location = location
+	value.RunID = runID
 	return value, nil
+}
+
+func (source *countingPointSource) currentRunLocked() string {
+	if source.runID == "" {
+		return "20260714T0600Z"
+	}
+	return source.runID
+}
+
+func (source *countingPointSource) setRun(runID string) {
+	source.mu.Lock()
+	source.runID = runID
+	source.mu.Unlock()
 }
 
 func waitForTest(ctx context.Context, delay time.Duration) error {
@@ -85,8 +106,12 @@ func TestCachedStoreCachesBundleInMemoryAndOnDisk(t *testing.T) {
 	location, _ := forecast.NewLocation(55.7558, 37.6173, "Europe/Moscow")
 	source := &countingPointSource{}
 	store := newTestCachedStore(root, source)
-	if _, err := store.Vertical(context.Background(), location); err != nil {
+	vertical, err := store.Vertical(context.Background(), location)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if vertical.AlgorithmVersion != forecast.SeeingPrototypeVersion {
+		t.Fatalf("active algorithm version = %q, want %q", vertical.AlgorithmVersion, forecast.SeeingPrototypeVersion)
 	}
 	if _, err := store.Surface(context.Background(), location); err != nil {
 		t.Fatal(err)
@@ -104,8 +129,12 @@ func TestCachedStoreCachesBundleInMemoryAndOnDisk(t *testing.T) {
 
 	coldSource := &countingPointSource{}
 	coldStore := newTestCachedStore(root, coldSource)
-	if _, err := coldStore.Vertical(context.Background(), location); err != nil {
+	vertical, err = coldStore.Vertical(context.Background(), location)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if vertical.AlgorithmVersion != forecast.SeeingPrototypeVersion {
+		t.Fatalf("disk-cache algorithm version = %q, want %q", vertical.AlgorithmVersion, forecast.SeeingPrototypeVersion)
 	}
 	if coldSource.vertical != 0 || coldSource.surface != 0 || coldSource.cloud != 0 {
 		t.Fatal("disk cache unexpectedly extracted source data")
@@ -135,6 +164,48 @@ func TestCachedStoreCoalescesConcurrentMisses(t *testing.T) {
 	}
 	if source.vertical != 1 || source.surface != 1 || source.cloud != 1 {
 		t.Fatalf("miss was not coalesced: %d/%d/%d", source.vertical, source.surface, source.cloud)
+	}
+}
+
+func TestCachedStoreDoesNotReusePreviousRunAfterRollover(t *testing.T) {
+	const firstRun = "20260714T0600Z"
+	const secondRun = "20260714T1200Z"
+	location, _ := forecast.NewLocation(59.939, 30.315, "Europe/Moscow")
+	source := &countingPointSource{runID: firstRun}
+	store := newTestCachedStore(t.TempDir(), source)
+	store.loadCurrent = func(string) (LoadedManifest, error) {
+		source.mu.Lock()
+		runID := source.currentRunLocked()
+		source.mu.Unlock()
+		return LoadedManifest{Manifest: Manifest{
+			RunID: runID,
+			Grid:  model.Coverage{MinLat: 20, MaxLat: 80, MinLon: -20, MaxLon: 60, Increment: 0.0625},
+		}}, nil
+	}
+	vertical, err := store.Vertical(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vertical.RunID != firstRun {
+		t.Fatalf("first vertical run = %q", vertical.RunID)
+	}
+	source.setRun(secondRun)
+	surface, err := store.Surface(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloud, err := store.Cloud(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if surface.RunID != secondRun || cloud.RunID != secondRun {
+		t.Fatalf("post-rollover runs = surface %q cloud %q, want %q", surface.RunID, cloud.RunID, secondRun)
+	}
+	source.mu.Lock()
+	verticalCalls, surfaceCalls, cloudCalls := source.vertical, source.surface, source.cloud
+	source.mu.Unlock()
+	if verticalCalls != 2 || surfaceCalls != 2 || cloudCalls != 2 {
+		t.Fatalf("run rollover extraction counts = %d/%d/%d, want 2/2/2", verticalCalls, surfaceCalls, cloudCalls)
 	}
 }
 

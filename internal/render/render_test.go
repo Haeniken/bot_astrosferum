@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,10 +322,52 @@ func TestSolarPhaseBoundaries(t *testing.T) {
 	tests := []struct {
 		altitude float64
 		want     solarPhase
-	}{{5, solarDay}, {0, solarDay}, {-0.1, solarCivilTwilight}, {-6, solarCivilTwilight}, {-6.1, solarNauticalTwilight}, {-12, solarNauticalTwilight}, {-12.1, solarAstronomicalTwilight}, {-18, solarAstronomicalTwilight}, {-18.1, solarNight}}
+	}{{5, solarDay}, {0, solarDay}, {-0.1, solarBrightTwilight}, {-6, solarBrightTwilight}, {-6.1, solarBrightTwilight}, {-12, solarBrightTwilight}, {-12.1, solarAstronomicalTwilight}, {-18, solarAstronomicalTwilight}, {-18.1, solarNight}}
 	for _, test := range tests {
 		if got := phaseForSunAltitude(test.altitude); got != test.want {
 			t.Errorf("phaseForSunAltitude(%v) = %v, want %v", test.altitude, got, test.want)
+		}
+	}
+}
+
+func TestSolarPhaseIntervalsResolveCrossingsBelowHourlyResolution(t *testing.T) {
+	sky := astronomy.Series{Location: forecast.Location{Latitude: 0, Longitude: 0, TimeZone: "UTC"}}
+	start := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	intervals := solarPhaseIntervals(sky, start, end)
+	if len(intervals) < 7 {
+		t.Fatalf("solar intervals = %d, want at least seven across an equatorial equinox day", len(intervals))
+	}
+	if !intervals[0].Start.Equal(start) || !intervals[len(intervals)-1].End.Equal(end) {
+		t.Fatalf("solar intervals do not cover the complete render period: %#v", intervals)
+	}
+	thresholds := []float64{0, -12, -18}
+	for index := 1; index < len(intervals); index++ {
+		if !intervals[index-1].End.Equal(intervals[index].Start) {
+			t.Fatalf("solar intervals %d and %d are not contiguous", index-1, index)
+		}
+		if intervals[index-1].Phase == intervals[index].Phase {
+			t.Fatalf("solar intervals %d and %d repeat phase %v", index-1, index, intervals[index].Phase)
+		}
+		altitude := sky.SunAltitudeDegrees(intervals[index].Start)
+		nearest := math.Inf(1)
+		for _, threshold := range thresholds {
+			nearest = math.Min(nearest, math.Abs(altitude-threshold))
+		}
+		if nearest > 0.75 {
+			t.Fatalf("solar transition %d altitude = %.5f°, not near a displayed boundary", index, altitude)
+		}
+	}
+}
+
+func TestWeatherSolarPhaseShadesGetDarkerTowardNight(t *testing.T) {
+	brightness := func(value color.RGBA) int { return int(value.R) + int(value.G) + int(value.B) }
+	phases := []solarPhase{solarDay, solarBrightTwilight, solarAstronomicalTwilight, solarNight}
+	for index := 1; index < len(phases); index++ {
+		previous := weatherSolarPhaseColor(phases[index-1])
+		current := weatherSolarPhaseColor(phases[index])
+		if brightness(current) >= brightness(previous) {
+			t.Fatalf("phase %v shade %#v is not darker than phase %v shade %#v", phases[index], current, phases[index-1], previous)
 		}
 	}
 }

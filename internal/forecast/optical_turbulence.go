@@ -6,9 +6,16 @@ import (
 )
 
 const (
-	seeingWavelengthM = 500e-9
-	radiansToArcsec   = 206264.80624709636
-	dryAirPoisson     = 287.05 / 1004.0
+	seeingWavelengthM      = 500e-9
+	friedR0Coefficient     = 0.423
+	friedSeeingCoefficient = 0.98
+	// coherencePhaseStructureCoefficient is the published coefficient in the
+	// temporal phase-structure definition D_phi(t)=2.910*k^2*J_V*t^(5/3).
+	// Keeping the base form avoids another rounding step through the commonly
+	// printed expanded shorthand 0.058.
+	coherencePhaseStructureCoefficient = 2.910
+	radiansToArcsec                    = 206264.80624709636
+	dryAirPoisson                      = 287.05 / 1004.0
 )
 
 // OpticalTurbulenceMetrics keeps the two standard integrals needed by an
@@ -29,6 +36,8 @@ type turbulenceNode struct {
 	heightM         float64
 	cn2             float64
 	windWeightedCn2 float64
+	uMS             float64
+	vMS             float64
 }
 
 // HMNSP99SeeingArcsec estimates zenith long-exposure FWHM at 500 nm from a
@@ -53,65 +62,11 @@ func HMNSP99SeeingArcsec(levels []VerticalLevel) float64 {
 //
 // with P in hPa, z in metres, and TKE in m2/s2 (equivalent to J/kg).
 func HybridOpticalTurbulenceMetrics(pressureLevels []VerticalLevel, modelLevels []CloudLevel, surfaceElevationM, boundaryLayerTopAGLM, groundCn2Scale float64) (OpticalTurbulenceMetrics, bool) {
-	if len(modelLevels) < 3 || !finite(surfaceElevationM) || !finite(boundaryLayerTopAGLM) || boundaryLayerTopAGLM <= 0 ||
-		!finite(groundCn2Scale) || groundCn2Scale <= 0 {
+	nodes, ok := masciadriTurbulenceNodes(modelLevels, surfaceElevationM, boundaryLayerTopAGLM, groundCn2Scale)
+	if !ok {
 		return invalidOpticalTurbulenceMetrics(), false
 	}
-	levels := append([]CloudLevel(nil), modelLevels...)
-	sort.Slice(levels, func(i, j int) bool { return levels[i].HeightM < levels[j].HeightM })
 	topM := surfaceElevationM + boundaryLayerTopAGLM
-
-	// Keep the contiguous near-surface chain only. Sparse levels above it are
-	// useful for the cloud chart, but are deliberately not differentiated.
-	chain := make([]CloudLevel, 0, len(levels))
-	for _, level := range levels {
-		if level.HeightM <= surfaceElevationM {
-			continue
-		}
-		if len(chain) > 0 && absInt(chain[len(chain)-1].ModelLevel-level.ModelLevel) != 1 {
-			break
-		}
-		chain = append(chain, level)
-	}
-	if len(chain) < 3 || chain[0].HeightM-surfaceElevationM > 100 || chain[len(chain)-1].HeightM < topM {
-		return invalidOpticalTurbulenceMetrics(), false
-	}
-	theta := make([]float64, len(chain))
-	for index, level := range chain {
-		if !validProfileTemperature(level.TemperatureK) || !finite(level.PressureHPA) || level.PressureHPA <= 0 ||
-			!finite(level.TKEJkg) || level.TKEJkg < 0 || !finite(level.UMS) || !finite(level.VMS) {
-			return invalidOpticalTurbulenceMetrics(), false
-		}
-		theta[index] = level.TemperatureK * math.Pow(1000/level.PressureHPA, dryAirPoisson)
-	}
-	nodes := make([]turbulenceNode, len(chain))
-	for index, level := range chain {
-		left, right := index-1, index+1
-		if left < 0 {
-			left = 0
-		}
-		if right >= len(chain) {
-			right = len(chain) - 1
-		}
-		dz := chain[right].HeightM - chain[left].HeightM
-		if dz <= 0 {
-			return invalidOpticalTurbulenceMetrics(), false
-		}
-		thetaGradient := math.Abs(theta[right]-theta[left]) / dz
-		cn2 := groundCn2Scale * 3.35e-6 *
-			math.Pow(level.PressureHPA, 2*(1-2*dryAirPoisson)) *
-			math.Pow(theta[index], -10.0/3.0) *
-			math.Pow(thetaGradient, 4.0/3.0) *
-			math.Pow(level.TKEJkg, 2.0/3.0)
-		if !finite(cn2) || cn2 < 0 {
-			return invalidOpticalTurbulenceMetrics(), false
-		}
-		speed := math.Hypot(level.UMS, level.VMS)
-		nodes[index] = turbulenceNode{
-			heightM: level.HeightM, cn2: cn2,
-			windWeightedCn2: cn2 * math.Pow(speed, 5.0/3.0),
-		}
-	}
 	groundCn2, groundWindWeightedCn2, coveredM := integrateTurbulenceNodes(nodes, surfaceElevationM, topM)
 	if coveredM/boundaryLayerTopAGLM < 0.99 || groundCn2 < 0 || groundWindWeightedCn2 < 0 {
 		return invalidOpticalTurbulenceMetrics(), false
@@ -131,6 +86,74 @@ func HybridOpticalTurbulenceMetrics(pressureLevels []VerticalLevel, modelLevels 
 		metrics.GroundLayerFraction = groundCn2 / totalCn2
 	}
 	return metrics, true
+}
+
+// masciadriTurbulenceNodes is shared by the vertical integral and directional
+// LOS sampling. Keeping the node construction in one place is important: the
+// two products must use exactly the same potential-temperature gradient and
+// native TKE interpretation in the model-resolved boundary layer.
+func masciadriTurbulenceNodes(modelLevels []CloudLevel, surfaceElevationM, boundaryLayerTopAGLM, groundCn2Scale float64) ([]turbulenceNode, bool) {
+	if len(modelLevels) < 3 || !finite(surfaceElevationM) || !finite(boundaryLayerTopAGLM) || boundaryLayerTopAGLM <= 0 ||
+		!finite(groundCn2Scale) || groundCn2Scale <= 0 {
+		return nil, false
+	}
+	levels := append([]CloudLevel(nil), modelLevels...)
+	sort.Slice(levels, func(i, j int) bool { return levels[i].HeightM < levels[j].HeightM })
+	topM := surfaceElevationM + boundaryLayerTopAGLM
+
+	// Keep the contiguous near-surface chain only. Sparse levels above it are
+	// useful for the cloud chart, but are deliberately not differentiated.
+	chain := make([]CloudLevel, 0, len(levels))
+	for _, level := range levels {
+		if level.HeightM <= surfaceElevationM {
+			continue
+		}
+		if len(chain) > 0 && absInt(chain[len(chain)-1].ModelLevel-level.ModelLevel) != 1 {
+			break
+		}
+		chain = append(chain, level)
+	}
+	if len(chain) < 3 || chain[0].HeightM-surfaceElevationM > 100 || chain[len(chain)-1].HeightM < topM {
+		return nil, false
+	}
+	theta := make([]float64, len(chain))
+	for index, level := range chain {
+		if !validProfileTemperature(level.TemperatureK) || !finite(level.PressureHPA) || level.PressureHPA <= 0 ||
+			!finite(level.TKEJkg) || level.TKEJkg < 0 || !finite(level.UMS) || !finite(level.VMS) {
+			return nil, false
+		}
+		theta[index] = level.TemperatureK * math.Pow(1000/level.PressureHPA, dryAirPoisson)
+	}
+	nodes := make([]turbulenceNode, len(chain))
+	for index, level := range chain {
+		left, right := index-1, index+1
+		if left < 0 {
+			left = 0
+		}
+		if right >= len(chain) {
+			right = len(chain) - 1
+		}
+		dz := chain[right].HeightM - chain[left].HeightM
+		if dz <= 0 {
+			return nil, false
+		}
+		thetaGradient := math.Abs(theta[right]-theta[left]) / dz
+		cn2 := groundCn2Scale * 3.35e-6 *
+			math.Pow(level.PressureHPA, 2*(1-2*dryAirPoisson)) *
+			math.Pow(theta[index], -10.0/3.0) *
+			math.Pow(thetaGradient, 4.0/3.0) *
+			math.Pow(level.TKEJkg, 2.0/3.0)
+		if !finite(cn2) || cn2 < 0 {
+			return nil, false
+		}
+		speed := math.Hypot(level.UMS, level.VMS)
+		nodes[index] = turbulenceNode{
+			heightM: level.HeightM, cn2: cn2,
+			windWeightedCn2: cn2 * math.Pow(speed, 5.0/3.0),
+			uMS:             level.UMS, vMS: level.VMS,
+		}
+	}
+	return nodes, true
 }
 
 func integrateTurbulenceNodes(nodes []turbulenceNode, bottomM, topM float64) (integratedCn2, integratedWindCn2, coveredM float64) {
@@ -201,34 +224,8 @@ func hmnsp99MetricsAbove(levels []VerticalLevel, minimumHeightM float64) Optical
 			continue
 		}
 		candidateLayers++
-		if !validProfileTemperature(lower.TemperatureK) || !validProfileTemperature(upper.TemperatureK) ||
-			!finite(lower.UMS) || !finite(lower.VMS) || !finite(upper.UMS) || !finite(upper.VMS) {
-			continue
-		}
-		dz := upper.HeightM - lower.HeightM
-		if dz <= 0 {
-			continue
-		}
-		pressure := (lower.PressureHPA + upper.PressureHPA) / 2
-		temperature := (lower.TemperatureK + upper.TemperatureK) / 2
-		lowerTheta := potentialTemperature(lower.TemperatureK, lower.PressureHPA)
-		upperTheta := potentialTemperature(upper.TemperatureK, upper.PressureHPA)
-		thetaGradient := (upperTheta - lowerTheta) / dz
-		temperatureGradient := (upper.TemperatureK - lower.TemperatureK) / dz
-		shear := math.Hypot(upper.UMS-lower.UMS, upper.VMS-lower.VMS) / dz
-
-		// Ruggiero & DeBenedictis' HMNSP99 parametrization gives L0^(4/3).
-		// The coefficient switch follows a thermal tropopause diagnosed from
-		// the same temperature profile, with 200 hPa only as a fallback.
-		exponent := 0.362 + 16.728*shear - 192.347*temperatureGradient
-		layerHeight := (lower.HeightM + upper.HeightM) / 2
-		if (finite(tropopauseM) && layerHeight >= tropopauseM) || (!finite(tropopauseM) && pressure < 200) {
-			exponent = 0.757 + 13.819*shear - 57.784*temperatureGradient
-		}
-		outerScalePow := math.Pow(0.1, 4.0/3.0) * math.Pow(10, exponent)
-		potentialRefractiveGradient := -79e-6 * pressure / (temperature * temperature) * thetaGradient
-		cn2 := 2.8 * outerScalePow * potentialRefractiveGradient * potentialRefractiveGradient
-		if !finite(cn2) || cn2 < 0 {
+		cn2, ok := hmnsp99LayerCn2(lower, upper, tropopauseM)
+		if !ok {
 			continue
 		}
 		includedDZ := upper.HeightM - math.Max(lower.HeightM, minimumHeightM)
@@ -248,6 +245,43 @@ func hmnsp99MetricsAbove(levels []VerticalLevel, minimumHeightM float64) Optical
 		windWeightedCn2,
 		float64(validLayers)/float64(candidateLayers),
 	)
+}
+
+// hmnsp99LayerCn2 evaluates the constant layer value used by HMNSP99. Both
+// zenith integration and the horizon midpoint sampler call this kernel, so a
+// directional product does not silently acquire another shear parametrization.
+func hmnsp99LayerCn2(lower, upper VerticalLevel, tropopauseM float64) (float64, bool) {
+	if !validProfileTemperature(lower.TemperatureK) || !validProfileTemperature(upper.TemperatureK) ||
+		!finite(lower.UMS) || !finite(lower.VMS) || !finite(upper.UMS) || !finite(upper.VMS) {
+		return 0, false
+	}
+	dz := upper.HeightM - lower.HeightM
+	if dz <= 0 {
+		return 0, false
+	}
+	pressure := (lower.PressureHPA + upper.PressureHPA) / 2
+	temperature := (lower.TemperatureK + upper.TemperatureK) / 2
+	lowerTheta := potentialTemperature(lower.TemperatureK, lower.PressureHPA)
+	upperTheta := potentialTemperature(upper.TemperatureK, upper.PressureHPA)
+	thetaGradient := (upperTheta - lowerTheta) / dz
+	temperatureGradient := (upper.TemperatureK - lower.TemperatureK) / dz
+	shear := math.Hypot(upper.UMS-lower.UMS, upper.VMS-lower.VMS) / dz
+
+	// Ruggiero & DeBenedictis' HMNSP99 parametrization gives L0^(4/3).
+	// The coefficient switch follows a thermal tropopause diagnosed from the
+	// same temperature profile, with 200 hPa only as a fallback.
+	exponent := 0.362 + 16.728*shear - 192.347*temperatureGradient
+	layerHeight := (lower.HeightM + upper.HeightM) / 2
+	if (finite(tropopauseM) && layerHeight >= tropopauseM) || (!finite(tropopauseM) && pressure < 200) {
+		exponent = 0.757 + 13.819*shear - 57.784*temperatureGradient
+	}
+	outerScalePow := math.Pow(0.1, 4.0/3.0) * math.Pow(10, exponent)
+	potentialRefractiveGradient := -79e-6 * pressure / (temperature * temperature) * thetaGradient
+	cn2 := 2.8 * outerScalePow * potentialRefractiveGradient * potentialRefractiveGradient
+	if !finite(cn2) || cn2 < 0 {
+		return 0, false
+	}
+	return cn2, true
 }
 
 func clipVerticalProfileAbove(levels []VerticalLevel, minimumHeightM float64) []VerticalLevel {
@@ -282,13 +316,18 @@ func opticalTurbulenceMetricsFromMoments(integratedCn2, windWeightedCn2, validLa
 	if !finite(integratedCn2) || integratedCn2 <= 0 || !finite(windWeightedCn2) || windWeightedCn2 < 0 {
 		return invalidOpticalTurbulenceMetrics()
 	}
-	seeingRadians := 5.25 * math.Pow(seeingWavelengthM, -0.2) * math.Pow(integratedCn2, 0.6)
+	wavenumber := 2 * math.Pi / seeingWavelengthM
+	friedParameterM := math.Pow(friedR0Coefficient*wavenumber*wavenumber*integratedCn2, -3.0/5.0)
+	seeingRadians := friedSeeingCoefficient * seeingWavelengthM / friedParameterM
 	// A perfectly motionless synthetic profile has an unbounded tau0. Keep a
 	// large finite sentinel so JSON diagnostics remain valid; real ICON columns
 	// always have a positive wind-weighted moment.
 	coherenceTimeMS := 1e6
 	if windWeightedCn2 > 0 {
-		coherenceTimeMS = 1000 * 0.058 * math.Pow(seeingWavelengthM, 6.0/5.0) * math.Pow(windWeightedCn2, -3.0/5.0)
+		coherenceTimeMS = 1000 * math.Pow(
+			coherencePhaseStructureCoefficient*wavenumber*wavenumber*windWeightedCn2,
+			-3.0/5.0,
+		)
 	}
 	return OpticalTurbulenceMetrics{
 		SeeingArcsec:        seeingRadians * radiansToArcsec,

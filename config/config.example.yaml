@@ -8,6 +8,17 @@ app:
   point_cache_memory_limit: 20GiB
   request_timeout: 15m
 
+# ICON-EU-only low-altitude directional analysis. A single heavy worker is
+# fixed in code; these settings bound its subprocesses, queue, and disk cache.
+horizon_analysis:
+  enabled: true
+  queue_size: 4
+  cdo_workers: 2
+  job_timeout: 10m
+  cache_ttl: 48h
+  cache_entries: 128
+  estimated_duration: 3m
+
 paths:
   data: /app/data
   temp: /app/data/tmp
@@ -37,12 +48,15 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v4
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v6
   dew_version: dew-v1
-  conditions_version: conditions-v4-dynamic-mh-cloud-guard
+  conditions_version: conditions-v7-phase-structure-coherence
   overall_seeing_weight: 1.0
   overall_cloud_weight: 2.0
   overall_coherence_time_weight: 0.25
+  # Bounds only the combined seeing/tau0 contribution to the general-purpose
+  # utility index. Physical epsilon and tau0 diagnostics are never clipped.
+  overall_optical_turbulence_max_penalty: 0.25
   overall_possible_fog_factor: 0.75
   overall_high_fog_factor: 0.10
   # Kept under its historical name for compatibility; this is now the

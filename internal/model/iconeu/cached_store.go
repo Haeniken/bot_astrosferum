@@ -135,6 +135,10 @@ func (store *CachedStore) Vertical(ctx context.Context, location forecast.Locati
 	}
 	series := bundle.Vertical
 	series.Location = location
+	// Point bundles contain extracted model values, not derived seeing output.
+	// Stamp the active calculation version on read so a scientific-method
+	// update cannot keep an obsolete marker from an otherwise valid raw cache.
+	series.AlgorithmVersion = forecast.SeeingPrototypeVersion
 	return series, nil
 }
 

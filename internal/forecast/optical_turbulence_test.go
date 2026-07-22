@@ -13,6 +13,36 @@ func TestHMNSP99SeeingProducesPlausibleStandardProfile(t *testing.T) {
 	}
 }
 
+func TestSeeingUsesAlgebraicallyConsistentFriedCoefficient(t *testing.T) {
+	integratedCn2 := 1e-13
+	metrics := opticalTurbulenceMetricsFromMoments(integratedCn2, 0, 1)
+	wavenumber := 2 * math.Pi / seeingWavelengthM
+	r0 := math.Pow(friedR0Coefficient*wavenumber*wavenumber*integratedCn2, -3.0/5.0)
+	want := friedSeeingCoefficient * seeingWavelengthM / r0 * radiansToArcsec
+	if math.Abs(metrics.SeeingArcsec-want) > 1e-12 {
+		t.Fatalf("seeing = %v arcsec, want Fried-consistent %v", metrics.SeeingArcsec, want)
+	}
+	derived := friedSeeingCoefficient * math.Pow(friedR0Coefficient*4*math.Pi*math.Pi, 3.0/5.0)
+	if math.Abs(derived-5.306963958) > 1e-9 {
+		t.Fatalf("expanded Fried coefficient = %.12f, want 5.306963958", derived)
+	}
+}
+
+func TestCoherenceTimeUsesUnexpandedPhaseStructureDefinition(t *testing.T) {
+	integratedCn2 := 1e-13
+	windWeightedCn2 := 4e-12
+	metrics := opticalTurbulenceMetricsFromMoments(integratedCn2, windWeightedCn2, 1)
+	wavenumber := 2 * math.Pi / seeingWavelengthM
+	wantMS := 1000 * math.Pow(coherencePhaseStructureCoefficient*wavenumber*wavenumber*windWeightedCn2, -3.0/5.0)
+	if math.Abs(metrics.CoherenceTimeMS-wantMS) > 1e-12 {
+		t.Fatalf("coherence time = %v ms, want phase-structure-consistent %v ms", metrics.CoherenceTimeMS, wantMS)
+	}
+	derived := math.Pow(coherencePhaseStructureCoefficient*4*math.Pi*math.Pi, -3.0/5.0)
+	if math.Abs(derived-0.058056167701097) > 1e-15 {
+		t.Fatalf("expanded coherence coefficient = %.15f, want 0.058056167701097", derived)
+	}
+}
+
 func TestHMNSP99SeeingRespondsToVectorShear(t *testing.T) {
 	calm := HMNSP99SeeingArcsec(standardAtmosphereProfile(0.001))
 	sheared := HMNSP99SeeingArcsec(standardAtmosphereProfile(0.020))

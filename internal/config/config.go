@@ -15,14 +15,28 @@ import (
 )
 
 type Config struct {
-	App        AppConfig        `yaml:"app"`
-	Paths      PathsConfig      `yaml:"paths"`
-	Providers  ProvidersConfig  `yaml:"providers"`
-	Sync       SyncConfig       `yaml:"sync"`
-	Algorithms AlgorithmsConfig `yaml:"algorithms"`
-	Render     RenderConfig     `yaml:"render"`
-	Platforms  PlatformsConfig  `yaml:"platforms"`
-	Database   DatabaseConfig   `yaml:"database"`
+	App             AppConfig             `yaml:"app"`
+	HorizonAnalysis HorizonAnalysisConfig `yaml:"horizon_analysis"`
+	Paths           PathsConfig           `yaml:"paths"`
+	Providers       ProvidersConfig       `yaml:"providers"`
+	Sync            SyncConfig            `yaml:"sync"`
+	Algorithms      AlgorithmsConfig      `yaml:"algorithms"`
+	Render          RenderConfig          `yaml:"render"`
+	Platforms       PlatformsConfig       `yaml:"platforms"`
+	Database        DatabaseConfig        `yaml:"database"`
+}
+
+// HorizonAnalysisConfig deliberately exposes only operational limits. The
+// scientific geometry and formula versions are constants in internal/forecast
+// so a configuration edit cannot silently change the meaning of cached data.
+type HorizonAnalysisConfig struct {
+	Enabled           bool     `yaml:"enabled"`
+	QueueSize         int      `yaml:"queue_size"`
+	CDOWorkers        int      `yaml:"cdo_workers"`
+	JobTimeout        Duration `yaml:"job_timeout"`
+	CacheTTL          Duration `yaml:"cache_ttl"`
+	CacheEntries      int      `yaml:"cache_entries"`
+	EstimatedDuration Duration `yaml:"estimated_duration"`
 }
 
 type DatabaseConfig struct {
@@ -75,29 +89,30 @@ type SyncConfig struct {
 }
 
 type AlgorithmsConfig struct {
-	SeeingVersion                     string  `yaml:"seeing_version"`
-	DewVersion                        string  `yaml:"dew_version"`
-	ConditionsVersion                 string  `yaml:"conditions_version"`
-	OverallSeeingWeight               float64 `yaml:"overall_seeing_weight"`
-	OverallCloudWeight                float64 `yaml:"overall_cloud_weight"`
-	OverallCoherenceTimeWeight        float64 `yaml:"overall_coherence_time_weight"`
-	OverallPossibleFogFactor          float64 `yaml:"overall_possible_fog_factor"`
-	OverallHighFogFactor              float64 `yaml:"overall_high_fog_factor"`
-	OverallGoodSeeingArcsec           float64 `yaml:"overall_good_seeing_arcsec"`
-	OverallBadSeeingArcsec            float64 `yaml:"overall_bad_seeing_arcsec"`
-	OverallBestCoherenceTimeMS        float64 `yaml:"overall_best_coherence_time_ms"`
-	OverallBadCoherenceTimeMS         float64 `yaml:"overall_bad_coherence_time_ms"`
-	OverallBoundaryLayerMinM          float64 `yaml:"overall_boundary_layer_min_m"`
-	OverallBoundaryLayerTopM          float64 `yaml:"overall_boundary_layer_top_m"`
-	OverallGroundCn2Scale             float64 `yaml:"overall_ground_cn2_scale"`
-	OverallUnresolvedCloudObstruction float64 `yaml:"overall_unresolved_cloud_obstruction"`
-	OverallSurfaceWindMaxPenalty      float64 `yaml:"overall_surface_wind_max_penalty"`
-	OverallSurfaceWindStartMS         float64 `yaml:"overall_surface_wind_start_ms"`
-	OverallSurfaceWindFullMS          float64 `yaml:"overall_surface_wind_full_ms"`
-	OverallSurfaceGustStartMS         float64 `yaml:"overall_surface_gust_start_ms"`
-	OverallSurfaceGustFullMS          float64 `yaml:"overall_surface_gust_full_ms"`
-	CloudLiquidRadiusMicrometers      float64 `yaml:"cloud_liquid_radius_micrometers"`
-	CloudIceRadiusMicrometers         float64 `yaml:"cloud_ice_radius_micrometers"`
+	SeeingVersion                      string  `yaml:"seeing_version"`
+	DewVersion                         string  `yaml:"dew_version"`
+	ConditionsVersion                  string  `yaml:"conditions_version"`
+	OverallSeeingWeight                float64 `yaml:"overall_seeing_weight"`
+	OverallCloudWeight                 float64 `yaml:"overall_cloud_weight"`
+	OverallCoherenceTimeWeight         float64 `yaml:"overall_coherence_time_weight"`
+	OverallOpticalTurbulenceMaxPenalty float64 `yaml:"overall_optical_turbulence_max_penalty"`
+	OverallPossibleFogFactor           float64 `yaml:"overall_possible_fog_factor"`
+	OverallHighFogFactor               float64 `yaml:"overall_high_fog_factor"`
+	OverallGoodSeeingArcsec            float64 `yaml:"overall_good_seeing_arcsec"`
+	OverallBadSeeingArcsec             float64 `yaml:"overall_bad_seeing_arcsec"`
+	OverallBestCoherenceTimeMS         float64 `yaml:"overall_best_coherence_time_ms"`
+	OverallBadCoherenceTimeMS          float64 `yaml:"overall_bad_coherence_time_ms"`
+	OverallBoundaryLayerMinM           float64 `yaml:"overall_boundary_layer_min_m"`
+	OverallBoundaryLayerTopM           float64 `yaml:"overall_boundary_layer_top_m"`
+	OverallGroundCn2Scale              float64 `yaml:"overall_ground_cn2_scale"`
+	OverallUnresolvedCloudObstruction  float64 `yaml:"overall_unresolved_cloud_obstruction"`
+	OverallSurfaceWindMaxPenalty       float64 `yaml:"overall_surface_wind_max_penalty"`
+	OverallSurfaceWindStartMS          float64 `yaml:"overall_surface_wind_start_ms"`
+	OverallSurfaceWindFullMS           float64 `yaml:"overall_surface_wind_full_ms"`
+	OverallSurfaceGustStartMS          float64 `yaml:"overall_surface_gust_start_ms"`
+	OverallSurfaceGustFullMS           float64 `yaml:"overall_surface_gust_full_ms"`
+	CloudLiquidRadiusMicrometers       float64 `yaml:"cloud_liquid_radius_micrometers"`
+	CloudIceRadiusMicrometers          float64 `yaml:"cloud_ice_radius_micrometers"`
 }
 
 type RenderConfig struct {
@@ -130,6 +145,11 @@ func Defaults() Config {
 			PointCacheMemoryLimit: ByteSize(20 << 30),
 			RequestTimeout:        Duration{15 * time.Minute},
 		},
+		HorizonAnalysis: HorizonAnalysisConfig{
+			Enabled: true, QueueSize: 4, CDOWorkers: 2,
+			JobTimeout: Duration{10 * time.Minute}, CacheTTL: Duration{48 * time.Hour},
+			CacheEntries: 128, EstimatedDuration: Duration{3 * time.Minute},
+		},
 		Paths: PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
 		Providers: ProvidersConfig{
 			LightPollution: LightPollutionConfig{AtlasYear: 2024},
@@ -140,29 +160,30 @@ func Defaults() Config {
 			MinFreeSpace:        ByteSize(150 << 30),
 		},
 		Algorithms: AlgorithmsConfig{
-			SeeingVersion:                     "seeing-hybrid-tke-mh-hmnsp99-v4",
-			DewVersion:                        "dew-v1",
-			ConditionsVersion:                 "conditions-v4-dynamic-mh-cloud-guard",
-			OverallSeeingWeight:               1,
-			OverallCloudWeight:                2,
-			OverallCoherenceTimeWeight:        0.25,
-			OverallPossibleFogFactor:          0.75,
-			OverallHighFogFactor:              0.10,
-			OverallGoodSeeingArcsec:           0.5,
-			OverallBadSeeingArcsec:            2.0,
-			OverallBestCoherenceTimeMS:        5.2,
-			OverallBadCoherenceTimeMS:         1.6,
-			OverallBoundaryLayerMinM:          500,
-			OverallBoundaryLayerTopM:          2000,
-			OverallGroundCn2Scale:             1,
-			OverallUnresolvedCloudObstruction: 0.45,
-			OverallSurfaceWindMaxPenalty:      0.20,
-			OverallSurfaceWindStartMS:         8.5,
-			OverallSurfaceWindFullMS:          15,
-			OverallSurfaceGustStartMS:         12,
-			OverallSurfaceGustFullMS:          22,
-			CloudLiquidRadiusMicrometers:      10,
-			CloudIceRadiusMicrometers:         25,
+			SeeingVersion:                      "seeing-hybrid-tke-mh-hmnsp99-v6",
+			DewVersion:                         "dew-v1",
+			ConditionsVersion:                  "conditions-v7-phase-structure-coherence",
+			OverallSeeingWeight:                1,
+			OverallCloudWeight:                 2,
+			OverallCoherenceTimeWeight:         0.25,
+			OverallOpticalTurbulenceMaxPenalty: 0.25,
+			OverallPossibleFogFactor:           0.75,
+			OverallHighFogFactor:               0.10,
+			OverallGoodSeeingArcsec:            0.5,
+			OverallBadSeeingArcsec:             2.0,
+			OverallBestCoherenceTimeMS:         5.2,
+			OverallBadCoherenceTimeMS:          1.6,
+			OverallBoundaryLayerMinM:           500,
+			OverallBoundaryLayerTopM:           2000,
+			OverallGroundCn2Scale:              1,
+			OverallUnresolvedCloudObstruction:  0.45,
+			OverallSurfaceWindMaxPenalty:       0.20,
+			OverallSurfaceWindStartMS:          8.5,
+			OverallSurfaceWindFullMS:           15,
+			OverallSurfaceGustStartMS:          12,
+			OverallSurfaceGustFullMS:           22,
+			CloudLiquidRadiusMicrometers:       10,
+			CloudIceRadiusMicrometers:          25,
 		},
 		Render:   RenderConfig{Version: "render-v9-dynamic-mh", Width: 1280, Height: 960},
 		Database: DatabaseConfig{Host: "postgres", Port: 5432, Name: "bot_astrosferum", User: "bot_astrosferum", MaxConns: 10},
@@ -195,6 +216,13 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) applyEnvironment() error {
+	if value, exists := os.LookupEnv("ASTRO_HORIZON_ANALYSIS_ENABLED"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_HORIZON_ANALYSIS_ENABLED: %w", err)
+		}
+		c.HorizonAnalysis.Enabled = parsed
+	}
 	overrides := []struct {
 		name   string
 		target *float64
@@ -202,6 +230,7 @@ func (c *Config) applyEnvironment() error {
 		{name: "ASTRO_OVERALL_SEEING_WEIGHT", target: &c.Algorithms.OverallSeeingWeight},
 		{name: "ASTRO_OVERALL_CLOUD_WEIGHT", target: &c.Algorithms.OverallCloudWeight},
 		{name: "ASTRO_OVERALL_COHERENCE_TIME_WEIGHT", target: &c.Algorithms.OverallCoherenceTimeWeight},
+		{name: "ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY", target: &c.Algorithms.OverallOpticalTurbulenceMaxPenalty},
 		{name: "ASTRO_OVERALL_POSSIBLE_FOG_FACTOR", target: &c.Algorithms.OverallPossibleFogFactor},
 		{name: "ASTRO_OVERALL_HIGH_FOG_FACTOR", target: &c.Algorithms.OverallHighFogFactor},
 		{name: "ASTRO_OVERALL_GOOD_SEEING_ARCSEC", target: &c.Algorithms.OverallGoodSeeingArcsec},
@@ -307,6 +336,26 @@ func (c Config) Validate() error {
 	if c.App.RequestTimeout.Duration <= 0 {
 		problems = append(problems, "app.request_timeout must be positive")
 	}
+	if c.HorizonAnalysis.Enabled {
+		if c.HorizonAnalysis.QueueSize < 1 || c.HorizonAnalysis.QueueSize > 32 {
+			problems = append(problems, "horizon_analysis.queue_size must be between 1 and 32")
+		}
+		if c.HorizonAnalysis.CDOWorkers < 1 || c.HorizonAnalysis.CDOWorkers > 4 {
+			problems = append(problems, "horizon_analysis.cdo_workers must be between 1 and 4")
+		}
+		if c.HorizonAnalysis.JobTimeout.Duration < time.Minute || c.HorizonAnalysis.JobTimeout.Duration > 30*time.Minute {
+			problems = append(problems, "horizon_analysis.job_timeout must be between 1m and 30m")
+		}
+		if c.HorizonAnalysis.CacheTTL.Duration < time.Hour || c.HorizonAnalysis.CacheTTL.Duration > 7*24*time.Hour {
+			problems = append(problems, "horizon_analysis.cache_ttl must be between 1h and 168h")
+		}
+		if c.HorizonAnalysis.CacheEntries < 1 || c.HorizonAnalysis.CacheEntries > 1024 {
+			problems = append(problems, "horizon_analysis.cache_entries must be between 1 and 1024")
+		}
+		if c.HorizonAnalysis.EstimatedDuration.Duration < 10*time.Second || c.HorizonAnalysis.EstimatedDuration.Duration > c.HorizonAnalysis.JobTimeout.Duration {
+			problems = append(problems, "horizon_analysis.estimated_duration must be between 10s and job_timeout")
+		}
+	}
 	if strings.TrimSpace(c.Paths.Data) == "" || strings.TrimSpace(c.Paths.Temp) == "" {
 		problems = append(problems, "paths.data and paths.temp are required")
 	}
@@ -330,6 +379,9 @@ func (c Config) Validate() error {
 	}
 	if c.Algorithms.OverallCoherenceTimeWeight < 0 || c.Algorithms.OverallCoherenceTimeWeight > 1 {
 		problems = append(problems, "algorithms.overall_coherence_time_weight must be between 0 and 1")
+	}
+	if c.Algorithms.OverallOpticalTurbulenceMaxPenalty < 0 || c.Algorithms.OverallOpticalTurbulenceMaxPenalty > 1 {
+		problems = append(problems, "algorithms.overall_optical_turbulence_max_penalty must be between 0 and 1")
 	}
 	if c.Algorithms.OverallPossibleFogFactor < 0 || c.Algorithms.OverallPossibleFogFactor > 1 {
 		problems = append(problems, "algorithms.overall_possible_fog_factor must be between 0 and 1")

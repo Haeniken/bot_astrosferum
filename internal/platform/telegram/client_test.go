@@ -22,6 +22,103 @@ func TestUpdateShardPreservesChatAffinity(t *testing.T) {
 	if updateShard(bot.Update{ID: 3}, 6) != 0 {
 		t.Fatal("updates without messages must use shard zero")
 	}
+	action := bot.Update{ID: 4, Action: &bot.ActionInvocation{Chat: bot.Chat{ID: -12345}}}
+	if updateShard(action, 6) != updateShard(first, 6) {
+		t.Fatal("callbacks and messages for one chat must use one worker")
+	}
+}
+
+func TestGetUpdatesConvertsCallbackAndRequestsIt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/getUpdates" {
+			t.Errorf("request path = %q, want /getUpdates", request.URL.Path)
+		}
+		var payload struct {
+			AllowedUpdates []string `json:"allowed_updates"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.AllowedUpdates) != 2 || payload.AllowedUpdates[0] != "message" || payload.AllowedUpdates[1] != "callback_query" {
+			t.Fatalf("allowed_updates = %v", payload.AllowedUpdates)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"ok":true,"result":[{"update_id":7,"callback_query":{"id":"callback-1","from":{"id":9,"language_code":"en"},"message":{"message_id":5,"chat":{"id":42}},"data":"v1:horizon.v1:point"}}]}`))
+	}))
+	defer server.Close()
+
+	client := &Client{httpClient: server.Client(), endpoint: server.URL + "/"}
+	updates, err := client.getUpdates(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 || updates[0].Action == nil {
+		t.Fatalf("updates = %+v", updates)
+	}
+	action := updates[0].Action
+	if action.Token != "callback-1" || action.Data != "v1:horizon.v1:point" || action.Chat.ID != 42 || action.From == nil || action.From.ID != 9 {
+		t.Fatalf("action = %+v", action)
+	}
+}
+
+func TestSendMessageWithActionsAndAnswerAction(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/sendMessage":
+			var payload struct {
+				ChatID      int64 `json:"chat_id"`
+				ReplyMarkup struct {
+					InlineKeyboard [][]struct {
+						Text string `json:"text"`
+						Data string `json:"callback_data"`
+					} `json:"inline_keyboard"`
+				} `json:"reply_markup"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.ChatID != 42 || len(payload.ReplyMarkup.InlineKeyboard) != 1 || payload.ReplyMarkup.InlineKeyboard[0][0].Text != "Horizon" || payload.ReplyMarkup.InlineKeyboard[0][0].Data != "v1:horizon.v1:point" {
+				t.Fatalf("send payload = %+v", payload)
+			}
+		case "/answerCallbackQuery":
+			var payload struct {
+				ID   string `json:"callback_query_id"`
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.ID != "callback-1" || payload.Text != "Queued" {
+				t.Fatalf("answer payload = %+v", payload)
+			}
+		default:
+			t.Errorf("unexpected path %q", request.URL.Path)
+		}
+		_, _ = response.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	defer server.Close()
+
+	client := &Client{httpClient: server.Client(), endpoint: server.URL + "/"}
+	keyboard := bot.ActionKeyboard{{{Text: "Horizon", Data: "v1:horizon.v1:point"}}}
+	if err := client.SendMessageWithActions(context.Background(), 42, "Choose", keyboard); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AnswerAction(context.Background(), "callback-1", "Queued"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestActionKeyboardRejectsOversizedCallbackData(t *testing.T) {
+	_, err := encodeActionKeyboard(bot.ActionKeyboard{{{Text: "Horizon", Data: string(make([]byte, 65))}}})
+	if err == nil {
+		t.Fatal("oversized callback_data unexpectedly accepted")
+	}
 }
 
 func TestSendHTMLMessageWithKeyboardUsesHTMLParseMode(t *testing.T) {

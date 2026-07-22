@@ -28,17 +28,20 @@ const (
 	weatherMidCloudY      = 234
 	weatherHighCloudY     = 254
 	weatherTransparencyY  = 276
+	weatherLegendShift    = weatherPostCloudShift + 28
 )
 
 var (
-	weatherBackground = color.RGBA{R: 12, G: 42, B: 82, A: 255}
-	weatherDay        = color.RGBA{R: 16, G: 68, B: 119, A: 255}
-	weatherNight      = color.RGBA{R: 9, G: 35, B: 72, A: 255}
-	weatherGrid       = color.RGBA{R: 38, G: 83, B: 126, A: 255}
-	weatherText       = color.RGBA{R: 232, G: 239, B: 247, A: 255}
-	weatherMuted      = color.RGBA{R: 119, G: 153, B: 190, A: 255}
-	weatherOrange     = color.RGBA{R: 255, G: 124, B: 45, A: 255}
-	weatherCyan       = color.RGBA{R: 64, G: 192, B: 236, A: 255}
+	weatherBackground           = color.RGBA{R: 12, G: 42, B: 82, A: 255}
+	weatherDay                  = color.RGBA{R: 16, G: 68, B: 119, A: 255}
+	weatherBrightTwilight       = color.RGBA{R: 13, G: 53, B: 101, A: 255}
+	weatherAstronomicalTwilight = color.RGBA{R: 9, G: 37, B: 76, A: 255}
+	weatherNight                = color.RGBA{R: 4, G: 22, B: 51, A: 255}
+	weatherGrid                 = color.RGBA{R: 38, G: 83, B: 126, A: 255}
+	weatherText                 = color.RGBA{R: 232, G: 239, B: 247, A: 255}
+	weatherMuted                = color.RGBA{R: 119, G: 153, B: 190, A: 255}
+	weatherOrange               = color.RGBA{R: 255, G: 124, B: 45, A: 255}
+	weatherCyan                 = color.RGBA{R: 64, G: 192, B: 236, A: 255}
 )
 
 type weatherFonts struct {
@@ -64,14 +67,9 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		zone = time.UTC
 	}
 
-	for index, frame := range surface.Frames {
+	drawWeatherSolarBackground(canvas, sky, surface.Frames, left, columnWidth)
+	for index := range surface.Frames {
 		x0 := left + int(math.Floor(float64(index)*columnWidth))
-		x1 := left + int(math.Floor(float64(index+1)*columnWidth))
-		shade := weatherNight
-		if sky.IsDay(frame.ValidAt) {
-			shade = weatherDay
-		}
-		draw.Draw(canvas, image.Rect(x0, 48, x1, weatherMainBottom), &image.Uniform{C: shade}, image.Point{}, draw.Src)
 		if index > 0 {
 			drawLine(canvas, x0, 48, x0, weatherMainBottom, weatherGrid)
 		}
@@ -114,6 +112,26 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 	footer := fmt.Sprintf(localized(options, "Местное время точки · %s  |  ICON-EU run %s UTC", "Location local time · %s  |  ICON-EU run %s UTC"), timezoneLabel, surface.RunID)
 	drawText(canvas, fonts.small, 20, 1058, footer, weatherMuted)
 	return saveWeatherAtomic(canvas, destination)
+}
+
+func drawWeatherSolarBackground(canvas *image.RGBA, sky astronomy.Series, frames []forecast.SurfaceFrame, left int, columnWidth float64) {
+	first := frames[0].ValidAt
+	start := first.Add(-30 * time.Minute)
+	end := frames[len(frames)-1].ValidAt.Add(30 * time.Minute)
+	for _, interval := range solarPhaseIntervals(sky, start, end) {
+		x0 := left + int(math.Round((interval.Start.Sub(first).Hours()+0.5)*columnWidth))
+		x1 := left + int(math.Round((interval.End.Sub(first).Hours()+0.5)*columnWidth))
+		draw.Draw(canvas, image.Rect(x0, 48, x1, weatherMainBottom), &image.Uniform{C: weatherSolarPhaseColor(interval.Phase)}, image.Point{}, draw.Src)
+	}
+}
+
+func weatherSolarPhaseColor(phase solarPhase) color.RGBA {
+	return [...]color.RGBA{
+		weatherNight,
+		weatherAstronomicalTwilight,
+		weatherBrightTwilight,
+		weatherDay,
+	}[phase]
 }
 
 func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []forecast.SurfaceFrame, zone *time.Location, left int, columnWidth float64, options Options) {
@@ -219,7 +237,21 @@ func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Ser
 }
 
 func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) {
-	drawText(canvas, fonts.normalBold, 22, 832+weatherPostCloudShift, localized(options, "Легенда пиктограмм", "Icon legend"), weatherText)
+	drawText(canvas, fonts.normalBold, 22, 832+weatherPostCloudShift, localized(options, "Легенда", "Legend"), weatherText)
+	solarPhases := []struct {
+		phase  solarPhase
+		ru, en string
+	}{
+		{solarDay, "день ≥0°", "day ≥0°"},
+		{solarBrightTwilight, "светлые сумерки 0…−12°", "bright twilight 0…−12°"},
+		{solarAstronomicalTwilight, "астрономические сумерки −12…−18°", "astronomical twilight −12…−18°"},
+		{solarNight, "ночь <−18°", "night <−18°"},
+	}
+	for index, item := range solarPhases {
+		x := 240 + index*590
+		draw.Draw(canvas, image.Rect(x, 838, x+28, 858), &image.Uniform{C: weatherSolarPhaseColor(item.phase)}, image.Point{}, draw.Src)
+		drawText(canvas, fonts.small, x+38, 856, localized(options, item.ru, item.en), weatherText)
+	}
 	items := []struct {
 		x, y                 int
 		cloud, precipitation float64
@@ -227,29 +259,29 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) 
 		day                  bool
 		label                string
 	}{
-		{140, 854 + weatherPostCloudShift, 5, 0, 8, true, localized(options, "ясно, день", "clear, day")},
-		{760, 854 + weatherPostCloudShift, 5, 0, 8, false, localized(options, "ясно, ночь", "clear, night")},
-		{1380, 854 + weatherPostCloudShift, 45, 0, 8, true, localized(options, "переменная облачность, день", "partly cloudy, day")},
-		{2180, 854 + weatherPostCloudShift, 45, 0, 8, false, localized(options, "переменная облачность, ночь", "partly cloudy, night")},
-		{140, 889 + weatherPostCloudShift, 95, 0, 8, false, localized(options, "пасмурно", "overcast")},
-		{760, 889 + weatherPostCloudShift, 90, 1, 8, false, localized(options, "дождь", "rain")},
-		{1380, 889 + weatherPostCloudShift, 90, 1, 0, false, localized(options, "снег", "snow")},
+		{140, 854 + weatherLegendShift, 5, 0, 8, true, localized(options, "ясно, день", "clear, day")},
+		{760, 854 + weatherLegendShift, 5, 0, 8, false, localized(options, "ясно, ночь", "clear, night")},
+		{1380, 854 + weatherLegendShift, 45, 0, 8, true, localized(options, "переменная облачность, день", "partly cloudy, day")},
+		{2180, 854 + weatherLegendShift, 45, 0, 8, false, localized(options, "переменная облачность, ночь", "partly cloudy, night")},
+		{140, 889 + weatherLegendShift, 95, 0, 8, false, localized(options, "пасмурно", "overcast")},
+		{760, 889 + weatherLegendShift, 90, 1, 8, false, localized(options, "дождь", "rain")},
+		{1380, 889 + weatherLegendShift, 90, 1, 0, false, localized(options, "снег", "snow")},
 	}
 	for _, item := range items {
 		frame := forecast.SurfaceFrame{CloudCoverPercent: item.cloud, PrecipitationMM: item.precipitation, TemperatureC: item.temperature, DewPointC: item.temperature - 6}
 		drawWeatherIcon(canvas, item.x, item.y, 13, frame, item.day)
 		drawText(canvas, fonts.small, item.x+24, item.y+6, item.label, weatherText)
 	}
-	drawDrop(canvas, 2050, 884+weatherPostCloudShift, 8, weatherCyan)
-	drawText(canvas, fonts.small, 2072, 895+weatherPostCloudShift, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
-	drawDrop(canvas, 2650, 884+weatherPostCloudShift, 8, weatherOrange)
-	drawText(canvas, fonts.small, 2672, 895+weatherPostCloudShift, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
-	drawFog(canvas, 140, 914+weatherPostCloudShift, 18, weatherCyan)
-	drawText(canvas, fonts.small, 190, 930+weatherPostCloudShift, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
-	drawFog(canvas, 1200, 914+weatherPostCloudShift, 18, weatherOrange)
-	drawText(canvas, fonts.small, 1250, 930+weatherPostCloudShift, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
-	drawText(canvas, fonts.normal, 22, 958+weatherPostCloudShift, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
-	drawText(canvas, fonts.normal, 22, 986+weatherPostCloudShift, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
+	drawDrop(canvas, 2050, 884+weatherLegendShift, 8, weatherCyan)
+	drawText(canvas, fonts.small, 2072, 895+weatherLegendShift, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
+	drawDrop(canvas, 2650, 884+weatherLegendShift, 8, weatherOrange)
+	drawText(canvas, fonts.small, 2672, 895+weatherLegendShift, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
+	drawFog(canvas, 140, 914+weatherLegendShift, 18, weatherCyan)
+	drawText(canvas, fonts.small, 190, 930+weatherLegendShift, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
+	drawFog(canvas, 1200, 914+weatherLegendShift, 18, weatherOrange)
+	drawText(canvas, fonts.small, 1250, 930+weatherLegendShift, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
+	drawText(canvas, fonts.normal, 22, 958+weatherLegendShift, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
+	drawText(canvas, fonts.normal, 22, 986+weatherLegendShift, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
 }
 
 func englishMoonPhase(value string) string {

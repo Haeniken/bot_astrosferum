@@ -26,7 +26,7 @@ import (
 const (
 	DefaultWidth  = 1280
 	DefaultHeight = 960
-	Version       = "render-v14-readable-axis-scales"
+	Version       = "render-v15-four-solar-bands"
 )
 
 type Options struct {

@@ -21,42 +21,36 @@ import (
 
 const StartHelp = `Привет! Я строю астрономический прогноз для выбранной точки.
 
-Как запросить прогноз:
+Как запросить:
 • нажмите «📍 Отправить геопозицию»;
-• отправьте текстом: 59.9386, 30.3141;
-• используйте: /forecast 59.9386 30.3141.
-• «💾 Сохранить координаты» хранит до 10 точек; выбор — «📌 Мои точки», удаление — /deletepoint N.
+• отправьте 59.9386, 30.3141 или /forecast 59.9386 30.3141;
+• можно сохранить до 10 точек: «💾 Сохранить координаты», «📌 Мои точки», /deletepoint N.
 
-Вне ICON-EU — ICON Global; нативный TKE до +48 ч, поэтому Overall короче остальных графиков.
+Вне ICON-EU используется ICON Global. Там нативный TKE доступен до +48 ч, поэтому Overall короче остальных графиков.
 
 Как читать результат:
 
-Высотные графики: по горизонтали — местное время; слева — давление, справа — высота ICON (850 hPa ≈ 1,5 км); светлее — больше, шкала под картой.
+Высотные карты: по горизонтали — местное время; слева давление, справа высота ICON (850 hPa ≈ 1,5 км); светлее — больше, шкала снизу.
 
-1. Почасовая погода на 72 часа: условия, ветер, влажность, T−Td, туман и события светил. Капля — защита от росы; она не означает плохой сиинг. «Прозрачность %» — сравнительная оценка по облакам, VIS и PWV, не экстинкция.
+1. Погода на 72 часа: облака, ветер, влажность, T−Td, туман и события светил. Капля — защита от росы; она не означает плохой сиинг. «Прозрачность %» — proxy по облакам, VIS и PWV, не измеренная экстинкция.
 
-Облака Н/С/В и астрономия:
-• нижние закрывают объект и отражают засветку;
-• средние гасят свет и контраст, дают неоднородный фон;
-• верхние повышают фон и портят длинные выдержки и фотометрию;
-• в погодной таблице белый <10%, синий 10–49%, оранжевый ≥50%; это покрытие, не оптическая толщина;
-• облачность не меняет wind-based seeing, но может исключить наблюдение или съёмку.
+Облака: нижние закрывают объект и отражают засветку; средние гасят сигнал и контраст; верхние повышают фон и портят длинные выдержки/фотометрию. Цифры покрытия: белые <10%, синие 10–49%, оранжевые ≥50%; это не оптическая толщина; облачность не меняет wind-based seeing.
 
-2. Overall Astronomy Index — пригодность 1…10: гибридный сиинг ICON (TKE до динамической MH 500–2000 м AGL + HMNSP99 выше), τ₀, эффективная облачная преграда и туман; приземный ветер штрафует слабо, роса не влияет. MH — почасовая высота перемешанного слоя ICON. Внутри: сиинг / τ₀, мс / T% пропускания; f/F — возможный/высокий риск тумана. Фон: день/сумерки/ночь.
+2. Overall Astronomy Index, 1…10: гибридный сиинг ICON (TKE до динамической MH 500–2000 м AGL + HMNSP99 выше), τ₀, облачная преграда и туман. Приземный ветер штрафует слабо, роса не влияет. HHL задаёт AGL-высоты; MH — почасовая высота перемешанного слоя. В ячейке: сиинг / τ₀ мс / T% пропускания; f/F — риск тумана; фон — день/сумерки/ночь.
 
-3. Эффективная облачная преграда ICON — CLC+QC/QI и толщина слоя: 0% почти не мешает, 100% непрозрачно; тонкие верхние облака влияют слабее плотных нижних.
+3. Эффективная облачная преграда ICON — CLC+QC/QI и толщина: 0% почти ясно, 100% непрозрачно; тонкие верхние облака слабее плотных нижних.
 
-4. Wind Speed, m/s — ветер по высоте. Сильный ветер на 300–200 hPa часто означает струйное течение; у земли раскачивает телескоп.
+4. Wind Speed — ветер по высоте; сильный поток на 300–200 hPa часто означает струйное течение, у земли может раскачивать телескоп.
 
-5. Vector Wind Shear, m/s/km — векторный сдвиг с поправкой на фактическое расстояние; больше — выше риск турбулентности.
+5. Vector Wind Shear, m/s/km — векторный сдвиг на фактический километр высоты; больше — выше риск турбулентности.
 
-6. Wind Direction Delta, ° — поворот ветра; при скорости ниже 2 м/с показан как 0°, поскольку вклад почти штилевого потока мал.
+6. Wind Direction Delta — поворот ветра; ниже 2 м/с показан 0°, потому что направление почти штилевого потока неустойчиво и малозначимо.
 
-7. Forecast Wind Seeing Index — оценка по ветру 1…10. Текст 96% — условная уверенность только по дальности срока; в Overall Index она не входит.
+7. Forecast Wind Seeing Index, 1…10 — оценка только по ветру. Процент — условная уверенность по дальности срока; в Overall Index она не входит.
 
-Засветка: LPI/SQM для координат по Atlas 2024 и отдельное сравнение с World Atlas 2015; Бортль — ориентир по зениту и в Overall Index не входит.
+Засветка: LPI/SQM по Atlas 2024 и World Atlas 2015; Бортль — ориентир по зениту, в Overall не входит.
 
-Время — в часовой зоне координат. Сиинг — модельная оценка, не измерение DIMM и не шкала Пикеринга.`
+Время — в часовой зоне точки. Сиинг — модельная оценка, не DIMM и не шкала Пикеринга.`
 
 const NotReadyText = `Координаты распознаны, но выдача рабочего ICON-прогноза ещё разворачивается. Синтетические данные я пользователям не отправляю.`
 
@@ -115,6 +109,8 @@ type Handler struct {
 	worldAtlas2015      LightPollutionProvider
 	persistence         Persistence
 	admins              map[int64]struct{}
+	actions             ActionRouter
+	horizon             *HorizonJobs
 	sessionMu           sync.Mutex
 	sessions            map[int64]saveSession
 	logf                func(string, ...any)
@@ -162,7 +158,45 @@ func NewHandler(messenger Messenger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, fallbackMaxStaleAge: 18 * time.Hour, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, sessions: map[int64]saveSession{}}, nil
+	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, fallbackMaxStaleAge: 18 * time.Hour, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, actions: ActionRouter{}, sessions: map[int64]saveSession{}}, nil
+}
+
+func (handler *Handler) EnableActions(actions ActionRouter) error {
+	if len(actions) == 0 {
+		return errors.New("at least one action is required")
+	}
+	for id, action := range actions {
+		if !validActionID(id) || action == nil {
+			return fmt.Errorf("invalid action registration %q", id)
+		}
+		if _, exists := handler.actions[id]; exists {
+			return fmt.Errorf("action %q is already registered", id)
+		}
+		handler.actions[id] = action
+	}
+	return nil
+}
+
+// EnableHorizon attaches one shared heavy-job service to this platform's thin
+// handler. Telegram and VK call it with the same HorizonJobs instance and
+// their own platform name/messenger adapter.
+func (handler *Handler) EnableHorizon(platform string, jobs *HorizonJobs) error {
+	if jobs == nil {
+		return errors.New("horizon jobs are required")
+	}
+	messenger, ok := handler.messenger.(HorizonMessenger)
+	if !ok {
+		return errors.New("messenger does not support horizon actions")
+	}
+	action, err := jobs.ActionHandler(platform, messenger)
+	if err != nil {
+		return err
+	}
+	if err := handler.EnableActions(ActionRouter{HorizonActionID: action}); err != nil {
+		return err
+	}
+	handler.horizon = jobs
+	return nil
 }
 
 func (handler *Handler) SetForecastMaxStaleAge(maxAge time.Duration) error {
@@ -217,6 +251,9 @@ func (handler *Handler) EnableLightPollution(provider LightPollutionProvider) er
 }
 
 func (handler *Handler) Handle(ctx context.Context, update Update) error {
+	if update.Action != nil {
+		return handler.handleAction(ctx, *update.Action)
+	}
 	if update.Message == nil {
 		return nil
 	}
@@ -243,7 +280,7 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 		command = command[:at]
 	}
 	if command == "/start" || command == "/help" {
-		return handler.sendMainKeyboard(ctx, message.Chat.ID, startHelp(language), userID, language)
+		return handler.sendMainKeyboard(ctx, message.Chat.ID, startHelp(language, handler.horizon != nil), userID, language)
 	}
 	if command == "/cancel" {
 		handler.clearSession(userID)
@@ -293,6 +330,45 @@ func (handler *Handler) Handle(ctx context.Context, update Update) error {
 		return nil
 	}
 	return handler.replyToLocation(ctx, message.Chat.ID, userID, latitude, longitude, language)
+}
+
+func (handler *Handler) handleAction(ctx context.Context, invocation ActionInvocation) error {
+	messenger, ok := handler.messenger.(ActionMessenger)
+	if !ok {
+		return nil
+	}
+	language := languageEnglish
+	userID := invocation.Chat.ID
+	if invocation.From != nil {
+		language = languageFromCode(invocation.From.LanguageCode)
+		if invocation.From.ID > 0 {
+			userID = invocation.From.ID
+		}
+	}
+	err := handler.actions.Route(ctx, invocation)
+	if err == nil {
+		handler.touchActionUser(ctx, userID)
+		return nil
+	}
+	if errors.Is(err, ErrInvalidActionData) || errors.Is(err, ErrUnsupportedAction) || errors.Is(err, ErrUnregisteredAction) {
+		handler.logf("rejected action: %v", err)
+		answerErr := messenger.AnswerAction(ctx, invocation.Token, language.text(
+			"Кнопка устарела или недоступна. Запросите прогноз снова.",
+			"This button is stale or unavailable. Request the forecast again."))
+		handler.touchActionUser(ctx, userID)
+		return answerErr
+	}
+	handler.touchActionUser(ctx, userID)
+	return err
+}
+
+func (handler *Handler) touchActionUser(ctx context.Context, userID int64) {
+	if handler.persistence == nil {
+		return
+	}
+	if err := handler.persistence.TouchUser(ctx, userID); err != nil {
+		handler.logf("touch platform user from action: %v", err)
+	}
 }
 
 func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int64, latitude, longitude float64, language userLanguage) error {
@@ -378,6 +454,13 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			cloudSeries, hasCloud = cloud, true
 		}
 	}
+	if !forecastInputsShareRun(series, surface, surfaceError, cloud, cloudError) {
+		handler.logf("forecast request %d rejected mixed model runs during acquisition", requestID)
+		return handler.sendUserMessage(ctx, chatID, language.text(
+			"Во время расчёта появился новый model run. Повторите запрос — прогноз будет построен уже по свежим данным.",
+			"A new model run appeared while the data were being read. Repeat the request to use the fresh run."),
+			true, language)
+	}
 	dataDuration := time.Since(dataStarted)
 	renderStarted := time.Now()
 	requestRenderOptions := handler.renderOptions
@@ -413,7 +496,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 				charts.Weather, hasWeather = "", false
 			}
 		}
-		if hasWeather {
+		if hasWeather && hasCloud {
 			overallFrames, overallError := forecast.ComputeHourlyOverallIndex(series, surfaceSeries, cloudSeries, handler.overallCalibration)
 			if overallError != nil {
 				handler.logf("forecast request %d overall index calculation failed: %v", requestID, overallError)
@@ -463,6 +546,12 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		"%s run %s UTC\n%s\nPeriod: %s — %s\nGrid: %s\nOptical turbulence: %s; %s"),
 		modelName, series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), maxStaleAge, language), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
 		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion, turbulenceText)
+	if hasCloud {
+		summary += fmt.Sprintf(language.text(
+			"\nМодельная высота поверхности: %.0f м над уровнем моря (ICON HHL).",
+			"\nModel surface elevation: %.0f m above mean sea level (ICON HHL)."),
+			cloudSeries.SurfaceElevationM)
+	}
 	if lightPollutionChannel != nil {
 		select {
 		case result := <-lightPollutionChannel:
@@ -549,7 +638,48 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		requestID, dataDuration.Round(time.Millisecond), renderDuration.Round(time.Millisecond), renderCacheHit,
 		time.Since(sendStarted).Round(time.Millisecond), time.Since(requestStarted).Round(time.Millisecond))
 	successful = true
+	if hasWeather && hasCloud && hasOverall &&
+		series.RunID == surfaceSeries.RunID && series.RunID == cloudSeries.RunID {
+		handler.offerHorizon(ctx, chatID, requestID, series.Provider, series.RunID, location, cloudSeries.SurfaceElevationM, language)
+	}
 	return nil
+}
+
+func forecastInputsShareRun(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, surfaceErr error, cloud forecast.CloudSeries, cloudErr error) bool {
+	if surfaceErr == nil && (surface.Provider != vertical.Provider || surface.RunID != vertical.RunID || !surface.BaseTime.Equal(vertical.BaseTime)) {
+		return false
+	}
+	if cloudErr == nil && (cloud.Provider != vertical.Provider || cloud.RunID != vertical.RunID || !cloud.BaseTime.Equal(vertical.BaseTime)) {
+		return false
+	}
+	return true
+}
+
+func (handler *Handler) offerHorizon(ctx context.Context, chatID int64, requestID uint64, provider, runID string, location forecast.Location, surfaceElevationM float64, language userLanguage) {
+	if handler.horizon == nil || provider != HorizonProviderICONEU {
+		return
+	}
+	button, err := handler.horizon.Button(HorizonButtonRequest{
+		Provider: provider, RunID: runID, Location: location,
+		ObserverSurfaceElevationM: surfaceElevationM,
+	}, language.renderCode())
+	if err != nil {
+		if !errors.Is(err, ErrHorizonUnsupported) && !errors.Is(err, ErrHorizonStaleAction) {
+			handler.logf("forecast request %d horizon action unavailable: %v", requestID, err)
+		}
+		return
+	}
+	messenger, ok := handler.messenger.(ActionMessenger)
+	if !ok {
+		return
+	}
+	prompt := language.text(
+		"Дополнительный анализ: 73 почасовых срока периода ICON-EU f000…f072, восемь направлений на высоте 10°. Первые сроки уже могут быть в прошлом — ориентируйтесь на подписанную шкалу времени.",
+		"Optional analysis: 73 hourly terms across ICON-EU f000…f072, eight directions at 10° elevation. The earliest terms may already be in the past; use the labeled time axis.",
+	)
+	if err := messenger.SendMessageWithActions(ctx, chatID, prompt, ActionKeyboard{{button}}); err != nil {
+		handler.logf("forecast request %d horizon action prompt failed: %v", requestID, err)
+	}
 }
 
 func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration, language userLanguage) string {

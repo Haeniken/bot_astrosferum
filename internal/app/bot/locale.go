@@ -31,11 +31,21 @@ func (language userLanguage) renderCode() string {
 	return "ru"
 }
 
-func startHelp(language userLanguage) string {
+func startHelp(language userLanguage, includeHorizon bool) string {
+	help := StartHelp
+	marker := "\n\nЗасветка:"
 	if language == languageEnglish {
-		return StartHelpEN
+		help = StartHelpEN
+		marker = "\n\nLight pollution:"
 	}
-	return StartHelp
+	if !includeHorizon {
+		return help
+	}
+	item := language.text(
+		"8. «Горизонт» (только ICON-EU) — отдельный медленный почасовой расчёт всего периода run f000…f072 на высоте 10° по 8 азимутам: индекс, главный ограничитель и качество данных.",
+		"8. “Horizon” (ICON-EU only) — a separate slower hourly calculation for the full f000…f072 run period at 10° elevation in eight azimuths. It shows the index, principal limiter, and input-data quality.",
+	)
+	return strings.Replace(help, marker, "\n\n"+item+marker, 1)
 }
 
 func defaultKeyboard(language userLanguage) Keyboard {
@@ -72,7 +82,7 @@ Cloud layers and astronomy:
 • in the weather table, white is <10%, blue is 10–49%, and orange is ≥50%; this is cover, not optical thickness;
 • clouds do not change wind-based seeing, but can prevent observing or imaging.
 
-2. Overall Astronomy Index — suitability from 1 to 10: hybrid ICON seeing (TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above), τ₀, effective cloud obstruction, and fog. Surface wind has a mild penalty; dew has none. MH is the hourly ICON mixed-layer depth. Labels show seeing / τ₀ ms / T% transmission; f/F means possible/high fog. Background means day/twilight/night.
+2. Overall Astronomy Index — suitability from 1 to 10: hybrid ICON seeing (TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above), τ₀, effective cloud obstruction, and fog. Surface wind has a mild penalty; dew has none. ICON HHL sets the AGL geometry of the model surface, boundary layer, and clouds but gives no separate altitude bonus. Labels show seeing / τ₀ ms / T% transmission; f/F means possible/high fog. Background means day/twilight/night.
 
 3. ICON Effective Cloud Obstruction — CLC+QC/QI and layer thickness: 0% is nearly clear, 100% is opaque; thin high clouds matter less than dense low clouds.
 

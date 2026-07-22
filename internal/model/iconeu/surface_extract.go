@@ -134,14 +134,21 @@ func ExtractSurfaceFrame(ctx context.Context, runner CommandRunner, path string,
 		}
 		values[canonicalSurfaceShortName(fields[0])] = value
 	}
+	if err := scanner.Err(); err != nil {
+		return ExtractedSurface{}, err
+	}
+	return surfaceFromValues(values, validAt, filepath.Base(path))
+}
+
+func surfaceFromValues(values map[string]float64, validAt time.Time, sourceName string) (ExtractedSurface, error) {
 	for _, shortName := range []string{"2t", "2d", "2r", "CLCT", "tp", "10u", "10v", "prmsl", "mld"} {
 		if _, ok := values[shortName]; !ok {
-			return ExtractedSurface{}, fmt.Errorf("%s is missing %s", filepath.Base(path), shortName)
+			return ExtractedSurface{}, fmt.Errorf("%s is missing %s", sourceName, shortName)
 		}
 	}
 	mixedLayerDepthM := values["mld"]
 	if math.IsNaN(mixedLayerDepthM) || math.IsInf(mixedLayerDepthM, 0) || mixedLayerDepthM < 0 {
-		return ExtractedSurface{}, fmt.Errorf("%s has invalid mixed-layer depth %v m", filepath.Base(path), mixedLayerDepthM)
+		return ExtractedSurface{}, fmt.Errorf("%s has invalid mixed-layer depth %v m", sourceName, mixedLayerDepthM)
 	}
 	// Old manifests remain readable while a richer hourly field set is being
 	// published. Until the atomic switch, total cover is the honest fallback

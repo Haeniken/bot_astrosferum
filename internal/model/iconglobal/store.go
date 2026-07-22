@@ -78,8 +78,12 @@ func (store *Store) Vertical(ctx context.Context, location forecast.Location) (f
 	if err != nil {
 		return forecast.VerticalSeries{}, err
 	}
-	bundle.Vertical.Location = location
-	return bundle.Vertical, nil
+	series := bundle.Vertical
+	series.Location = location
+	// As with ICON-EU, cached point values are raw model inputs. The derived
+	// algorithm marker must always describe the code serving this response.
+	series.AlgorithmVersion = forecast.SeeingPrototypeVersion
+	return series, nil
 }
 
 func (store *Store) Surface(ctx context.Context, location forecast.Location) (forecast.SurfaceSeries, error) {
