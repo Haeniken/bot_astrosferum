@@ -151,11 +151,20 @@ func DefaultKeyboard() Keyboard {
 }
 
 func (client *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard) error {
+	return client.sendMessageWithKeyboard(ctx, chatID, text, keyboard, "")
+}
+
+func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard) error {
+	return client.sendMessageWithKeyboard(ctx, chatID, text, keyboard, "HTML")
+}
+
+func (client *Client) sendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard Keyboard, parseMode string) error {
 	payload := struct {
 		ChatID      int64  `json:"chat_id"`
 		Text        string `json:"text"`
+		ParseMode   string `json:"parse_mode,omitempty"`
 		ReplyMarkup any    `json:"reply_markup,omitempty"`
-	}{ChatID: chatID, Text: text}
+	}{ChatID: chatID, Text: text, ParseMode: parseMode}
 	if len(keyboard) > 0 {
 		rows := make([][]map[string]any, 0, len(keyboard))
 		for _, row := range keyboard {
@@ -189,6 +198,9 @@ func (client *Client) SendPhoto(ctx context.Context, chatID int64, path, caption
 		if err := writer.WriteField("caption", caption); err != nil {
 			return fmt.Errorf("encode Telegram photo caption: %w", err)
 		}
+		if err := writer.WriteField("parse_mode", "HTML"); err != nil {
+			return fmt.Errorf("encode Telegram photo parse mode: %w", err)
+		}
 	}
 	part, err := writer.CreateFormFile("photo", filepath.Base(path))
 	if err != nil {
@@ -201,6 +213,41 @@ func (client *Client) SendPhoto(ctx context.Context, chatID int64, path, caption
 		return fmt.Errorf("finish Telegram photo request: %w", err)
 	}
 	return client.callBody(ctx, "sendPhoto", writer.FormDataContentType(), &body, nil)
+}
+
+func (client *Client) SendDocument(ctx context.Context, chatID int64, path, caption string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open rendered chart: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return fmt.Errorf("encode Telegram document chat: %w", err)
+	}
+	if caption != "" {
+		if err := writer.WriteField("caption", caption); err != nil {
+			return fmt.Errorf("encode Telegram document caption: %w", err)
+		}
+		if err := writer.WriteField("parse_mode", "HTML"); err != nil {
+			return fmt.Errorf("encode Telegram document parse mode: %w", err)
+		}
+	}
+	if err := writer.WriteField("disable_content_type_detection", "true"); err != nil {
+		return fmt.Errorf("encode Telegram document options: %w", err)
+	}
+	part, err := writer.CreateFormFile("document", filepath.Base(path))
+	if err != nil {
+		return fmt.Errorf("encode Telegram document: %w", err)
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return fmt.Errorf("read rendered chart: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("finish Telegram document request: %w", err)
+	}
+	return client.callBody(ctx, "sendDocument", writer.FormDataContentType(), &body, nil)
 }
 
 func (client *Client) getUpdates(ctx context.Context, offset int64) ([]Update, error) {

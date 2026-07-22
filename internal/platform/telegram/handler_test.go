@@ -15,8 +15,9 @@ type sentMessage struct {
 }
 
 type fakeMessenger struct {
-	messages []sentMessage
-	photos   []string
+	messages  []sentMessage
+	photos    []string
+	documents []string
 }
 
 func (messenger *fakeMessenger) SendPhoto(_ context.Context, _ int64, path, _ string) error {
@@ -24,6 +25,14 @@ func (messenger *fakeMessenger) SendPhoto(_ context.Context, _ int64, path, _ st
 		return err
 	}
 	messenger.photos = append(messenger.photos, path)
+	return nil
+}
+
+func (messenger *fakeMessenger) SendDocument(_ context.Context, _ int64, path, _ string) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	messenger.documents = append(messenger.documents, path)
 	return nil
 }
 
@@ -124,7 +133,7 @@ func TestForecastFreshnessText(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
 
 	fresh := forecastFreshnessText(now.Add(-9*time.Hour-17*time.Minute), now, 12*time.Hour, languageRussian)
-	for _, expected := range []string{"Актуальность данных (freshness)", "последний полный run", "9 ч 17 мин", "порог предупреждения 12 ч 0 мин"} {
+	for _, expected := range []string{"Актуальность данных:", "9 ч 17 мин"} {
 		if !strings.Contains(fresh, expected) {
 			t.Fatalf("fresh status %q does not contain %q", fresh, expected)
 		}
@@ -141,7 +150,7 @@ func TestForecastFreshnessText(t *testing.T) {
 func TestForecastFreshnessTreatsClockSkewAsZeroAge(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 15, 30, 0, 0, time.UTC)
 	status := forecastFreshnessText(now.Add(time.Minute), now, 12*time.Hour, languageRussian)
-	if !strings.Contains(status, "последний полный run, возраст 0 мин") {
+	if status != "Актуальность данных: 0 мин" {
 		t.Fatalf("unexpected clock-skew status: %q", status)
 	}
 }

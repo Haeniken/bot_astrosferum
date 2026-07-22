@@ -65,10 +65,15 @@ const defaultForecastMaxStaleAge = 12 * time.Hour
 type Messenger interface {
 	SendMessage(ctx context.Context, chatID int64, text string, locationButton bool) error
 	SendPhoto(ctx context.Context, chatID int64, path, caption string) error
+	SendDocument(ctx context.Context, chatID int64, path, caption string) error
 }
 
 type KeyboardMessenger interface {
 	SendMessageWithKeyboard(context.Context, int64, string, Keyboard) error
+}
+
+type HTMLKeyboardMessenger interface {
+	SendHTMLMessageWithKeyboard(context.Context, int64, string, Keyboard) error
 }
 
 type Persistence interface {
@@ -314,7 +319,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		return handler.sendUserMessage(ctx, chatID, text, true, language)
 	}
 	if err := handler.sendUserMessage(ctx, chatID,
-		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nСтрою самый свежий доступный прогноз ICON…", "Location accepted: %.4f, %.4f\nTime zone: %s\nBuilding the freshest available ICON forecast…"), latitude, longitude, label), true, language); err != nil {
+		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nРассчитываю прогноз по свежим доступным данным…", "Location accepted: %.4f, %.4f\nTime zone: %s\nCalculating the forecast from the freshest available data…"), latitude, longitude, label), true, language); err != nil {
 		return err
 	}
 	type lightPollutionResult struct {
@@ -414,7 +419,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 				handler.logf("forecast request %d overall index calculation failed: %v", requestID, overallError)
 			} else {
 				charts.OverallIndex = filepath.Join(requestDirectory, "overall-astronomy-index-hourly.png")
-				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: 3200, Height: 960, Language: language.renderCode()}); renderError == nil {
+				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: language.renderCode()}); renderError == nil {
 					hasOverall = true
 				} else {
 					handler.logf("forecast request %d overall index render failed: %v", requestID, renderError)
@@ -463,10 +468,10 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		case result := <-lightPollutionChannel:
 			if result.err != nil {
 				handler.logf("forecast request %d light-pollution lookup failed: %v", requestID, result.err)
-				summary += language.text("\nЗасветка: оценка временно недоступна.", "\nLight pollution: estimate temporarily unavailable.")
+				summary += language.text("\n\nЗасветка: оценка временно недоступна.", "\n\nLight pollution: estimate temporarily unavailable.")
 			} else {
-				summary += fmt.Sprintf(language.text("\nЗасветка: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (Light Pollution Atlas %d, зенит, интерполяция 30″).", "\nLight pollution: LPI %.2f, SQM %.2f mag/arcsec², Bortle reference %s (Light Pollution Atlas %d, zenith, 30″ interpolation)."),
-					result.estimate.LPI, result.estimate.SQM, result.estimate.BortleDisplay, result.estimate.Year)
+				summary += fmt.Sprintf(language.text("\n\nЗасветка: ориентир Бортля <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d).", "\n\nLight pollution: Bortle reference <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d)."),
+					result.estimate.BortleDisplay, result.estimate.LPI, result.estimate.SQM, result.estimate.Year)
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -477,20 +482,22 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		case result := <-worldAtlasChannel:
 			if result.err != nil {
 				handler.logf("forecast request %d World Atlas 2015 lookup failed: %v", requestID, result.err)
-				summary += language.text("\nСравнение World Atlas 2015: оценка временно недоступна.", "\nWorld Atlas 2015 comparison: estimate temporarily unavailable.")
+				summary += language.text("\nСравнение засветки: оценка World Atlas 2015 временно недоступна.", "\nLight pollution comparison: World Atlas 2015 estimate temporarily unavailable.")
 			} else {
-				summary += fmt.Sprintf(language.text("\nСравнение World Atlas 2015: LPI %.2f, SQM %.2f mag/arcsec², ориентир Бортля %s (зенит, интерполяция 30″).", "\nWorld Atlas 2015 comparison: LPI %.2f, SQM %.2f mag/arcsec², Bortle reference %s (zenith, 30″ interpolation)."), result.estimate.LPI, result.estimate.SQM, result.estimate.BortleDisplay)
+				summary += fmt.Sprintf(language.text("\nСравнение засветки: ориентир Бортля <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², World Atlas 2015).", "\nLight pollution comparison: Bortle reference <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², World Atlas 2015)."), result.estimate.BortleDisplay, result.estimate.LPI, result.estimate.SQM)
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	if err := handler.sendUserMessage(ctx, chatID, summary, true, language); err != nil {
+	if err := handler.sendHTMLUserMessage(ctx, chatID, summary, true, language); err != nil {
 		return err
 	}
-	photos := make([]struct {
+	type chartDelivery struct {
 		path, caption string
-	}, 0, 7)
+		asDocument    bool
+	}
+	deliveries := make([]chartDelivery, 0, 7)
 	total := 4
 	if hasWeather {
 		total++
@@ -503,37 +510,40 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	number := 1
 	if hasWeather {
-		photos = append(photos, struct{ path, caption string }{charts.Weather, fmt.Sprintf(language.text("%d/%d · Почасовая погода и небесные события на 72 часа", "%d/%d · Hourly weather and celestial events for 72 hours"), number, total)})
+		deliveries = append(deliveries, chartDelivery{charts.Weather, fmt.Sprintf(language.text("<b>%d/%d · Почасовая погода и небесные события на 72 часа.</b>\n<i>Показывает облака, осадки, температуру, ветер, влажность, риск росы и тумана, а также события Солнца, Луны и планет. Помогает выбрать тёмные часы без мешающей погоды и заранее подготовить оборудование.</i>", "<b>%d/%d · Hourly weather and celestial events for 72 hours.</b>\n<i>Shows clouds, precipitation, temperature, wind, humidity, dew and fog risk, plus Sun, Moon, and planet events. Use it to select dark hours without obstructive weather and prepare equipment in advance.</i>"), number, total), true})
 		number++
 	}
 	if hasOverall {
-		overallCaption := language.text("%d/%d · Общий почасовой индекс: ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, τ₀, облачная преграда и туман", "%d/%d · Overall hourly index: ICON TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above, τ₀, cloud obstruction, and fog")
-		if series.Provider == "icon-global" {
-			overallCaption = language.text("%d/%d · Общий почасовой индекс до последнего Global TKE (+48 ч): TKE + HMNSP99, τ₀ и native model-level облачная преграда; VIS недоступен", "%d/%d · Overall hourly index through the last Global TKE (+48 h): TKE + HMNSP99, τ₀, and native model-level cloud obstruction; VIS is unavailable")
-		}
-		photos = append(photos, struct{ path, caption string }{charts.OverallIndex, fmt.Sprintf(overallCaption, number, total)})
+		deliveries = append(deliveries, chartDelivery{charts.OverallIndex, fmt.Sprintf(language.text("<b>%d/%d · Общий астрономический индекс.</b>\n<i>Сводная почасовая оценка помогает быстро выбрать наиболее перспективные окна. Это ориентир для планирования, а не измерение: перед выездом стоит проверить остальные диагностические графики.</i>", "<b>%d/%d · Overall Astronomy Index.</b>\n<i>This combined hourly estimate helps shortlist the most promising windows. It is a planning aid rather than a measurement, so inspect the remaining diagnostic charts before committing to a session.</i>"), number, total), true})
 		number++
 	}
 	if hasCloud {
-		photos = append(photos, struct{ path, caption string }{charts.CloudObstruction, fmt.Sprintf(language.text("%d/%d · Эффективная облачная преграда ICON: покрытие и жидкий/ледяной конденсат по фактической высоте", "%d/%d · ICON effective cloud obstruction: cover and liquid/ice condensate by actual height"), number, total)})
+		deliveries = append(deliveries, chartDelivery{charts.CloudObstruction, fmt.Sprintf(language.text("<b>%d/%d · Эффективная облачная преграда:</b> покрытие и жидкий/ледяной конденсат по фактической высоте.\n<i>Карта показывает, когда и на какой высоте ожидается оптически значимая облачность. Она помогает отличить плотные нижние облака от менее мешающих верхних и оценить пригодность окна для съёмки или фотометрии.</i>", "<b>%d/%d · Effective cloud obstruction:</b> cover and liquid/ice condensate by actual height.\n<i>This chart shows when and at what altitude optically significant cloud is expected. It helps distinguish dense low cloud from less obstructive high cloud and assess whether imaging or photometry is practical.</i>"), number, total), true})
 		number++
 	}
-	photos = append(photos,
-		struct{ path, caption string }{charts.WindSpeed, fmt.Sprintf(language.text("%d/%d · Скорость ветра по уровням давления", "%d/%d · Wind speed by pressure level"), number, total)},
-		struct{ path, caption string }{charts.VectorShear, fmt.Sprintf(language.text("%d/%d · Вертикальный векторный сдвиг ветра, м/с на км", "%d/%d · Vertical vector wind shear, m/s per km"), number+1, total)},
-		struct{ path, caption string }{charts.DirectionDelta, fmt.Sprintf(language.text("%d/%d · Изменение направления между соседними уровнями", "%d/%d · Wind direction change between adjacent levels"), number+2, total)},
-		struct{ path, caption string }{charts.SeeingIndex, fmt.Sprintf(language.text("%d/%d · Прогнозный индекс сиинга по ветру; уверенность — только по дальности срока и в Overall Index не входит", "%d/%d · Forecast wind seeing index; confidence depends only on lead time and is not part of the Overall Index"), number+3, total)},
+	deliveries = append(deliveries,
+		chartDelivery{charts.WindSpeed, fmt.Sprintf(language.text("<b>%d/%d · Скорость ветра по уровням давления.</b>\n<i>Вертикальный профиль выявляет слои сильного ветра и струйное течение. Они могут ухудшать стабильность изображения и ведение, хотя одна скорость ветра не является прямым измерением seeing.</i>", "<b>%d/%d · Wind speed by pressure level.</b>\n<i>The vertical profile exposes strong-flow layers and the jet stream. These can degrade image stability or tracking, although wind speed alone is not a direct seeing measurement.</i>"), number, total), false},
+		chartDelivery{charts.VectorShear, fmt.Sprintf(language.text("<b>%d/%d · Вертикальный векторный сдвиг ветра, м/с на км.</b>\n<i>Показывает, насколько быстро полный вектор ветра меняется на километр высоты. Яркие слои отмечают вероятные границы генерации турбулентности и часы с менее устойчивым мелкомасштабным изображением.</i>", "<b>%d/%d · Vertical vector wind shear, m/s per km.</b>\n<i>Shows how quickly the full wind vector changes per kilometre. Bright layers identify likely turbulence-producing boundaries and hours with less stable fine-detail imaging.</i>"), number+1, total), false},
+		chartDelivery{charts.DirectionDelta, fmt.Sprintf(language.text("<b>%d/%d · Изменение направления между соседними уровнями.</b>\n<i>График выделяет поворот ветра между соседними уровнями. Его нужно читать вместе со скоростью и векторным сдвигом: большой поворот при почти полном штиле значительно менее важен, чем при сильном потоке.</i>", "<b>%d/%d · Wind direction change between adjacent levels.</b>\n<i>This chart highlights turning between adjacent levels. Read it together with wind speed and vector shear: a large turn in near-calm air matters much less than the same change in a strong flow.</i>"), number+2, total), false},
+		chartDelivery{charts.SeeingIndex, fmt.Sprintf(language.text("<b>%d/%d · Прогнозный индекс сиинга по ветру.</b>\n<i>Компактный индекс ранжирует часы только по модельному профилю ветра. Для окончательного выбора используйте «Общий астрономический индекс», потому что облака и туман сюда намеренно не входят.</i>", "<b>%d/%d · Forecast wind seeing index.</b>\n<i>This compact index ranks hours using the modeled wind profile only. Use the Overall Astronomy Index for final planning because cloud and fog are deliberately excluded here.</i>"), number+3, total), false},
 	)
 	sendStarted := time.Now()
 	failed := 0
-	for _, photo := range photos {
-		if err := handler.messenger.SendPhoto(ctx, chatID, photo.path, photo.caption); err != nil {
+	for _, delivery := range deliveries {
+		var err error
+		if delivery.asDocument {
+			err = handler.messenger.SendDocument(ctx, chatID, delivery.path, delivery.caption)
+		} else {
+			err = handler.messenger.SendPhoto(ctx, chatID, delivery.path, delivery.caption)
+		}
+		if err != nil {
+			handler.logf("forecast request %d chart %q failed: %v", requestID, filepath.Base(delivery.path), err)
 			failed++
 		}
 	}
 	if failed > 0 {
 		return handler.sendUserMessage(ctx, chatID,
-			fmt.Sprintf(language.text("Не удалось отправить %d из %d графиков. Попробуйте повторить запрос позже.", "Could not send %d of %d charts. Please try again later."), failed, len(photos)), true, language)
+			fmt.Sprintf(language.text("Не удалось отправить %d из %d графиков. Попробуйте повторить запрос позже.", "Could not send %d of %d charts. Please try again later."), failed, len(deliveries)), true, language)
 	}
 	handler.logf("forecast request %d complete data=%s render=%s render_cache_hit=%t send=%s total=%s",
 		requestID, dataDuration.Round(time.Millisecond), renderDuration.Round(time.Millisecond), renderCacheHit,
@@ -555,7 +565,7 @@ func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration, langua
 	if age > maxAge {
 		return fmt.Sprintf(language.text("⚠️ Данные устарели (stale run): возраст run %s, порог %s. Прогноз может не учитывать последние изменения атмосферы.", "⚠️ Stale run: run age %s exceeds the %s threshold. The forecast may not reflect recent atmospheric changes."), ageText, thresholdText)
 	}
-	return fmt.Sprintf(language.text("Актуальность данных (freshness): выбран последний полный run, возраст %s (порог предупреждения %s).", "Data freshness: latest complete run selected, age %s (warning threshold %s)."), ageText, thresholdText)
+	return fmt.Sprintf(language.text("Актуальность данных: %s", "Data freshness: %s"), ageText)
 }
 
 func formatForecastAge(age time.Duration, language userLanguage) string {
@@ -606,6 +616,15 @@ func (handler *Handler) sendUserMessage(ctx context.Context, chatID int64, text 
 	if locationButton {
 		if messenger, ok := handler.messenger.(KeyboardMessenger); ok {
 			return messenger.SendMessageWithKeyboard(ctx, chatID, text, defaultKeyboard(language))
+		}
+	}
+	return handler.messenger.SendMessage(ctx, chatID, text, locationButton)
+}
+
+func (handler *Handler) sendHTMLUserMessage(ctx context.Context, chatID int64, text string, locationButton bool, language userLanguage) error {
+	if locationButton {
+		if messenger, ok := handler.messenger.(HTMLKeyboardMessenger); ok {
+			return messenger.SendHTMLMessageWithKeyboard(ctx, chatID, text, defaultKeyboard(language))
 		}
 	}
 	return handler.messenger.SendMessage(ctx, chatID, text, locationButton)

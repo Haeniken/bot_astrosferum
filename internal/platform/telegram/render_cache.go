@@ -15,7 +15,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "telegram-render-v12-readable-axis-scales"
+const renderCacheVersion = "telegram-render-v15-visible-fog-icons"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
