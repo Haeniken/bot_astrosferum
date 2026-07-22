@@ -95,7 +95,7 @@ func (db *PostgreSQL) SavePoint(ctx context.Context, userID int64, name string, 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err = tx.Exec(ctx, `INSERT INTO bot_users(telegram_user_id) VALUES($1) ON CONFLICT (telegram_user_id) DO UPDATE SET last_seen_at=now()`, userID); err != nil {
 		return err
 	}

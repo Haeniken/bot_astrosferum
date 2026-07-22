@@ -5,6 +5,7 @@ import (
 	"image/color"
 
 	"bot_astrosferum/internal/store"
+
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"

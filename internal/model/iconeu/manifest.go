@@ -84,7 +84,7 @@ func LoadManifest(path string) (LoadedManifest, error) {
 	if err != nil {
 		return LoadedManifest{}, fmt.Errorf("open ICON-EU manifest: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var manifest Manifest
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/forecast"
+
 	xfont "golang.org/x/image/font"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/font"
@@ -248,8 +249,8 @@ func stylePlot(p *plot.Plot) {
 	p.Y.Label.TextStyle.Font.Size = vg.Points(11)
 	p.Legend.TextStyle.Font.Size = vg.Points(9)
 	axisColor := color.NRGBA{R: 55, G: 58, B: 64, A: 255}
-	p.X.LineStyle.Color = axisColor
-	p.Y.LineStyle.Color = axisColor
+	p.X.Color = axisColor
+	p.Y.Color = axisColor
 	p.X.Tick.Label.Color = axisColor
 	p.Y.Tick.Label.Color = axisColor
 }
@@ -358,8 +359,8 @@ func addDayBoundaries(p *plot.Plot, times []time.Time, timeZone string, height i
 		if err != nil {
 			continue
 		}
-		line.LineStyle.Color = color.NRGBA{R: 245, G: 245, B: 245, A: 210}
-		line.LineStyle.Width = vg.Points(1.4)
+		line.Color = color.NRGBA{R: 245, G: 245, B: 245, A: 210}
+		line.Width = vg.Points(1.4)
 		p.Add(line)
 	}
 }
@@ -399,7 +400,7 @@ func saveAtomic(p *plot.Plot, options Options, destination string) error {
 		return fmt.Errorf("create chart directory: %w", err)
 	}
 	temporary := destination + ".part.png"
-	defer os.Remove(temporary)
+	defer func() { _ = os.Remove(temporary) }()
 	width := vg.Length(float64(options.Width)/96) * vg.Inch
 	height := vg.Length(float64(options.Height)/96) * vg.Inch
 	if err := p.Save(width, height, temporary); err != nil {
@@ -419,7 +420,7 @@ func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights [
 		return err
 	}
 	temporary := destination + ".part.png"
-	defer os.Remove(temporary)
+	defer func() { _ = os.Remove(temporary) }()
 	width := vg.Length(float64(options.Width)/96) * vg.Inch
 	height := vg.Length(float64(options.Height)/96) * vg.Inch
 	imageCanvas := vgimg.NewWith(vgimg.UseWH(width, height), vgimg.UseDPI(96), vgimg.UseBackgroundColor(color.White))

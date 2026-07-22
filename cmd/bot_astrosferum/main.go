@@ -34,23 +34,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		printUsage(stdout)
-		return nil
+		return printUsage(stdout)
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
-		printUsage(stdout)
-		return nil
+		return printUsage(stdout)
 	case "version":
-		fmt.Fprintf(stdout, "%s %s\n", version, runtime.Version())
-		return nil
+		_, err := fmt.Fprintf(stdout, "%s %s\n", version, runtime.Version())
+		return err
 	case "parse-location":
 		return runParseLocation(args[1:], stdout, stderr)
 	case "extract-point":
@@ -58,7 +56,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "light-pollution":
 		return runLightPollution(ctx, args[1:], stdout, stderr)
 	case "doctor":
-		return runDoctor(args[1:], stdout, stderr)
+		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "render-sample":
 		return runRenderSample(args[1:], stdout, stderr)
 	case "serve":
@@ -89,7 +87,7 @@ func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	client := iconeu.NewClient()
 	client.Workers = cfg.Sync.DownloadParallelism
-	client.Progress = func(format string, values ...any) { fmt.Fprintf(stderr, format+"\n", values...) }
+	client.Progress = func(format string, values ...any) { writeLog(stderr, format, values...) }
 	var remote model.RemoteRun
 	if *runID == "" {
 		remote, err = client.ProbeLatest(ctx)
@@ -103,7 +101,9 @@ func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer)
 		}
 		remote = model.RemoteRun{ID: *runID, BaseTime: baseTime}
 	}
-	fmt.Fprintf(stderr, "syncing ICON-EU run %s\n", remote.ID)
+	if _, err := fmt.Fprintf(stderr, "syncing ICON-EU run %s\n", remote.ID); err != nil {
+		return err
+	}
 	manifest, err := client.Sync(ctx, remote, cfg.Paths.Data)
 	if err != nil {
 		return err
@@ -155,7 +155,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	logf := func(format string, values ...any) { fmt.Fprintf(stderr, format+"\n", values...) }
+	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
 	store := iconeu.NewCachedStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries, int64(cfg.App.PointCacheMemoryLimit), logf)
 	series, err := store.Vertical(ctx, location)
 	if err != nil {
@@ -220,7 +220,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	if !cfg.Platforms.Telegram.Enabled {
-		return errors.New("Telegram is disabled in configuration")
+		return errors.New("telegram is disabled in configuration")
 	}
 	token, err := os.ReadFile(cfg.Platforms.Telegram.TokenFile)
 	if err != nil {
@@ -234,7 +234,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	logf := func(format string, values ...any) { fmt.Fprintf(stderr, format+"\n", values...) }
+	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
 	store := iconeu.NewCachedStore(
 		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
 		int64(cfg.App.PointCacheMemoryLimit), logf,
@@ -263,11 +263,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	worldAtlas, err := lightpollution.OpenWorldAtlas2015(worldPath)
+	worldAtlas, err := lightpollution.OpenWorldAtlas2015(ctx, worldPath)
 	if err != nil {
 		return fmt.Errorf("open World Atlas 2015: %w", err)
 	}
-	defer worldAtlas.Close()
+	defer func() { _ = worldAtlas.Close() }()
 	if err := handler.EnableWorldAtlas2015(worldAtlas); err != nil {
 		return err
 	}
@@ -290,16 +290,18 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	syncClient := iconeu.NewClient()
 	syncClient.Workers = cfg.Sync.DownloadParallelism
 	syncClient.Progress = func(format string, values ...any) {
-		fmt.Fprintf(stderr, format+"\n", values...)
+		writeLog(stderr, format, values...)
 	}
 	scheduler := app.ICONEUScheduler{
 		Client: syncClient, DataRoot: cfg.Paths.Data,
 		PollInterval: cfg.Sync.PollInterval.Duration, KeepRuns: cfg.Providers.ICONEU.KeepRuns,
 		MaxStaleAge: cfg.Providers.ICONEU.MaxStaleAge.Duration,
-		Logf:        func(format string, values ...any) { fmt.Fprintf(stderr, format+"\n", values...) },
+		Logf:        func(format string, values ...any) { writeLog(stderr, format, values...) },
 	}
 	go scheduler.Run(ctx)
-	fmt.Fprintln(stdout, "Telegram long polling started")
+	if _, err := fmt.Fprintln(stdout, "Telegram long polling started"); err != nil {
+		return err
+	}
 	return client.Run(ctx, handler, cfg.App.Workers, cfg.App.RequestTimeout.Duration, logf)
 }
 
@@ -452,7 +454,7 @@ func runLightPollution(ctx context.Context, args []string, stdout, stderr io.Wri
 	}
 	atlas, err := lightpollution.NewAtlas(
 		filepath.Join(*dataRoot, "light-pollution", "lorenz-atlas"),
-		lightpollution.Options{AtlasYear: *atlasYear}, func(format string, values ...any) { fmt.Fprintf(stderr, format+"\n", values...) },
+		lightpollution.Options{AtlasYear: *atlasYear}, func(format string, values ...any) { writeLog(stderr, format, values...) },
 	)
 	if err != nil {
 		return err
@@ -464,7 +466,7 @@ func runLightPollution(ctx context.Context, args []string, stdout, stderr io.Wri
 	return writeJSON(stdout, estimate)
 }
 
-func runDoctor(args []string, stdout, stderr io.Writer) error {
+func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "/app/config/config.yaml", "configuration file")
@@ -476,7 +478,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	checks := app.Doctor(cfg)
+	checks := app.Doctor(ctx, cfg)
 	if *jsonOutput {
 		if err := writeJSON(stdout, checks); err != nil {
 			return err
@@ -487,7 +489,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 			if check.OK {
 				status = "OK"
 			}
-			fmt.Fprintf(stdout, "%-4s %-24s %s\n", status, check.Name, check.Detail)
+			if _, err := fmt.Fprintf(stdout, "%-4s %-24s %s\n", status, check.Name, check.Detail); err != nil {
+				return err
+			}
 		}
 	}
 	if !app.AllChecksPass(checks) {
@@ -503,8 +507,8 @@ func writeJSON(writer io.Writer, value any) error {
 	return encoder.Encode(value)
 }
 
-func printUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `bot_astrosferum commands:
+func printUsage(writer io.Writer) error {
+	_, err := fmt.Fprintln(writer, `bot_astrosferum commands:
   doctor         validate config, directories, tools, disk, and secret files
   serve          run enabled platform adapters with long polling
   parse-location parse text coordinates and resolve their IANA timezone
@@ -514,6 +518,11 @@ func printUsage(writer io.Writer) {
   sync-icon-eu   atomically sync one complete ICON-EU pressure-level wind run
 	  render-point   render seven charts for a point from the current ICON-EU run
   version        print the build version`)
+	return err
+}
+
+func writeLog(writer io.Writer, format string, values ...any) {
+	_, _ = fmt.Fprintf(writer, format+"\n", values...)
 }
 
 func overallCalibration(config config.AlgorithmsConfig) forecast.OverallIndexCalibration {

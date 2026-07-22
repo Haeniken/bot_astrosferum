@@ -173,7 +173,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("open config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	result := Defaults()
 	decoder := yaml.NewDecoder(file)

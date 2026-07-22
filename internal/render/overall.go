@@ -10,6 +10,7 @@ import (
 
 	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
+
 	xfont "golang.org/x/image/font"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/font"
@@ -130,7 +131,7 @@ func addSolarBackground(p *plot.Plot, frames []forecast.OverallIndexFrame, sky a
 			return fmt.Errorf("create solar background: %w", err)
 		}
 		polygon.Color = solarPhaseColor(phase)
-		polygon.LineStyle.Width = 0
+		polygon.Width = 0
 		p.Add(polygon)
 	}
 	return nil

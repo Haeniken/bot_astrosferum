@@ -55,7 +55,7 @@ func EnsureWorldAtlas2015(ctx context.Context, root string, logf func(string, ..
 		if err != nil {
 			return "", fmt.Errorf("download World Atlas 2015: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("download World Atlas 2015: HTTP %d", resp.StatusCode)
 		}
@@ -72,7 +72,7 @@ func EnsureWorldAtlas2015(ctx context.Context, root string, logf func(string, ..
 			return "", closeErr
 		}
 		if n > 1<<30 {
-			return "", errors.New("World Atlas archive exceeds 1 GiB safety limit")
+			return "", errors.New("world atlas archive exceeds 1 GiB safety limit")
 		}
 		if err := os.Rename(partial, archivePath); err != nil {
 			return "", err
@@ -82,7 +82,7 @@ func EnsureWorldAtlas2015(ctx context.Context, root string, logf func(string, ..
 	if err != nil {
 		return "", fmt.Errorf("open World Atlas archive: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	var entry *zip.File
 	for _, f := range zr.File {
 		if strings.HasSuffix(strings.ToLower(f.Name), ".tif") {
@@ -91,16 +91,16 @@ func EnsureWorldAtlas2015(ctx context.Context, root string, logf func(string, ..
 		}
 	}
 	if entry == nil {
-		return "", errors.New("World Atlas archive has no GeoTIFF")
+		return "", errors.New("world atlas archive has no GeoTIFF")
 	}
 	if entry.UncompressedSize64 > 5<<30 {
-		return "", errors.New("World Atlas GeoTIFF exceeds 5 GiB safety limit")
+		return "", errors.New("world atlas GeoTIFF exceeds 5 GiB safety limit")
 	}
 	in, err := entry.Open()
 	if err != nil {
 		return "", err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	incoming := target + ".incoming"
 	_ = os.Remove(incoming)
 	tif, err := os.OpenFile(incoming, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
@@ -122,15 +122,15 @@ func EnsureWorldAtlas2015(ctx context.Context, root string, logf func(string, ..
 	return target, nil
 }
 
-func OpenWorldAtlas2015(path string) (*WorldAtlas2015, error) {
+func OpenWorldAtlas2015(ctx context.Context, path string) (*WorldAtlas2015, error) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() < 1<<30 {
-		return nil, errors.New("World Atlas 2015 GeoTIFF is missing or incomplete")
+		return nil, errors.New("world atlas 2015 GeoTIFF is missing or incomplete")
 	}
 	if _, err := exec.LookPath("gdal_translate"); err != nil {
 		return nil, errors.New("gdal_translate is required for World Atlas 2015")
 	}
-	output, err := exec.Command("gdalinfo", "-json", path).Output()
+	output, err := exec.CommandContext(ctx, "gdalinfo", "-json", path).Output()
 	if err != nil {
 		return nil, fmt.Errorf("validate World Atlas 2015: %w", err)
 	}

@@ -106,7 +106,7 @@ func (client *Client) ProbeLatest(ctx context.Context) (model.RemoteRun, error) 
 				available = false
 			}
 			if response != nil {
-				response.Body.Close()
+				_ = response.Body.Close()
 			}
 		}
 		if available {
@@ -135,7 +135,7 @@ func (client *Client) Sync(ctx context.Context, run model.RemoteRun, dataRoot st
 	}
 	_, _ = fmt.Fprintf(lock, "run=%s\nstarted=%s\npid=%d\n", run.ID, time.Now().UTC().Format(time.RFC3339), os.Getpid())
 	_ = lock.Close()
-	defer os.Remove(lockPath)
+	defer func() { _ = os.Remove(lockPath) }()
 
 	providerRoot := filepath.Join(dataRoot, "models", "icon-eu")
 	finalDirectory := filepath.Join(providerRoot, "runs", run.ID)
@@ -309,7 +309,7 @@ func (client *Client) appendField(ctx context.Context, destination *os.File, url
 		}
 		if response.StatusCode != http.StatusOK {
 			lastError = fmt.Errorf("HTTP %d", response.StatusCode)
-			response.Body.Close()
+			_ = response.Body.Close()
 			continue
 		}
 		_, copyError := io.Copy(destination, bzip2.NewReader(response.Body))
@@ -374,7 +374,7 @@ func (client *Client) get(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("HTTP transport failed")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
@@ -401,7 +401,7 @@ func fileDigest(path string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	size, err := io.Copy(hash, file)
 	if err != nil {
@@ -419,11 +419,11 @@ func writeManifest(path string, manifest Manifest) error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(manifest); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {

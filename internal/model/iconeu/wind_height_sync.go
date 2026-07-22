@@ -30,7 +30,7 @@ func (client *Client) AugmentWindThermodynamics(ctx context.Context, dataRoot st
 	}
 	_, _ = fmt.Fprintf(lock, "run=%s\nkind=wind-height\nstarted=%s\npid=%d\n", loaded.RunID, time.Now().UTC().Format(time.RFC3339), os.Getpid())
 	_ = lock.Close()
-	defer os.Remove(lockPath)
+	defer func() { _ = os.Remove(lockPath) }()
 
 	incoming := filepath.Join(loaded.Directory, fmt.Sprintf(".steps-v4-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(incoming, 0o750); err != nil {

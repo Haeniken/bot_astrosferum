@@ -62,7 +62,7 @@ func NewClient(token string) (*Client, error) {
 
 func (client *Client) Run(ctx context.Context, handler *Handler, workers int, requestTimeout time.Duration, logf func(string, ...any)) error {
 	if handler == nil {
-		return errors.New("Telegram handler is required")
+		return errors.New("telegram handler is required")
 	}
 	if workers < 1 {
 		workers = 1
@@ -179,7 +179,7 @@ func (client *Client) SendPhoto(ctx context.Context, chatID int64, path, caption
 	if err != nil {
 		return fmt.Errorf("open rendered chart: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
@@ -236,15 +236,15 @@ func (client *Client) callBody(ctx context.Context, method, contentType string, 
 			return ctx.Err()
 		}
 		// net/http errors may include the secret-bearing URL, so do not wrap them.
-		return fmt.Errorf("Telegram %s transport failed", method)
+		return fmt.Errorf("telegram %s transport failed", method)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
 		return fmt.Errorf("read Telegram %s response", method)
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Telegram %s returned HTTP %d", method, response.StatusCode)
+		return fmt.Errorf("telegram %s returned HTTP %d", method, response.StatusCode)
 	}
 	var envelope struct {
 		OK          bool            `json:"ok"`
@@ -255,7 +255,7 @@ func (client *Client) callBody(ctx context.Context, method, contentType string, 
 		return fmt.Errorf("decode Telegram %s response", method)
 	}
 	if !envelope.OK {
-		return fmt.Errorf("Telegram %s rejected request: %s", method, envelope.Description)
+		return fmt.Errorf("telegram %s rejected request: %s", method, envelope.Description)
 	}
 	if result != nil && len(envelope.Result) > 0 {
 		if err := json.Unmarshal(envelope.Result, result); err != nil {

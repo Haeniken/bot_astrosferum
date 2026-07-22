@@ -13,6 +13,7 @@ import (
 
 	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
+
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
@@ -492,12 +493,12 @@ func saveWeatherAtomic(canvas image.Image, destination string) error {
 		return err
 	}
 	if err := png.Encode(file, canvas); err != nil {
-		file.Close()
+		_ = file.Close()
 		_ = os.Remove(temporary)
 		return fmt.Errorf("encode weather chart: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		_ = os.Remove(temporary)
 		return err
 	}

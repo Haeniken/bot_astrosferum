@@ -66,8 +66,10 @@ func SyntheticCloudFixture() CloudSeries {
 			height := surfaceElevationM + heightsAGL[row]
 			pressure := 1013.25 * math.Pow(1-height/44330, 1/0.190284)
 			heightFactor := heightsAGL[row] / heightsAGL[len(heightsAGL)-1]
-			lowDeck := 75 * math.Exp(-math.Pow((heightsAGL[row]-800)/900, 2)) * (0.55 + 0.45*math.Sin(float64(column)/8))
-			highDeck := 55 * math.Exp(-math.Pow((heightsAGL[row]-9000)/2200, 2)) * (0.55 + 0.45*math.Cos(float64(column)/6))
+			lowOffset := (heightsAGL[row] - 800) / 900
+			highOffset := (heightsAGL[row] - 9000) / 2200
+			lowDeck := 75 * math.Exp(-lowOffset*lowOffset) * (0.55 + 0.45*math.Sin(float64(column)/8))
+			highDeck := 55 * math.Exp(-highOffset*highOffset) * (0.55 + 0.45*math.Cos(float64(column)/6))
 			cover := math.Max(0, math.Min(100, lowDeck+highDeck))
 			liquid := lowDeck / 100 * 1.8e-4
 			ice := highDeck / 100 * 7e-5

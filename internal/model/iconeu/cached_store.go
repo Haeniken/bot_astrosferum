@@ -314,12 +314,12 @@ func (store *CachedStore) readDisk(runID, cellID string) (pointBundle, error) {
 	if err != nil {
 		return pointBundle{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	compressed, err := gzip.NewReader(file)
 	if err != nil {
 		return pointBundle{}, fmt.Errorf("open gzip point cache: %w", err)
 	}
-	defer compressed.Close()
+	defer func() { _ = compressed.Close() }()
 	var bundle pointBundle
 	decoder := gob.NewDecoder(compressed)
 	if err := decoder.Decode(&bundle); err != nil {

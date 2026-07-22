@@ -148,9 +148,12 @@ func TestAllProducesFour1280x960PNGs(t *testing.T) {
 			t.Fatal(err)
 		}
 		configuration, err := png.DecodeConfig(file)
-		file.Close()
+		closeErr := file.Close()
 		if err != nil {
 			t.Fatalf("decode %s: %v", filepath.Base(path), err)
+		}
+		if closeErr != nil {
+			t.Fatalf("close %s: %v", filepath.Base(path), closeErr)
 		}
 		if configuration.Width != DefaultWidth || configuration.Height != DefaultHeight {
 			t.Fatalf("%s is %dx%d, want %dx%d", filepath.Base(path), configuration.Width, configuration.Height, DefaultWidth, DefaultHeight)
@@ -180,9 +183,12 @@ func TestWeatherProducesHourlyLandscapePNG(t *testing.T) {
 		t.Fatal(err)
 	}
 	configuration, err := png.DecodeConfig(file)
-	file.Close()
+	closeErr := file.Close()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	if configuration.Width != WeatherWidth || configuration.Height != WeatherHeight {
 		t.Fatalf("weather PNG is %dx%d", configuration.Width, configuration.Height)

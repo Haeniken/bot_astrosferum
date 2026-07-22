@@ -203,7 +203,7 @@ func (atlas *Atlas) downloadTile(ctx context.Context, year, tileX, tileY int) ([
 	if err != nil {
 		return nil, fmt.Errorf("download light-pollution tile: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download light-pollution tile: HTTP %d", response.StatusCode)
 	}
@@ -222,7 +222,7 @@ func inflateTile(compressed []byte) ([]int8, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(reader, tilePayloadBytes+1))
 	if err != nil {
 		return nil, err
@@ -324,7 +324,7 @@ func atomicWrite(path string, content []byte) error {
 		return err
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if err := temporary.Chmod(0o640); err != nil {
 		_ = temporary.Close()
 		return err

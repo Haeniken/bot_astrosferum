@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,13 +18,13 @@ type Check struct {
 	Detail string `json:"detail"`
 }
 
-func Doctor(cfg config.Config) []Check {
+func Doctor(ctx context.Context, cfg config.Config) []Check {
 	checks := []Check{
 		checkDirectory("data directory", cfg.Paths.Data, true),
 		checkDirectory("temporary directory", cfg.Paths.Temp, true),
-		checkExecutable("grib_get", "-V"),
-		checkExecutable("grib_ls", "-V"),
-		checkExecutable("gdalinfo", "--version"),
+		checkExecutable(ctx, "grib_get", "-V"),
+		checkExecutable(ctx, "grib_ls", "-V"),
+		checkExecutable(ctx, "gdalinfo", "--version"),
 	}
 	checks = append(checks, checkFreeSpace(cfg.Paths.Data, int64(cfg.Sync.MinFreeSpace)))
 	if cfg.Platforms.Telegram.Enabled {
@@ -68,14 +69,14 @@ func checkDirectory(name, path string, writable bool) Check {
 	return Check{Name: name, OK: true, Detail: filepath.Clean(path)}
 }
 
-func checkExecutable(name string, versionArgs ...string) Check {
+func checkExecutable(ctx context.Context, name string, versionArgs ...string) Check {
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return Check{Name: name, Detail: "not found in PATH"}
 	}
 	detail := path
 	if len(versionArgs) > 0 {
-		output, versionErr := exec.Command(path, versionArgs...).CombinedOutput()
+		output, versionErr := exec.CommandContext(ctx, path, versionArgs...).CombinedOutput()
 		if versionErr != nil {
 			return Check{Name: name, Detail: "version check failed: " + versionErr.Error()}
 		}
@@ -111,7 +112,7 @@ func checkFreeSpace(path string, minimum int64) Check {
 	if err := syscall.Statfs(path, &stats); err != nil {
 		return Check{Name: "free disk space", Detail: err.Error()}
 	}
-	available := int64(stats.Bavail) * int64(stats.Bsize)
+	available := int64(stats.Bavail) * stats.Bsize
 	detail := fmt.Sprintf("available=%s minimum=%s", formatBytes(available), formatBytes(minimum))
 	return Check{Name: "free disk space", OK: available >= minimum, Detail: detail}
 }

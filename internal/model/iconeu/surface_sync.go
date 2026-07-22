@@ -74,7 +74,7 @@ func (client *Client) AugmentSurface(ctx context.Context, dataRoot string, loade
 	}
 	_, _ = fmt.Fprintf(lock, "run=%s\nkind=surface\nstarted=%s\npid=%d\n", loaded.RunID, time.Now().UTC().Format(time.RFC3339), os.Getpid())
 	_ = lock.Close()
-	defer os.Remove(lockPath)
+	defer func() { _ = os.Remove(lockPath) }()
 
 	incoming := filepath.Join(loaded.Directory, fmt.Sprintf(".surface-hourly-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(incoming, 0o750); err != nil {
