@@ -1,7 +1,6 @@
 package model
 
 import (
-	"context"
 	"time"
 
 	"bot_astrosferum/internal/forecast"
@@ -25,28 +24,6 @@ func (c Coverage) Contains(location forecast.Location) bool {
 type RemoteRun struct {
 	ID       string
 	BaseTime time.Time
-}
-
-type Manifest struct {
-	Provider string
-	RunID    string
-	BaseTime time.Time
-	Grid     Coverage
-	Complete bool
-}
-
-type PointSeries struct {
-	Location forecast.Location
-	Cell     GridCell
-	Samples  []Sample
-}
-
-type Provider interface {
-	Name() string
-	Coverage() Coverage
-	ProbeLatest(context.Context) (RemoteRun, error)
-	Sync(context.Context, RemoteRun, string) (Manifest, error)
-	ExtractPoint(context.Context, Manifest, forecast.Location) (PointSeries, error)
 }
 
 type GridCell struct {

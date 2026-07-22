@@ -5,9 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,8 +14,6 @@ import (
 
 	"bot_astrosferum/internal/forecast"
 )
-
-var cellPattern = regexp.MustCompile(`Grid Point chosen #[0-9]+ index=([0-9]+) latitude=([^ ]+) longitude=([^ ]+) distance=([^ ]+)`)
 
 type VerticalStore struct {
 	DataRoot string
@@ -175,21 +171,4 @@ func limitedOutput(output []byte) string {
 		return text[:300] + "…"
 	}
 	return text
-}
-
-func resolveCell(ctx context.Context, path string, location forecast.Location) (int, float64, float64, float64, error) {
-	coordinates := fmt.Sprintf("%.6f,%.6f,1", location.Latitude, location.Longitude)
-	output, err := exec.CommandContext(ctx, "grib_ls", "-l", coordinates, path).CombinedOutput()
-	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("resolve ICON-EU cell: %s", limitedOutput(output))
-	}
-	match := cellPattern.FindStringSubmatch(string(output))
-	if len(match) != 5 {
-		return 0, 0, 0, 0, fmt.Errorf("ICON-EU grid cell was not reported")
-	}
-	index, _ := strconv.Atoi(match[1])
-	latitude, _ := strconv.ParseFloat(match[2], 64)
-	longitude, _ := strconv.ParseFloat(match[3], 64)
-	distance, _ := strconv.ParseFloat(match[4], 64)
-	return index, latitude, longitude, distance, nil
 }

@@ -86,13 +86,7 @@ type saveSession struct {
 
 type ForecastProvider interface {
 	Vertical(ctx context.Context, location forecast.Location) (forecast.VerticalSeries, error)
-}
-
-type SurfaceProvider interface {
 	Surface(ctx context.Context, location forecast.Location) (forecast.SurfaceSeries, error)
-}
-
-type CloudProvider interface {
 	Cloud(ctx context.Context, location forecast.Location) (forecast.CloudSeries, error)
 }
 
@@ -124,7 +118,7 @@ func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot str
 		return fmt.Errorf("forecast provider is required")
 	}
 	if strings.TrimSpace(renderRoot) == "" {
-		return fmt.Errorf("Telegram render root is required")
+		return fmt.Errorf("telegram render root is required")
 	}
 	handler.provider = provider
 	handler.renderRoot = renderRoot
@@ -138,7 +132,7 @@ func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot str
 
 func (handler *Handler) EnableRenderCache(root string) error {
 	if strings.TrimSpace(root) == "" {
-		return fmt.Errorf("Telegram render cache root is required")
+		return fmt.Errorf("telegram render cache root is required")
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return fmt.Errorf("create Telegram render cache root: %w", err)
@@ -184,7 +178,7 @@ func (handler *Handler) EnablePersistence(p Persistence, adminIDs []int64) error
 
 func (handler *Handler) EnableWorldAtlas2015(p LightPollutionProvider) error {
 	if p == nil {
-		return errors.New("World Atlas 2015 provider is required")
+		return errors.New("world atlas 2015 provider is required")
 	}
 	handler.worldAtlas2015 = p
 	return nil
@@ -343,27 +337,29 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	hasOverall := false
 	var cloudSeries forecast.CloudSeries
 	hasCloud := false
-	if surfaceProvider, ok := handler.provider.(SurfaceProvider); ok {
-		surface, surfaceError := surfaceProvider.Surface(ctx, location)
-		if surfaceError == nil {
-			surface = surface.Window(time.Now(), 72)
-			if len(surface.Frames) >= 2 {
-				surfaceSeries = surface
-				var astronomyError error
-				sky, astronomyError = astronomy.Compute(location, surface.Frames[0].ValidAt, surface.Frames[len(surface.Frames)-1].ValidAt)
-				if astronomyError == nil {
-					hasWeather = true
-				}
+	surface, surfaceError := handler.provider.Surface(ctx, location)
+	if surfaceError != nil {
+		handler.logf("forecast request %d surface data unavailable: %v", requestID, surfaceError)
+	} else {
+		surface = surface.Window(time.Now(), 72)
+		if len(surface.Frames) >= 2 {
+			surfaceSeries = surface
+			var astronomyError error
+			sky, astronomyError = astronomy.Compute(location, surface.Frames[0].ValidAt, surface.Frames[len(surface.Frames)-1].ValidAt)
+			if astronomyError != nil {
+				handler.logf("forecast request %d astronomy calculation failed: %v", requestID, astronomyError)
+			} else {
+				hasWeather = true
 			}
 		}
 	}
-	if cloudProvider, ok := handler.provider.(CloudProvider); ok {
-		cloud, cloudError := cloudProvider.Cloud(ctx, location)
-		if cloudError == nil {
-			cloud = cloud.Window(time.Now(), 72)
-			if len(cloud.Frames) >= 2 {
-				cloudSeries, hasCloud = cloud, true
-			}
+	cloud, cloudError := handler.provider.Cloud(ctx, location)
+	if cloudError != nil {
+		handler.logf("forecast request %d cloud data unavailable: %v", requestID, cloudError)
+	} else {
+		cloud = cloud.Window(time.Now(), 72)
+		if len(cloud.Frames) >= 2 {
+			cloudSeries, hasCloud = cloud, true
 		}
 	}
 	dataDuration := time.Since(dataStarted)
@@ -390,7 +386,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		if directoryError != nil {
 			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось подготовить временный каталог графиков.", "Could not prepare the temporary chart directory."), true, language)
 		}
-		defer os.RemoveAll(requestDirectory)
+		defer func() { _ = os.RemoveAll(requestDirectory) }()
 		charts, err = render.All(requestDirectory, series, requestRenderOptions)
 		if err != nil {
 			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось построить графики прогноза.", "Could not render the forecast charts."), true, language)
@@ -771,7 +767,7 @@ func (handler *Handler) replyAdminStats(ctx context.Context, chatID, userID int6
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "requests-30d.png")
 	if err := render.UsageStats(path, days, language.renderCode()); err != nil {
 		return err
