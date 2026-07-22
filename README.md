@@ -52,7 +52,7 @@ This diagnostic highlights turning between adjacent atmospheric levels. Read it 
 
 This compact index ranks hours using the modeled wind profile only. It is useful for comparing atmospheric stability, while the Overall Astronomy Index remains the final planning view because this chart deliberately excludes cloud and fog.
 
-Telegram and VK support native location sharing, textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports. Both adapters use the same command, forecast, rendering, and persistence handler, so their calculated results are equivalent. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
+Telegram and VK support native location sharing, textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports aggregated across both platforms. Both adapters use the same command, forecast, rendering, and persistence handler, so their calculated results are equivalent. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
 
 - [Архитектура на русском](docs/architecture.ru.md)
 - [Architecture in English](docs/architecture.en.md)
@@ -92,6 +92,11 @@ Platform tokens are separate ignored files: `secrets/telegram_token` and
 `secrets/vk_token`, both mode `0600`. Enabling VK also requires the numeric
 community `group_id` under `platforms.vk` in `config/config.yaml`; optional VK
 administrator IDs are supplied through `ASTRO_VK_ADMIN_IDS`.
+
+Only `POSTGRES_PASSWORD` is required in `.env`; the remaining variables are
+optional calibration or access settings. See the
+[complete `.env` reference](docs/configuration.en.md) for effects and
+recommended values.
 
 Useful commands on the target host:
 

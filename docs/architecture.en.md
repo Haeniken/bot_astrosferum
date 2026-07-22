@@ -12,7 +12,7 @@ Deployment directory: `/opt/docker/bot_astrosferum`
 
 ### PostgreSQL, saved points, and statistics
 
-PostgreSQL 18 is an internal Compose service with a `./data/postgres` bind mount. The application applies an idempotent schema on startup. It stores platform-namespaced numeric user keys, at most 10 named coordinates per user, and one daily forecast-count aggregate per user. Telegram and VK administrators are configured independently through `ASTRO_TELEGRAM_ADMIN_IDS` and `ASTRO_VK_ADMIN_IDS` and receive the user count and a 30-day PNG usage chart.
+PostgreSQL 18 is an internal Compose service with a `./data/postgres` bind mount. The application applies an idempotent schema on startup. It stores platform-namespaced numeric user keys, at most 10 named coordinates per user, and one daily forecast-count aggregate per user. Telegram and VK administrators are configured independently through `ASTRO_TELEGRAM_ADMIN_IDS` and `ASTRO_VK_ADMIN_IDS`, but both receive the same statistics aggregated across both platforms: the total platform-account count and one combined 30-day PNG usage chart. A person using both platforms counts as two accounts because the bot does not link external identities.
 
 Daily aggregates older than 90 days are removed at startup and once a day; incomplete point-saving conversations expire after two hours.
 

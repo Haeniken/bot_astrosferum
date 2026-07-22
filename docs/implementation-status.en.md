@@ -7,7 +7,7 @@ Deployment target: operator-managed host
 ## Complete
 
 - PostgreSQL 18.4 stores users, at most 10 points per user, and daily usage aggregates bounded to 90 days;
-- the Telegram and VK keyboards support saving/selecting points; configured platform admins receive the user count and a 30-day PNG;
+- the Telegram and VK keyboards support saving/selecting points; configured platform admins receive the same cross-platform account count and combined 30-day PNG;
 - Light Pollution Atlas 2024 now has a separate World Atlas 2015 comparison; the required GeoTIFF is restored automatically at startup;
 - runtime uses the official OSGeo GDAL 3.13.1 image and ecCodes 2.45.0.
 - surface field names are normalized across ecCodes versions (`VMAX_10M`/`max_i10fg`);
