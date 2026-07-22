@@ -385,7 +385,7 @@ After adding `MH`, the field was `396 m` at both control leads. An unbounded
 production rule `max(MH,500 m)` produced `1.9145″` and `2.5478″`,
 respectively. These server-only values are a regression check of the dynamic
 boundary. Full hourly production run `2026072106` was subsequently published
-and verified through the live Telegram CLI path for the same saved point.
+and verified through the platform-neutral live CLI path for the same saved point.
 
 For context, long-term measurements at the Russian Shatdzhatmaz site found
 median total seeing around `0.96″` and free-atmosphere seeing around `0.43″`,
@@ -654,7 +654,7 @@ never enter research artifacts or issue reports.
 
 Status: original Stage 0 spike updated with the current data contract;
 `surface-hourly-v17`/`cloud-hourly-v4` is published in production
-Initial measurement date: 2026-07-19; updated 2026-07-21
+Initial measurement date: 2026-07-19; updated 2026-07-22
 Host: the production host
 Runtime directory: `/opt/docker/bot_astrosferum/data/verification`
 
@@ -664,7 +664,7 @@ The initial production policy is technically viable:
 
 - use ICON-EU directly for Saint Petersburg, Moscow, and other points inside its actual product domain;
 - retain ICON Global as the worldwide fallback, with mandatory native-grid geometry for one-point extraction from `unstructured_grid`;
-- keep ICON-Ru WIS 2.0 in shadow verification: its public field set cannot drive the complete seeing pipeline and delivery is notification-based MQTT;
+- keep ICON-Ru WIS 2.0 only as a candidate for a future shadow-verification adapter: none is implemented, its public field set cannot drive the complete seeing pipeline, and delivery is notification-based MQTT;
 - no model file exists on the local workstation. Every downloaded artifact remains on the production host below the project directory.
 
 This spike proves availability and technical processing, not comparative forecast accuracy. Accuracy is established separately against observations.
@@ -921,7 +921,7 @@ Metadata files remain server-only under `/opt/docker/bot_astrosferum/data/verifi
 1. `iconeu.Sync` downloads only selected fields and levels, decompresses, validates, and merges messages per forecast step.
 2. `iconglobal.Sync` follows the same atomic lifecycle while retaining full native-grid bundles; its point store applies official DWD grid geometry through CDO.
 3. The coverage router selects ICON-EU inside its domain and ICON Global elsewhere; both normalize their outputs to the same forecast types before rendering.
-4. `iconruwis` remains isolated to control points and verification; its failure cannot affect a user response.
+4. `iconruwis` is not implemented; the WIS spike remains a candidate for a future isolated shadow adapter and cannot affect a user response.
 5. Raw `.bz2`, runs, cache, verification, and temporary files live only in `/opt/docker/bot_astrosferum/data` and are excluded from Git and the Docker build context.
 6. A complete 72-hour run is never downloaded locally and is not started on the server without a free-space check.
 

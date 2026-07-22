@@ -1,23 +1,28 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-07-21
-Stage: Stage 3 live ICON-EU → Telegram
+Date: 2026-07-22
+Stage: Stage 3 live ICON → Telegram and VK
 Deployment target: operator-managed host
 
 ## Complete
 
 - PostgreSQL 18.4 stores users, at most 10 points per user, and daily usage aggregates bounded to 90 days;
-- the Telegram keyboard supports saving/selecting points; configured admins receive the user count and a 30-day PNG;
+- the Telegram and VK keyboards support saving/selecting points; configured platform admins receive the user count and a 30-day PNG;
 - Light Pollution Atlas 2024 now has a separate World Atlas 2015 comparison; the required GeoTIFF is restored automatically at startup;
 - runtime uses the official OSGeo GDAL 3.13.1 image and ecCodes 2.45.0.
 - surface field names are normalized across ecCodes versions (`VMAX_10M`/`max_i10fg`);
 - the admin chart uses stacked successful/failed bars and MSK (UTC+3) calendar days; point menus provide a Back button.
 
 - Go `1.26.5`, `tzf v1.2.3`, and `gonum/plot v0.17.0`;
-- Telegram accepts native locations, `59.9386, 30.3141`, and `/forecast 59.9386 30.3141`;
+- Telegram accepts native locations and VK accepts geo attachments; both accept `59.9386, 30.3141` and `/forecast 59.9386 30.3141`;
+- both thin platform adapters depend on the common `internal/app/bot` handler and never import each other; VK Group Long Poll is enabled at startup, messages and native geo are normalized to the common request, while texts, keyboards, PNG photos, and lossless document uploads are translated back to VK API calls;
+- Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;
+- VK photo/document uploads validate the handshake and retry at most twice with `1 s`/`2 s` backoff and a fresh upload URL; this handles transient `pu.vk.ru` `405` or incomplete upload responses without unbounded retries;
+- sequential media deliveries in each VK request have a minimum `150 ms` interval without a global lock; parallel VK requests and Telegram delivery are unchanged;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
 - the user summary reports the selected model, run ID, and model-run age against configurable `max_stale_age`; this threshold only controls the `⚠️ stale run` warning and never pins cached data. Point and render cache identities contain the run ID, so a newly published run is an automatic cache miss;
 - Telegram language follows `User.language_code`: only `ru*` receives Russian, while every other or missing code receives English; help, statuses, errors, buttons, captions, the weather table, and all PNG titles/axes/legends are localized, and render-cache identity includes the language;
+- VK currently defaults to Russian because Group Long Poll events do not include the Telegram-style language code;
 - timezone lookup is offline and every PNG labels the coordinate timezone;
 - DWD discovery selects the latest complete ICON-EU `00/06/12/18` cycle available through `+72 h`;
 - coordinates outside the ICON-EU domain route to the latest complete ICON Global `00/06/12/18` cycle on its full native global grid; CDO uses the official static DWD grid geometry for nearest-native-cell point extraction, without cropping the source or creating a second world raster;
@@ -28,10 +33,10 @@ Deployment target: operator-managed host
 - an exclusive lock prevents overlapping syncs; the scheduler probes once at startup and every 15 minutes thereafter, retaining two runs; user requests never download data and only read the last complete publication;
 - point extraction reads 25 vertical profiles concurrently from the current manifest;
 - an independent surface sync publishes 79 hourly `f000…f078` bundles containing `T_2M`, `TD_2M`, `RELHUM_2M`, `CLCT/CLCL/CLCM/CLCH`, `TOT_PREC`, `U_10M`, `V_10M`, `VMAX_10M`, `PMSL`, `VIS`, `TQV`, and exact total-column `TQC/TQI`;
-- Telegram shows 72 hours; fog uses direct `VIS`, while the cloud chart shows effective obstruction by height from `CLC+QC+QI` and phase-resolved optical depth;
+- both platforms show 72 hours; fog uses direct `VIS`, while the cloud chart shows effective obstruction by height from `CLC+QC+QI` and phase-resolved optical depth;
 - dew is only an equipment-preparation advisory and does not lower seeing or the practical score;
 - pure-Go astronomy calculates Sun, Moon, Jupiter, and Saturn events; Saint Petersburg and Moscow Sun/Moon regressions constrain the result to two minutes against reference data, while planetary events remain explicitly approximate;
-- Telegram renders seven PNG files; the production `3200×960` overall index combines hybrid ICON TKE/MH + HMNSP99 seeing, `tau0`, effective `CLCT+TQC+TQI` cloud transmission, fog, and a mild surface-wind factor;
+- both platforms deliver the same seven PNG files; the production `3200×960` overall index combines hybrid ICON TKE/MH + HMNSP99 seeing, `tau0`, effective `CLCT+TQC+TQI` cloud transmission, fog, and a mild surface-wind factor;
 - the text block gets a point light-pollution estimate from Light Pollution Atlas 2024: bilinear LPI/SQM at approximately `30″` plus an honestly labelled approximate Bortle value; light pollution is not part of the Overall Index;
 - heat-map values are now 8 pt semibold, with slightly larger axes and bar labels;
 - the old wind-only index remains a separate diagnostic chart; direction delta becomes `0°` below `2 m/s`, while `NaN` means missing data only;
@@ -39,6 +44,8 @@ Deployment target: operator-managed host
 - `go test ./...`, `go vet ./...`, and `doctor` pass.
 
 Freshness and bilingual rendering were deployed on 2026-07-21: the production binary generated seven non-empty PNG files for each of `ru` and `en`, temporary verification directories were removed, the main container remained `running` with `restart_count=0`, and PostgreSQL remained `healthy`.
+
+The VK adapter was deployed on 2026-07-22. Production starts Telegram and VK Group Long Poll under independent supervisors; VK settings report API `5.199`, Long Poll enabled, and `message_new=1`. The selected server was under `*.vk.ru`, the application container remained `running` with `restart_count=0`, PostgreSQL remained healthy, and the active ICON-EU/Global run symlinks were unchanged. The old platform-named 16 MiB render cache was removed after the shared bounded cache was initialized.
 
 ## Production Overall change
 
@@ -76,8 +83,8 @@ Production uses the following replacement:
   old entries without `MH`, `T`, or native layer thickness;
 - version markers match the new contract:
   `seeing-hybrid-tke-mh-hmnsp99-v4`,
-  `conditions-v4-dynamic-mh-cloud-guard`, `render-v10-localized`, and
-  `telegram-render-v7-localized`.
+  `conditions-v4-dynamic-mh-cloud-guard`, `render-v14-readable-axis-scales`, and
+  `shared-render-v16-vk-adapter`.
 
 A server-side fixed-2-km calculation without fitting (`ground Cn² scale=1`)
 produced control-case seeing of `2.221″` at `f042` and `3.644″` at `f048`; the
@@ -103,7 +110,7 @@ Published run `2026071912`:
 
 Last verified live state before the new deployment: extraction and all seven PNG files from the old version passed again on production run `2026072100` for an anonymized historical control case on 2026-07-21. The atomic publication contains 79×16 surface fields (`surface-hourly-v16`, 1.2 GiB) and 79×19×4 model-layer fields plus HHL (`cloud-hourly-v2`, 2.4 GiB); superseded versioned directories were removed after switching. The old cloud-physics check gave `99.90%` transmission and Overall `9.98` at 2026-07-22 09:00 UTC with `CLCT=72.8%`, `TQI=0.000015 kg/m²`, and `τ=0.00105`; at 02:00, `CLCT=100%` and `τ=2.78` gave `6.20%` transmission and Overall `1.03`. The first case is now a regression input for the unresolved-CLC floor, not the desired result. Old-version output is `3200×1080` weather, `3200×960` overall, `3200×1100` cloud obstruction, and four `1280×960` charts.
 
-A bounded performance layer is now present: surface/wind/cloud extraction runs in parallel into one point bundle, concurrent identical misses are coalesced, `gob.gz` cache retention is two runs × 512 cells, and the in-memory LRU is bounded by both 512 cells and 20 GiB. Seven-chart render bundles live for 48 hours, capped at 256. Production uses provider-versioned point caches; obsolete schemas are ignored automatically. Telegram uses six chat-affine workers with a 15-minute request timeout so the first full-native Global point extraction can complete; ecCodes/CDO share a global eight-process limit. Each DWD object download still has a bounded two-minute HTTP timeout with three retries, while the scheduler itself is not capped by the Telegram request timeout. Cache staging older than one hour and Docker logs beyond `3 × 10 MiB` are removed automatically.
+A bounded performance layer is now present: surface/wind/cloud extraction runs in parallel into one point bundle, concurrent identical misses are coalesced, `gob.gz` cache retention is two runs × 512 cells, and the in-memory LRU is bounded by both 512 cells and 20 GiB. Seven-chart render bundles live for 48 hours, capped at 256. Production uses provider-versioned point caches; obsolete schemas are ignored automatically. Each platform uses six peer-affine workers with a 15-minute request timeout so the first full-native Global point extraction can complete; ecCodes/CDO share a global eight-process limit. Each DWD object download still has a bounded two-minute HTTP timeout with three retries, while the scheduler itself is not capped by a user-request timeout. Cache staging older than one hour and Docker logs beyond `3 × 10 MiB` are removed automatically.
 
 The first production request after the cache-schema change on run `2026072100` spent `38.5 s` extracting, `1.82 s` rendering seven PNG files, and `1.75 s` sending, for `42.24 s` total. A repeated CLI run loaded the point bundle from disk in `2 ms`; the seven-PNG set occupies about `2.7 MiB`. Render cache contains exactly seven files and remains bounded to 48 hours/256 sets.
 
@@ -119,7 +126,7 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 ## Next vertical slice
 
-1. Add the equivalent VK adapter after the Telegram path stabilizes.
+1. Accumulate observational verification data for the existing forecast methods and monitor both platform adapters in production.
 
 Production `seeing-hybrid-tke-mh-hmnsp99-v4` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

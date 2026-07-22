@@ -52,7 +52,7 @@ This diagnostic highlights turning between adjacent atmospheric levels. Read it 
 
 This compact index ranks hours using the modeled wind profile only. It is useful for comparing atmospheric stability, while the Overall Astronomy Index remains the final planning view because this chart deliberately excludes cloud and fog.
 
-Telegram supports native and textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
+Telegram and VK support native location sharing, textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports. Both adapters use the same command, forecast, rendering, and persistence handler, so their calculated results are equivalent. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
 
 - [Архитектура на русском](docs/architecture.ru.md)
 - [Architecture in English](docs/architecture.en.md)
@@ -83,10 +83,15 @@ The default in-memory point-cache budget is `20 GiB` and the container uses
 the configured `sync.min_free_space` threshold, which defaults to `150 GiB`.
 The extra disk headroom is required for atomic downloads, two retained model
 runs, PostgreSQL, point/render caches, and light-pollution tiles. Outbound DNS
-and HTTPS access to DWD, Telegram, and the configured atlas sources is
-required; no inbound application port is needed for Telegram long polling.
+and HTTPS access to DWD, Telegram, VK, and the configured atlas sources is
+required; neither platform's long polling needs an inbound application port.
 
 The repository contains no model runs or credentials. Runtime data and bind mounts live only below `/opt/docker/bot_astrosferum` on the production host.
+
+Platform tokens are separate ignored files: `secrets/telegram_token` and
+`secrets/vk_token`, both mode `0600`. Enabling VK also requires the numeric
+community `group_id` under `platforms.vk` in `config/config.yaml`; optional VK
+administrator IDs are supplied through `ASTRO_VK_ADMIN_IDS`.
 
 Useful commands on the target host:
 
@@ -101,7 +106,7 @@ docker compose run --rm bot_astrosferum render-point --config /app/config/config
 docker compose run --rm bot_astrosferum light-pollution --lat 55.7558 --lon 37.6173
 ```
 
-`/start` in Telegram explains coordinate input and the charts. Native Telegram locations, plain `latitude, longitude` text, and `/forecast latitude longitude` are accepted. Points inside the ICON-EU domain use ICON-EU; every other world coordinate uses the latest complete DWD ICON Global run. Both routes provide the same seven chart types, including native model-level cloud obstruction and lower-atmosphere TKE. DWD publishes Global TKE only through `+48 h`, so its hybrid Overall chart honestly ends there while weather, cloud obstruction, and pressure-level diagnostics continue through the main horizon. Global also lacks the direct `VIS` field used for fog diagnosis and the transparency proxy.
+`/start` in Telegram or VK explains coordinate input and the charts. Native Telegram locations, VK geo attachments, plain `latitude, longitude` text, and `/forecast latitude longitude` are accepted. The adapters use independent long-polling supervisors: a temporary outage of one platform does not stop the other. Points inside the ICON-EU domain use ICON-EU; every other world coordinate uses the latest complete DWD ICON Global run. Both routes provide the same seven chart types, including native model-level cloud obstruction and lower-atmosphere TKE. DWD publishes Global TKE only through `+48 h`, so its hybrid Overall chart honestly ends there while weather, cloud obstruction, and pressure-level diagnostics continue through the main horizon. Global also lacks the direct `VIS` field used for fog diagnosis and the transparency proxy.
 
 Forecast coverage is worldwide. ICON-EU covers the configured regular-grid bounding box `29.5…70.5° N, 23.5° W…62.5° E`, approximately `27.4 million km²` on a spherical Earth (land and sea, not a land-area figure). ICON Global covers the complete globe, approximately `510.1 million km²`, including both poles and the date line; it is not cropped to Russia.
 

@@ -1,8 +1,8 @@
 # bot_astrosferum: KISS-архитектура
 
-Статус: реализованный MVP, архитектурная ревизия 0.2; data contract
+Статус: реализованный MVP, архитектурная ревизия 0.3; data contract
 `surface-hourly-v17`/`cloud-hourly-v4` работает в production
-Дата проверки внешних источников: 2026-07-19; последняя ревизия: 2026-07-21
+Дата проверки внешних источников: 2026-07-19; последняя ревизия: 2026-07-22
 Среда развёртывания: управляемый оператором сервер
 Каталог развёртывания: `/opt/docker/bot_astrosferum`
 
@@ -12,7 +12,7 @@
 
 ### PostgreSQL, точки и статистика
 
-PostgreSQL 18 работает внутренним Compose-сервисом с bind-volume `./data/postgres`. Приложение применяет идемпотентную схему при старте. Хранятся Telegram ID, до 10 именованных координат на пользователя и одна агрегированная строка числа прогнозов на пользователя в сутки. Администраторы задаются через `ASTRO_TELEGRAM_ADMIN_IDS` и видят число пользователей и PNG-график запросов за 30 дней.
+PostgreSQL 18 работает внутренним Compose-сервисом с bind-volume `./data/postgres`. Приложение применяет идемпотентную схему при старте. Хранятся числовые ключи пользователей с раздельным пространством платформ, до 10 именованных координат на пользователя и одна агрегированная строка числа прогнозов на пользователя в сутки. Администраторы Telegram и VK задаются независимо через `ASTRO_TELEGRAM_ADMIN_IDS` и `ASTRO_VK_ADMIN_IDS` и видят число пользователей и PNG-график запросов за 30 дней.
 
 Суточные агрегаты старше 90 дней очищаются при старте и раз в сутки; незавершённые диалоги сохранения точек живут не более двух часов.
 
@@ -36,13 +36,13 @@ Runtime закреплён на официальном образе OSGeo GDAL 3
 | GRIB2 | ecCodes; CDO только для point extraction ICON Global | Не пишем собственный GRIB-декодер, ICON-EU читаем напрямую |
 | Приоритетная модель внутри европейского домена | DWD ICON-EU | Открытая сетка ~7 км и полный набор surface/model-level полей |
 | Модель вне европейского домена | DWD ICON Global | Стабильный официальный GRIB-поток с мировым покрытием |
-| ICON-Ru | Shadow provider до локальной верификации | Публичный WIS-продукт грубее и беднее по полям, чем native-модель |
-| Хранилище приложения | Файлы с атомарной публикацией | Для одного экземпляра БД не нужна |
+| ICON-Ru | Документированный кандидат для будущего shadow adapter | Публичный WIS-продукт грубее и беднее по полям, чем native-модель |
+| Хранилище приложения | PostgreSQL для пользователей; атомарные файлы для моделей и кешей | Надёжное пользовательское состояние без Redis и брокера |
 | Кэш точки | Версионированный `gob.gz` + LRU в RAM | Сохраняет `NaN`, компактно хранится и не требует Redis |
 | Кэш графиков | PNG-файлы | Отправляются платформам без повторного рендеринга |
 | Очередь работ | Bounded Go channel + `singleflight` по ключу | Не нужен внешний брокер |
-| Рендеринг | Pure Go, детерминированные PNG 1280×960 | Один образ, без Python-сервиса |
-| Логи | Структурированный JSON в stdout | Сбор и ротация средствами Docker |
+| Рендеринг | Pure Go, детерминированные PNG разных размеров | Читаемые таблицы на 72 часа без Python-сервиса |
+| Логи | Структурированные текстовые сообщения в stdout | Сбор и ротация средствами Docker |
 
 ## 3. Выбор модели по точности и доступности
 
@@ -90,20 +90,20 @@ ICON Global имеет более грубую сетку около 13 км, н
 - без опубликованных TKE, HHL и полной сетки model levels.
 
 Discovery spike подтвердил origin topic
-`origin/a/wis2/ru-roshydromet/data/core/weather/prediction/forecast/short-range/deterministic/limited-area`. Production shadow adapter подписывается на эквивалентный `cache/a/...` topic одного из TLS Global Brokers WIS 2.0, а не зависит от незашифрованного origin `mqtt://wis2box.mecom.ru:1883`.
+`origin/a/wis2/ru-roshydromet/data/core/weather/prediction/forecast/short-range/deterministic/limited-area`. Будущий shadow adapter должен подписываться на эквивалентный `cache/a/...` topic одного из TLS Global Brokers WIS 2.0, а не зависеть от незашифрованного origin `mqtt://wis2box.mecom.ru:1883`.
 
 Кроме того, официальное описание текущей системы говорит, что собственного data assimilation пока нет, а начальные данные основаны на DWD ICON Global. Вложенная сетка всё равно может улучшать локальные процессы, но это преимущество нельзя автоматически переносить на публично перегридированный продукт 0.25°.
 
 Источники: [Hydrometcentre — system description](https://mpr.meteoinfo.ru/en/srf-system-about), [ICON-Ru products for WIS 2.0](https://meteoinfo.ru/en/wis2-srf-products-of-wipps-dc-moscow) и [каталог продукции Росгидромета](https://meteoinfo.ru/images/media/books-docs/RHM/catalog-ASDT-20260116.pdf).
 
-Поэтому ICON-Ru WIS подключается как **shadow provider**: его прогнозы загружаются для контрольных точек и сравниваются с наблюдениями, но не выдаются пользователю по умолчанию. Если верификация покажет устойчивое преимущество по конкретному региону/параметру/горизонту, router сможет продвинуть его в production. При появлении стабильного native-потока ICON-Ru 6.5 км он оценивается отдельно.
+Поэтому ICON-Ru WIS остаётся только **кандидатом для будущего shadow provider**. Текущий production-код его не загружает и не оценивает. Если будущая реализация и верификация покажут устойчивое преимущество по конкретному региону/параметру/горизонту, routing можно будет пересмотреть. Стабильный native-поток ICON-Ru 6.5 км потребуется оценивать отдельно.
 
 ### 3.4. Начальная production-политика
 
 ```text
 точка внутри открытого ICON-EU domain -> ICON-EU для всего bundle
 точка вне ICON-EU domain             -> ICON Global для всего bundle
-ICON-Ru WIS                           -> shadow verification only
+ICON-Ru WIS                           -> не подключён; только план shadow-исследования
 ```
 
 Один provider на весь bundle сохраняет физическую согласованность surface и upper-atmosphere полей и заметно упрощает MVP. Пользователь всегда видит конкретные продукт, сетку и base time.
@@ -130,12 +130,12 @@ ICON-Ru WIS                           -> shadow verification only
 - Telegram и VK с одинаковыми командами и результатами;
 - координаты из geo-вложения или текста `широта, долгота`;
 - горизонт 72 часа: приземная погода каждый час, высотные профили каждые 3 часа;
-- отдельные текстовые строки «Погода» и «Роса»;
+- погода, облака по ярусам, риск росы/тумана и события светил на первом графике;
 - прогнозный индекс сиинга `1…10`;
 - общий почасовой индекс пригодности для астрономии `1…10`;
 - семь графиков: почасовая погода, общий почасовой индекс, почасовая облачность по высоте и четыре высотных/seeing-графика;
 - автоматическое обновление прогонов и безопасное использование последнего полного прогона;
-- русский интерфейс; архитектура не препятствует английской локализации;
+- локализованный русский/английский интерфейс: Telegram использует `language_code`, а VK пока получает русский по умолчанию, поскольку Group Long Poll его не передаёт;
 - прозрачное указание моделей, прогонов и свежести данных.
 
 ### Не входит в MVP
@@ -146,7 +146,8 @@ ICON-Ru WIS                           -> shadow verification only
 - постоянное хранение истории переписки и точных координат пользователей;
 - модели вне семейства ICON;
 - горизонт больше 72 часов в основном пользовательском ответе;
-- распределённый запуск нескольких экземпляров приложения.
+- распределённый запуск нескольких экземпляров приложения;
+- автоматический shadow-ingest ICON-Ru и observational scoring: исследование источника описано, но production adapter пока отсутствует.
 
 ## 5. Контекст системы
 
@@ -155,7 +156,7 @@ DWD ICON-EU -------------+
                          |     +-------------------+
 DWD ICON Global ---------+---->| Model providers   |
                          |     +-------------------+
-ICON-Ru WIS (shadow) ----+
+ICON-Ru WIS (planned) ---+
                                +---------+---------+
                                          |
                                          v
@@ -207,12 +208,13 @@ bot_astrosferum render-sample  # графики из fixture без сетево
 bot_astrosferum/
 ├── cmd/bot_astrosferum/              # main, разбор подкоманд
 ├── internal/
-│   ├── app/                   # композиция зависимостей и lifecycle
-│   ├── bot/
-│   │   ├── telegram/          # Telegram API adapter
-│   │   └── vk/                # VK API adapter
+│   ├── app/                   # lifecycle и общий application handler бота
+│   │   └── bot/               # команды, прогноз и persistence без привязки к платформе
 │   ├── config/                # загрузка и валидация config
 │   ├── model/                 # providers, sync, GRIB extraction
+│   ├── platform/
+│   │   ├── telegram/          # Telegram Bot API adapter
+│   │   └── vk/                # VK Group Long Poll/API adapter
 │   ├── forecast/              # погода, роса, ветер, сиинг, astro score
 │   ├── render/                # PNG и цветовые шкалы
 │   ├── store/                 # atomic files, point/render cache
@@ -247,7 +249,6 @@ bot_astrosferum/
 │   ├── telegram_token
 │   └── vk_token
 ├── data/
-│   ├── state/                         # offsets/long-poll state, health
 │   ├── models/
 │   │   ├── icon-eu/
 │   │   │   ├── incoming/<run-id>/
@@ -257,7 +258,7 @@ bot_astrosferum/
 │   │       ├── incoming/<run-id>/
 │   │       ├── runs/<run-id>/
 │   │       └── current.json
-│   │   └── icon-ru/                    # shadow data only
+│   │   └── icon-ru/                    # резерв; текущий код каталог не создаёт
 │   ├── cache/
 │   │   ├── points/
 │   │   └── renders/
@@ -324,33 +325,31 @@ type AstroConditions struct {
 
 ## 10. Граница provider
 
-Для KISS нужен один значимый интерфейс расширения — источник модели:
+Реальная граница serving намеренно меньше универсального provider framework:
 
 ```go
-type Provider interface {
-    Name() string
-    Coverage() Coverage
-    ProbeLatest(context.Context) (RemoteRun, error)
-    Sync(context.Context, RemoteRun, string) (Manifest, error)
-    ExtractPoint(context.Context, Manifest, Location) (PointSeries, error)
+type ForecastStore interface {
+    Vertical(context.Context, forecast.Location) (forecast.VerticalSeries, error)
+    Surface(context.Context, forecast.Location) (forecast.SurfaceSeries, error)
+    Cloud(context.Context, forecast.Location) (forecast.CloudSeries, error)
 }
 ```
 
-Реализации MVP:
+Реализованные stores:
 
 - `iconeu`: DWD ICON-EU, основной provider в доступном европейском домене;
-- `iconglobal`: DWD ICON Global вне домена ICON-EU и fallback;
-- `iconruwis`: WIS-продукт ICON-Ru, shadow verification provider.
+- `iconglobal`: DWD ICON Global вне домена ICON-EU;
+- `model.CoverageFallback`: небольшой двухветочный router между ними.
 
-Позднее может появиться `iconrunative`, но обработчики Telegram/VK, калькулятор и renderer об этом знать не должны.
-
-`Coverage` включает:
+Sync clients и schedulers остаются конкретными: реальных providers пока два. `Coverage` включает:
 
 - геометрию домена и правила нормализации долготы;
 - доступные поля и уровни;
 - доступные сроки и временной шаг;
 - максимальный горизонт;
 - фактическое разрешение продукта.
+
+Будущий проверенный provider сможет реализовать `ForecastStore` без изменений обработчиков платформ, расчётов и рендера; спекулятивного adapter сейчас нет.
 
 ## 11. Выбор источника
 
@@ -757,7 +756,7 @@ DWD определяет [`VIS` в метрах и `TQV` в kg/m²](https://isab
 Render cache key:
 
 ```text
-telegram-render-v6-dynamic-mh/<bundle-hash>/<location-cells>/<horizon>/<locale>/<renderer-version>/<chart>.png
+shared-render-v1/<sha256-bundle-key>/<chart>.png
 ```
 
 ## 18. Пользовательский сценарий
@@ -775,28 +774,27 @@ MVP равноправно принимает координаты двумя с
 
 ### 18.2. Обработка
 
-1. Platform adapter превращает update в общий `IncomingRequest`.
-2. Валидируются координаты и лимиты.
+1. Platform adapter превращает update в общий `bot.Update`.
+2. Валидируются координаты и синтаксис команды.
 3. Определяется локальная timezone.
 4. Router выбирает providers и совместимые runs.
 5. Проверяется render cache.
 6. При cache miss извлекается/читается point cache.
 7. Выполняются нормализация, расчёты и renderer.
-8. Сначала отправляется краткий текст, затем media group/набор вложений.
-9. Platform adapter преобразует общий `BotResponse` в Telegram/VK API calls.
+8. Сначала отправляется краткая сводка модели/freshness/засветки, затем семь последовательных вложений: три больших графика как документы и четыре меньшие диагностики как фотографии.
+9. Общий handler вызывает небольшой messenger-интерфейс, реализованный активным platform adapter.
 
 ### 18.3. Текстовый контракт ответа
 
 ```text
-📍 59.9386, 30.3141 · MSK (UTC+3)
-Период: 19–22 июля; погода каждый час, высотные профили каждые 3 часа
-Солнце: восход 04:13, заход 21:57. Луна: восход 13:06, заход 22:50; растущий серп, освещено 42%.
-Погода: ночью облачно, после 03:00 небольшой дождь; порывы до 9 м/с.
-Роса: высокий риск 00:00–05:00; минимум T−Td 0.8 °C.
-Сиинг: прогнозный индекс 3.1/10, уверенность средняя.
-Условия: лучшее окно 22:00–00:00, 54/100.
-Данные: DWD ICON-EU 0.0625° (~7 км), run 2026-07-19 12 UTC.
-Засветка: LPI 12.34, SQM 19.19 mag/arcsec², ориентир Бортля 6 (Light Pollution Atlas 2024, зенит, интерполяция 30″).
+ICON-EU run 2026072206 UTC
+Актуальность данных: 7 ч 59 мин
+Период: 22.07 09:00 — 25.07 09:00
+Сетка: ICON-EU 0.0625°
+Оптическая турбулентность: seeing-hybrid-tke-mh-hmnsp99-v4; гибридная модельная оценка ICON …
+
+Засветка: ориентир Бортля 8–9 (LPI …, SQM …, Light Pollution Atlas 2024).
+Сравнение засветки: ориентир Бортля 8–9 (LPI …, SQM …, World Atlas 2015).
 ```
 
 Платформенные ограничения длины и числа вложений решаются только в адаптере. Бизнес-текст и графики общие.
@@ -808,8 +806,8 @@ MVP равноправно принимает координаты двумя с
 - один point bundle содержит ветер, поверхность и облака; три ecCodes-выборки выполняются параллельно;
 - RAM LRU ограничен одновременно 512 точками и оценочным бюджетом 20 GiB; `GOMEMLIMIT=24GiB` оставляет запас ecCodes и runtime;
 - одинаковые одновременные point-запросы объединяются через per-key flight;
-- шесть Telegram workers обрабатывают разные чаты параллельно, сохраняя порядок сообщений одного чата;
-- очередь bounded; при перегрузке бот отвечает «расчёт занят, повторите позже», а не расходует память без лимита;
+- каждая включённая платформа имеет шесть шардированных по peer workers: разные peer обрабатываются параллельно, порядок одного peer сохраняется;
+- очередь каждого adapter ограничена и при заполнении создаёт backpressure только своему poller;
 - ecCodes ограничен общим семафором на восемь процессов;
 - публикация нового run не ломает текущий запрос: запрос держит неизменяемые ссылки на manifests выбранного bundle;
 - кэш записывается `temp + fsync + rename`.
@@ -822,17 +820,26 @@ MVP равноправно принимает координаты двумя с
 | Сбой | Поведение |
 |---|---|
 | Новый run неполон | Остаётся предыдущий current |
-| Provider недоступен | Используется свежий последний полный run в пределах `max_stale_age` |
+| Provider недоступен | Используется последний полный run; при превышении `max_stale_age` пользователь видит явное предупреждение |
 | Точка вне покрытия ICON-EU | Используется ICON Global с явным указанием модели |
-| ICON-Ru shadow недоступен | Production-ответ не затрагивается; verification получает gap |
+| Исследовательский источник ICON-Ru недоступен | Production не затрагивается: от него не зависит ни один production adapter |
 | Часть верхних уровней отсутствует | Missing cells + сниженный confidence |
-| Один график не построился | Отправляется текст и остальные графики |
+| Один график не построился или не загрузился | Отправляются сводка и все успешные графики; после попытки всех вложений сообщается о сбоях |
 | Telegram недоступен | VK продолжает работать и наоборот |
-| Контейнер перезапущен | Poll offsets/state читаются из атомарных файлов |
+| Контейнер перезапущен | Adapter получает новый long-poll cursor у своей платформы; локальный offset-файл не ведётся |
 | Мало диска | Sync не стартует, удаляется disposable cache, current сохраняется |
 | ecCodes вернул ошибку | Файл/run помечается invalid, ошибка не кэшируется как успешный результат |
 
 Порог свежести задаётся отдельно для provider и управляет только предупреждением, а не выбором или удержанием cache entry. Пользователь всегда видит base time и run ID. Ключи point/render cache содержат run ID, поэтому публикация нового полного run автоматически обходит все артефакты предыдущего.
+
+VK media upload выполняет не более трёх попыток. После ошибок adapter ждёт
+`1 с`, затем `2 с` и перед повтором запрашивает новый platform upload URL.
+Неполный ответ отклоняется до `photos.saveMessagesPhoto`/`docs.save`; цикл
+ограничен контекстом пользовательского запроса и не применяется к
+произвольным внешним доменам. Успешные VK media-delivery разделены минимальным
+интервалом `150 мс` внутри последовательной выдачи одного прогноза. Общей
+блокировки нет: параллельные VK-запросы не задерживают друг друга; ограничение
+находится только в VK adapter и не влияет на Telegram.
 
 ## 21. Конфигурация
 
@@ -913,6 +920,7 @@ platforms:
   vk:
     enabled: true
     token_file: /run/secrets/vk_token
+    group_id: <community-id>
 ```
 
 Все приведённые calibration-параметры также имеют одноимённые
@@ -928,22 +936,31 @@ platforms:
 Multi-stage Dockerfile:
 
 1. Go builder собирает статически максимально возможную часть `bot_astrosferum`.
-2. Runtime на Debian 12 содержит CA certificates, timezone data, ecCodes tools и шрифты.
-3. Процесс запускается не от root.
-4. Публичные порты не объявляются.
+2. Runtime OSGeo GDAL на Ubuntu содержит CA certificates, timezone data, ecCodes/CDO tools и шрифты.
+3. Публичные Russian Trusted Root/Sub CA встроены только в TLS pool VK adapter; его transport разрешает лишь `vk.ru`, `*.vk.ru`, `vk.com`, `*.vk.com`, а VK API вызывается через `https://api.vk.ru`.
+4. Процесс запускается не от root.
+5. Публичные порты не объявляются.
+
+Расширение российскими УЦ не устанавливается на весь контейнер. Сертификаты
+вшиты в VK adapter и объединяются с системным pool только в его отдельном
+transport. Redirect, upload и Long Poll URL вне `vk.ru`, `*.vk.ru`, `vk.com`,
+`*.vk.com` отклоняются; проверки hostname и срока действия остаются включены.
+Это лишь разрешает альтернативную цепочку, если её отдаёт сам VK, но не
+создаёт замену отозванному leaf-сертификату; стандартный TLS client Go не
+выполняет универсальную проверку CRL/OCSP автоматически.
 
 Один и тот же image используется для `serve`, `sync`, `doctor` и тестового рендера.
 
 ### 22.2. Compose
 
-Начально один service `app`:
+Compose содержит PostgreSQL и один application service:
 
 - `restart: unless-stopped`;
 - `init: true`;
 - `stop_grace_period` для завершения активных файловых операций;
 - bind mounts только из текущего проекта;
 - ограниченная ротация Docker logs;
-- healthcheck через `bot_astrosferum doctor --quick`;
+- PostgreSQL healthcheck блокирует старт приложения до готовности БД;
 - user UID/GID согласован с владельцем каталогов на host.
 
 Нет зависимости от nginx и нет конфликта портов с другими сервисами production-сервера.
@@ -989,8 +1006,8 @@ Runtime автоматически сохраняет только два мод
 - нет опубликованных TCP-портов;
 - tokens только в `secrets/`, `0600`, исключены из Git;
 - исходящие HTTP-запросы имеют timeout и лимиты размера;
-- update IDs дедуплицируются;
-- есть per-user/per-chat rate limit и общий bounded queue;
+- platform long-poll cursor предотвращает обычный повтор событий внутри работающего процесса;
+- ограниченные peer-affine очереди каждой платформы не позволяют бесконечно накапливать запросы в процессе;
 - входные координаты и команды ограничены по длине и диапазону;
 - `os/exec` получает аргументы отдельным массивом, пользовательский ввод не проходит через shell;
 - скачанный GRIB валидируется до публикации;
@@ -1046,14 +1063,14 @@ Runtime автоматически сохраняет только два мод
 - основной provider ICON-EU;
 - ручной `sync` одного срока;
 - extraction одной точки;
-- пять PNG из fixture;
+- семь PNG из fixture;
 - `doctor`.
 
 ### Этап 2 — полноценные данные
 
 - атомарные runs и scheduler;
 - ICON Global fallback adapter (реализован);
-- ICON-Ru WIS shadow adapter;
+- исследование источника ICON-Ru WIS; shadow adapter остаётся в плане;
 - domain-based provider routing и единый-provider bundle;
 - point/render cache;
 - weather/dew/seeing/conditions-v4-dynamic-mh-cloud-guard.
@@ -1063,13 +1080,13 @@ Runtime автоматически сохраняет только два мод
 - общий request/response contract;
 - Telegram adapter;
 - VK adapter;
-- rate limits, retries, media upload и offsets.
+- независимые retry supervisor, bounded worker queues, native location conversion и media upload.
 
 ### Этап 4 — production
 
 - Dockerfile/Compose;
 - deploy в `/opt/docker/bot_astrosferum`;
-- `doctor`, healthcheck, log rotation;
+- `doctor`, PostgreSQL healthcheck и log rotation;
 - проверка рестарта и восстановления после неполного sync;
 - лимиты диска и run retention.
 
@@ -1078,13 +1095,13 @@ Runtime автоматически сохраняет только два мод
 - одна и та же координата даёт эквивалентный результат в Telegram и VK;
 - для Санкт-Петербурга и Москвы весь production bundle берётся из ICON-EU, пока локальная верификация не обосновала иную политику;
 - вне доступного ICON-EU domain используется ICON Global;
-- ICON-Ru WIS собирается в shadow-режиме и не влияет на production-ответ;
+- ICON-Ru WIS не влияет на production, поскольку shadow adapter пока не реализован;
 - источник, сетка и run отображаются пользователю;
-- строки «Погода» и «Роса» присутствуют отдельно;
-- строятся weather PNG `3200×1080`, облачный PNG `3200×1100` и четыре читаемых PNG `1280×960`;
+- погода, роса и туман видны на первом графике;
+- строятся weather PNG `3200×1080`, Overall PNG `3840×1200`, облачный PNG `3200×1100` и четыре читаемых PNG `1280×960`;
 - seeing называется прогнозным индексом и содержит confidence;
 - неполный run не публикуется;
-- после рестарта не теряется current manifest и polling state;
+- после рестарта сохраняются current model manifests, а platform cursors заново запрашиваются у API;
 - токены отсутствуют в Git и логах;
 - все bind mounts находятся под `/opt/docker/bot_astrosferum`;
 - при недоступности одного platform API второй бот продолжает работать;
