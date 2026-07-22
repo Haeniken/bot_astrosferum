@@ -32,7 +32,7 @@ func (runner cloudMetadataRunner) CombinedOutput(_ context.Context, name string,
 
 func TestExtractCloudFrameUsesModelPressureAndHHLHeight(t *testing.T) {
 	location, _ := forecast.NewLocation(55.7558, 37.6173, "Europe/Moscow")
-	frame, err := extractCloudFrame(context.Background(), cloudRunner{"ccl 58 43\npres 58 75687\nclwmr 58 0.00012\nQI 58 0.00003\nt 58 265.5\nu 58 12\nv 58 -4\ntke 58 0.8\ntke 59 0.4\n"}, "f000.grib2", location, time.Unix(1, 0), []int{58}, map[int]float64{58: 3150, 59: 2850})
+	frame, err := ExtractCloudFrame(context.Background(), cloudRunner{"ccl 58 43\npres 58 75687\nclwmr 58 0.00012\nQI 58 0.00003\nt 58 265.5\nu 58 12\nv 58 -4\ntke 58 0.8\ntke 59 0.4\n"}, "f000.grib2", location, time.Unix(1, 0), []int{58}, []int{58}, map[int]float64{58: 3150, 59: 2850})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestExtractCloudFrameUsesModelPressureAndHHLHeight(t *testing.T) {
 
 func TestExtractCloudFrameKeepsUpperTemperatureAndLeavesDynamicsUnavailable(t *testing.T) {
 	location, _ := forecast.NewLocation(55.7558, 37.6173, "Europe/Moscow")
-	frame, err := extractCloudFrame(context.Background(), cloudRunner{"ccl 25 5\npres 25 20687\nt 25 220\nclwmr 25 0\nQI 25 0\n"}, "f000.grib2", location, time.Unix(1, 0), []int{25}, map[int]float64{25: 12150, 26: 11850})
+	frame, err := ExtractCloudFrame(context.Background(), cloudRunner{"ccl 25 5\npres 25 20687\nt 25 220\nclwmr 25 0\nQI 25 0\n"}, "f000.grib2", location, time.Unix(1, 0), []int{25}, nil, map[int]float64{25: 12150, 26: 11850})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +94,14 @@ func TestCloudTKEUsesUniqueAdjacentHalfLevels(t *testing.T) {
 }
 
 func TestCloudSurfaceElevationUsesHHL75(t *testing.T) {
-	value, err := cloudSurfaceElevation(map[int]float64{74: 240, 75: 219.75})
+	value, err := CloudSurfaceElevation(map[int]float64{74: 240, 75: 219.75}, 75, "ICON-EU")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value != 219.75 {
 		t.Fatalf("surface elevation = %v, want 219.75", value)
 	}
-	if _, err := cloudSurfaceElevation(map[int]float64{74: 240}); err == nil {
+	if _, err := CloudSurfaceElevation(map[int]float64{74: 240}, 75, "ICON-EU"); err == nil {
 		t.Fatal("missing HHL75 was accepted as surface elevation")
 	}
 }

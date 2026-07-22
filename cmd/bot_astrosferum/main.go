@@ -23,6 +23,7 @@ import (
 	"bot_astrosferum/internal/model"
 	"bot_astrosferum/internal/model/eccodes"
 	"bot_astrosferum/internal/model/iconeu"
+	"bot_astrosferum/internal/model/iconglobal"
 	"bot_astrosferum/internal/platform/telegram"
 	"bot_astrosferum/internal/render"
 	pgstore "bot_astrosferum/internal/store"
@@ -63,11 +64,65 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runServe(ctx, args[1:], stdout, stderr)
 	case "sync-icon-eu":
 		return runSyncICONEU(ctx, args[1:], stdout, stderr)
+	case "sync-icon-global":
+		return runSyncICONGlobal(ctx, args[1:], stdout, stderr)
 	case "render-point":
 		return runRenderPoint(ctx, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runSyncICONGlobal(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("sync-icon-global", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "/app/config/config.yaml", "configuration file")
+	runID := flags.String("run", "", "specific complete run as YYYYMMDDHH; latest when empty")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("sync-icon-global accepts flags only")
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
+	if err := iconglobal.EnsureGrid(ctx, cfg.Paths.Data, logf); err != nil {
+		return err
+	}
+	client := iconglobal.NewClient()
+	client.Workers = cfg.Sync.DownloadParallelism
+	client.Progress = logf
+	var remote model.RemoteRun
+	if *runID == "" {
+		remote, err = client.ProbeLatest(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		baseTime, parseError := time.Parse("2006010215", *runID)
+		if parseError != nil {
+			return fmt.Errorf("parse --run: %w", parseError)
+		}
+		remote = model.RemoteRun{ID: *runID, BaseTime: baseTime}
+	}
+	if _, err := fmt.Fprintf(stderr, "syncing ICON Global run %s\n", remote.ID); err != nil {
+		return err
+	}
+	manifest, err := client.Sync(ctx, remote, cfg.Paths.Data)
+	if err != nil {
+		return err
+	}
+	manifest, err = client.AugmentCloud(ctx, cfg.Paths.Data, manifest)
+	if err != nil {
+		return err
+	}
+	if err := iconglobal.PublishCurrent(cfg.Paths.Data, manifest); err != nil {
+		return err
+	}
+	return writeJSON(stdout, manifest.Manifest)
 }
 
 func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -156,7 +211,14 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
-	store := iconeu.NewCachedStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries, int64(cfg.App.PointCacheMemoryLimit), logf)
+	iconEUStore := iconeu.NewCachedStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries, int64(cfg.App.PointCacheMemoryLimit), logf)
+	var store model.ForecastStore = iconEUStore
+	if cfg.Providers.ICONGlobal.Enabled {
+		store = model.CoverageFallback{
+			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore,
+			Fallback: iconglobal.NewStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, logf),
+		}
+	}
 	series, err := store.Vertical(ctx, location)
 	if err != nil {
 		return err
@@ -166,11 +228,14 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	surface = surface.Window(time.Now(), 72)
-	cloud, err := store.Cloud(ctx, location)
-	if err != nil {
-		return err
+	cloud, cloudError := store.Cloud(ctx, location)
+	hasCloud := cloudError == nil
+	if cloudError != nil {
+		writeLog(stderr, "cloud profile unavailable: %v", cloudError)
+	} else {
+		cloud = cloud.Window(time.Now(), 72)
+		hasCloud = len(cloud.Frames) >= 2
 	}
-	cloud = cloud.Window(time.Now(), 72)
 	result, err := render.All(*outputDirectory, series, render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height, Language: *language})
 	if err != nil {
 		return err
@@ -184,9 +249,11 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 	calibration := overallCalibration(cfg.Algorithms)
-	result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
-	if err := render.CloudObstruction(result.CloudObstruction, cloud, calibration, render.Options{Width: 3200, Height: 1100, Language: *language}); err != nil {
-		return err
+	if hasCloud {
+		result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
+		if err := render.CloudObstruction(result.CloudObstruction, cloud, calibration, render.Options{Width: 3200, Height: 1100, Language: *language}); err != nil {
+			return err
+		}
 	}
 	overall, err := forecast.ComputeHourlyOverallIndex(series, surface, cloud, calibration)
 	if err != nil {
@@ -235,10 +302,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
-	store := iconeu.NewCachedStore(
+	iconEUStore := iconeu.NewCachedStore(
 		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
 		int64(cfg.App.PointCacheMemoryLimit), logf,
 	)
+	var forecastStore model.ForecastStore = iconEUStore
+	if cfg.Providers.ICONGlobal.Enabled {
+		globalStore := iconglobal.NewStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, logf)
+		forecastStore = model.CoverageFallback{
+			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore, Fallback: globalStore,
+		}
+	}
 	handler.SetLogger(logf)
 	database, err := pgstore.Open(ctx, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name, cfg.Database.User, cfg.Database.Password, cfg.Database.MaxConns)
 	if err != nil {
@@ -275,7 +349,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	if err := handler.EnableForecast(
-		store,
+		forecastStore,
 		filepath.Join(cfg.Paths.Temp, "telegram-renders"),
 		render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height},
 	); err != nil {
@@ -283,6 +357,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	if err := handler.SetForecastMaxStaleAge(cfg.Providers.ICONEU.MaxStaleAge.Duration); err != nil {
 		return err
+	}
+	if cfg.Providers.ICONGlobal.Enabled {
+		if err := handler.SetFallbackForecastMaxStaleAge(cfg.Providers.ICONGlobal.MaxStaleAge.Duration); err != nil {
+			return err
+		}
 	}
 	if err := handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "telegram-render-v1")); err != nil {
 		return err
@@ -299,6 +378,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		Logf:        func(format string, values ...any) { writeLog(stderr, format, values...) },
 	}
 	go scheduler.Run(ctx)
+	if cfg.Providers.ICONGlobal.Enabled {
+		globalClient := iconglobal.NewClient()
+		globalClient.Workers = cfg.Sync.DownloadParallelism
+		globalClient.Progress = func(format string, values ...any) { writeLog(stderr, format, values...) }
+		globalScheduler := app.ICONGlobalScheduler{
+			Client: globalClient, DataRoot: cfg.Paths.Data,
+			PollInterval: cfg.Sync.PollInterval.Duration, KeepRuns: cfg.Providers.ICONGlobal.KeepRuns,
+			MaxStaleAge: cfg.Providers.ICONGlobal.MaxStaleAge.Duration, Logf: logf,
+		}
+		go globalScheduler.Run(ctx)
+	}
 	if _, err := fmt.Fprintln(stdout, "Telegram long polling started"); err != nil {
 		return err
 	}
@@ -516,7 +606,8 @@ func printUsage(writer io.Writer) error {
   light-pollution query annual modeled zenith brightness for coordinates
   render-sample  render PNG charts from deterministic synthetic fixtures
   sync-icon-eu   atomically sync one complete ICON-EU pressure-level wind run
-	  render-point   render seven charts for a point from the current ICON-EU run
+  sync-icon-global atomically sync one complete native-grid ICON Global run
+  render-point   render charts for a point from the current ICON-EU/Global run
   version        print the build version`)
 	return err
 }

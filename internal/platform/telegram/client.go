@@ -68,7 +68,7 @@ func (client *Client) Run(ctx context.Context, handler *Handler, workers int, re
 		workers = 1
 	}
 	if requestTimeout <= 0 {
-		requestTimeout = 3 * time.Minute
+		requestTimeout = 15 * time.Minute
 	}
 	if logf == nil {
 		logf = func(string, ...any) {}

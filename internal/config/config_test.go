@@ -17,6 +17,9 @@ func TestLoadExample(t *testing.T) {
 	if cfg.App.Horizon.Duration != 72*time.Hour {
 		t.Fatalf("unexpected horizon: %s", cfg.App.Horizon.Duration)
 	}
+	if cfg.App.RequestTimeout.Duration != 15*time.Minute {
+		t.Fatalf("unexpected request timeout: %s", cfg.App.RequestTimeout.Duration)
+	}
 	if cfg.App.ECCodesWorkers != 8 || cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
 		t.Fatalf("unexpected performance configuration: %+v", cfg.App)
 	}

@@ -15,7 +15,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "telegram-render-v7-localized"
+const renderCacheVersion = "telegram-render-v8-provider-aware"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
@@ -26,8 +26,8 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 	if len(cloud.Frames) > 0 {
 		firstCloud, lastCloud = cloud.Frames[0].ValidAt, cloud.Frames[len(cloud.Frames)-1].ValidAt
 	}
-	identity := fmt.Sprintf("%s|%s|%.6f|%.6f|%s|%s|%s|%s|%s|%s|%d|%d|language=%s|%s|%d|calibration=%#v",
-		renderCacheVersion, vertical.RunID, vertical.Location.Latitude, vertical.Location.Longitude, vertical.Location.TimeZone,
+	identity := fmt.Sprintf("%s|%s|%s|%s|%s|%.6f|%.6f|%s|%s|%s|%s|%s|%s|%d|%d|language=%s|%s|%d|calibration=%#v",
+		renderCacheVersion, vertical.Provider, vertical.Product, vertical.Grid, vertical.RunID, vertical.Location.Latitude, vertical.Location.Longitude, vertical.Location.TimeZone,
 		firstSurface.UTC().Format(time.RFC3339), lastSurface.UTC().Format(time.RFC3339),
 		firstCloud.UTC().Format(time.RFC3339), lastCloud.UTC().Format(time.RFC3339),
 		vertical.AlgorithmVersion, options.Width, options.Height, options.Language, render.Version, len(sky.Days),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,11 +32,11 @@ func (store VerticalStore) Cloud(ctx context.Context, location forecast.Location
 	if runner == nil {
 		runner = execRunner{}
 	}
-	heights, err := extractCloudHeights(ctx, runner, filepath.Join(manifest.Directory, manifest.CloudGeometry.File), location)
+	heights, err := ExtractCloudHeights(ctx, runner, filepath.Join(manifest.Directory, manifest.CloudGeometry.File), location)
 	if err != nil {
 		return forecast.CloudSeries{}, err
 	}
-	surfaceElevationM, err := cloudSurfaceElevation(heights)
+	surfaceElevationM, err := CloudSurfaceElevation(heights, iconEUSurfaceHalfLevel, "ICON-EU")
 	if err != nil {
 		return forecast.CloudSeries{}, err
 	}
@@ -59,7 +60,7 @@ func (store VerticalStore) Cloud(ctx context.Context, location forecast.Location
 			defer group.Done()
 			for index := range jobs {
 				step := manifest.CloudSteps[index]
-				frame, extractionError := extractCloudFrame(workContext, runner, filepath.Join(manifest.Directory, step.File), location, step.ValidAt, manifest.CloudModelLevels, heights)
+				frame, extractionError := ExtractCloudFrame(workContext, runner, filepath.Join(manifest.Directory, step.File), location, step.ValidAt, manifest.CloudModelLevels, DefaultCloudGroundModelLevels, heights)
 				results <- result{index: index, frame: frame, err: extractionError}
 				if extractionError != nil {
 					cancel()
@@ -93,11 +94,14 @@ func (store VerticalStore) Cloud(ctx context.Context, location forecast.Location
 	return forecast.CloudSeries{
 		Location: location, Provider: manifest.Provider, Product: "ICON-EU native-layer CLC/QC/QI/T + lower-atmosphere U/V/TKE",
 		RunID: manifest.RunID, BaseTime: manifest.BaseTime, GeneratedAt: time.Now().UTC(),
-		SurfaceElevationM: surfaceElevationM, Frames: frames,
+		TurbulenceValidUntil: manifest.CloudSteps[len(manifest.CloudSteps)-1].ValidAt,
+		SurfaceElevationM:    surfaceElevationM, Frames: frames,
 	}, nil
 }
 
-func extractCloudHeights(ctx context.Context, runner CommandRunner, path string, location forecast.Location) (map[int]float64, error) {
+// ExtractCloudHeights reads native HHL geometry after any provider-specific
+// horizontal remapping has been applied.
+func ExtractCloudHeights(ctx context.Context, runner CommandRunner, path string, location forecast.Location) (map[int]float64, error) {
 	values, err := extractCloudValues(ctx, runner, path, location)
 	if err != nil {
 		return nil, err
@@ -111,15 +115,17 @@ func extractCloudHeights(ctx context.Context, runner CommandRunner, path string,
 	return heights, nil
 }
 
-func cloudSurfaceElevation(heights map[int]float64) (float64, error) {
-	value, ok := heights[iconEUSurfaceHalfLevel]
+// CloudSurfaceElevation returns the provider's lowest half-level height.
+func CloudSurfaceElevation(heights map[int]float64, surfaceHalfLevel int, provider string) (float64, error) {
+	value, ok := heights[surfaceHalfLevel]
 	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("current ICON-EU cloud geometry has no valid HHL%d surface elevation", iconEUSurfaceHalfLevel)
+		return 0, fmt.Errorf("current %s cloud geometry has no valid HHL%d surface elevation", provider, surfaceHalfLevel)
 	}
 	return value, nil
 }
 
-func extractCloudFrame(ctx context.Context, runner CommandRunner, path string, location forecast.Location, validAt time.Time, modelLevels []int, heights map[int]float64) (forecast.CloudFrame, error) {
+// ExtractCloudFrame normalizes one provider's native model-layer bundle.
+func ExtractCloudFrame(ctx context.Context, runner CommandRunner, path string, location forecast.Location, validAt time.Time, modelLevels, groundModelLevels []int, heights map[int]float64) (forecast.CloudFrame, error) {
 	values, err := extractCloudValues(ctx, runner, path, location)
 	if err != nil {
 		return forecast.CloudFrame{}, err
@@ -141,16 +147,18 @@ func extractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid pressure, temperature, or HHL thickness at model level %d", filepath.Base(path), level)
 		}
 		u, v, tke := math.NaN(), math.NaN(), math.NaN()
-		if isCloudGroundModelLevel(level) {
+		if containsCloudModelLevel(groundModelLevels, level) {
 			var uOK, vOK bool
 			u, uOK = values[cloudValueKey{"u", level}]
 			v, vOK = values[cloudValueKey{"v", level}]
 			lowerTKE, lowerTKEOK := values[cloudValueKey{"tke", level}]
 			upperTKE, upperTKEOK := values[cloudValueKey{"tke", level + 1}]
-			if !uOK || !vOK || !lowerTKEOK || !upperTKEOK {
+			if !uOK || !vOK || lowerTKEOK != upperTKEOK {
 				return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete ground-layer dynamics at model level %d", filepath.Base(path), level)
 			}
-			tke = math.Max(0, (lowerTKE+upperTKE)/2)
+			if lowerTKEOK {
+				tke = math.Max(0, (lowerTKE+upperTKE)/2)
+			}
 		}
 		frame.Levels = append(frame.Levels, forecast.CloudLevel{
 			ModelLevel: level, PressureHPA: pressure / 100, HeightM: (halfLevelA + halfLevelB) / 2, LayerThicknessM: layerThicknessM,
@@ -159,6 +167,11 @@ func extractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 		})
 	}
 	return frame, nil
+}
+
+func containsCloudModelLevel(levels []int, wanted int) bool {
+	index := sort.SearchInts(levels, wanted)
+	return index < len(levels) && levels[index] == wanted
 }
 
 func finitePositiveCloudExtraction(value float64) bool {

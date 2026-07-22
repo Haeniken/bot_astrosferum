@@ -29,14 +29,17 @@ type CloudFrame struct {
 }
 
 type CloudSeries struct {
-	Location          Location     `json:"location"`
-	Provider          string       `json:"provider"`
-	Product           string       `json:"product"`
-	RunID             string       `json:"run_id"`
-	BaseTime          time.Time    `json:"base_time"`
-	GeneratedAt       time.Time    `json:"generated_at"`
-	SurfaceElevationM float64      `json:"surface_elevation_m"`
-	Frames            []CloudFrame `json:"frames"`
+	Location    Location  `json:"location"`
+	Provider    string    `json:"provider"`
+	Product     string    `json:"product"`
+	RunID       string    `json:"run_id"`
+	BaseTime    time.Time `json:"base_time"`
+	GeneratedAt time.Time `json:"generated_at"`
+	// TurbulenceValidUntil is the final time with native model-level TKE.
+	// Cloud condensate frames may legitimately extend beyond this horizon.
+	TurbulenceValidUntil time.Time    `json:"turbulence_valid_until,omitempty"`
+	SurfaceElevationM    float64      `json:"surface_elevation_m"`
+	Frames               []CloudFrame `json:"frames"`
 }
 
 type CloudDiagnostics struct {

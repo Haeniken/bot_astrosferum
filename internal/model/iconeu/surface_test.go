@@ -2,6 +2,7 @@ package iconeu
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -52,23 +53,44 @@ func TestExtractSurfaceAcceptsEcCodes245WindGustAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := extractSurfaceFrame(context.Background(), surfaceRunnerEcCodes245{}, "f007.grib2", location, time.Now())
+	got, err := ExtractSurfaceFrame(context.Background(), surfaceRunnerEcCodes245{}, "f007.grib2", location, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.frame.WindGustMS != 8 {
-		t.Fatalf("wind gust = %v, want 8", got.frame.WindGustMS)
+	if got.Frame.WindGustMS != 8 {
+		t.Fatalf("wind gust = %v, want 8", got.Frame.WindGustMS)
+	}
+}
+
+func TestCanonicalSurfaceShortNameAcceptsICONGlobalMixedLayerAlias(t *testing.T) {
+	if got := canonicalSurfaceShortName("H_ML_LK"); got != "mld" {
+		t.Fatalf("canonical mixed-layer name = %q, want mld", got)
 	}
 }
 
 func TestExtractSurfaceFrameNormalizesUnits(t *testing.T) {
 	location, _ := forecast.NewLocation(59.9, 30.3, "Europe/Moscow")
-	data, err := extractSurfaceFrame(context.Background(), surfaceRunner{}, "surface.grib2", location, time.Unix(1, 0))
+	data, err := ExtractSurfaceFrame(context.Background(), surfaceRunner{}, "surface.grib2", location, time.Unix(1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.frame.TemperatureC != 10 || data.frame.DewPointSpreadC() != 2 || data.frame.RelativeHumidityPercent != 87 || data.frame.LowCloudCoverPercent != 60 || data.frame.MidCloudCoverPercent != 35 || data.frame.HighCloudCoverPercent != 20 || data.frame.WindSpeedMS != 5 || data.frame.PressureHPA != 1013.25 || data.frame.VisibilityKM != 39.876 || data.frame.PrecipitableWaterMM != 17.77246094 || data.frame.CloudLiquidPathKgM2 != 0.081 || data.frame.CloudIcePathKgM2 != 0.027 || data.frame.MixedLayerDepthM != 725 || !data.frame.CloudCondensateAvailable || !data.frame.TransparencyAvailable || data.precipitation != 1.5 {
-		t.Fatalf("unexpected normalized frame: %+v total=%v", data.frame, data.precipitation)
+	if data.Frame.TemperatureC != 10 || data.Frame.DewPointSpreadC() != 2 || data.Frame.RelativeHumidityPercent != 87 || data.Frame.LowCloudCoverPercent != 60 || data.Frame.MidCloudCoverPercent != 35 || data.Frame.HighCloudCoverPercent != 20 || data.Frame.WindSpeedMS != 5 || data.Frame.PressureHPA != 1013.25 || data.Frame.VisibilityKM != 39.876 || data.Frame.PrecipitableWaterMM != 17.77246094 || data.Frame.CloudLiquidPathKgM2 != 0.081 || data.Frame.CloudIcePathKgM2 != 0.027 || data.Frame.MixedLayerDepthM != 725 || !data.Frame.CloudCondensateAvailable || !data.Frame.TransparencyAvailable || data.AccumulatedPrecipMM != 1.5 {
+		t.Fatalf("unexpected normalized frame: %+v total=%v", data.Frame, data.AccumulatedPrecipMM)
+	}
+}
+
+func TestExtractSurfaceWithoutVisibilityRemainsFiniteAndJSONSafe(t *testing.T) {
+	location, _ := forecast.NewLocation(59.9, 30.3, "Europe/Moscow")
+	input := "2t 283.15\n2d 281.15\n2r 99\nCLCT 5\ntp 0\n10u 1\n10v 1\nprmsl 101325\nTQV 8\nTQC 0\nTQI 0\nmld 500\n"
+	data, err := ExtractSurfaceFrame(context.Background(), surfaceTextRunner(input), "surface.grib2", location, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Frame.VisibilityKM != 0 || data.Frame.TransparencyAvailable || data.Frame.FogRisk() != 0 {
+		t.Fatalf("unexpected missing-visibility frame: %+v", data.Frame)
+	}
+	if _, err := json.Marshal(data.Frame); err != nil {
+		t.Fatalf("marshal missing-visibility frame: %v", err)
 	}
 }
 
@@ -76,7 +98,7 @@ func TestExtractSurfaceRejectsInvalidMixedLayerDepth(t *testing.T) {
 	location, _ := forecast.NewLocation(59.9, 30.3, "Europe/Moscow")
 	valid := "2t 283.15\n2d 281.15\n2r 87\nCLCT 75\ntp 1.5\n10u 3\n10v 4\nVMAX_10M 8\nprmsl 101325\n"
 	for _, value := range []string{"-1", "NaN", "+Inf"} {
-		if _, err := extractSurfaceFrame(context.Background(), surfaceTextRunner(valid+"mld "+value+"\n"), "surface.grib2", location, time.Unix(1, 0)); err == nil {
+		if _, err := ExtractSurfaceFrame(context.Background(), surfaceTextRunner(valid+"mld "+value+"\n"), "surface.grib2", location, time.Unix(1, 0)); err == nil {
 			t.Fatalf("mixed-layer depth %q was accepted", value)
 		}
 	}

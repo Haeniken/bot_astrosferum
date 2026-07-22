@@ -36,6 +36,12 @@ func (frame SurfaceFrame) DewPointSpreadC() float64 {
 // near-saturation so rain, snow, smoke, or dry haze are not mislabeled as fog.
 // WMO defines fog as water droplets reducing surface visibility below 1 km.
 func (frame SurfaceFrame) FogRisk() int {
+	// A zero value with unavailable optical inputs represents a provider that
+	// does not publish direct visibility (currently ICON Global), not zero
+	// meteorological visibility.
+	if !frame.TransparencyAvailable && frame.VisibilityKM == 0 {
+		return 0
+	}
 	spread := frame.DewPointSpreadC()
 	if frame.VisibilityKM < 1 && frame.RelativeHumidityPercent >= 95 && spread <= 1.5 {
 		return 2

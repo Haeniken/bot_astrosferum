@@ -412,10 +412,6 @@ func cloudStepMessageCount() int {
 		len(cloudTKEHalfLevels())
 }
 
-func isCloudGroundModelLevel(level int) bool {
-	return level >= DefaultCloudGroundModelLevels[0] && level <= DefaultCloudGroundModelLevels[len(DefaultCloudGroundModelLevels)-1]
-}
-
 func (client *Client) modelLevelFieldURL(runID string, forecastHour, level int, directory, code string) string {
 	cycle := runID[len(runID)-2:]
 	name := fmt.Sprintf("icon-eu_europe_regular-lat-lon_model-level_%s_%03d_%d_%s.grib2.bz2", runID, forecastHour, level, code)

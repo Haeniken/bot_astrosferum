@@ -127,7 +127,7 @@ func Defaults() Config {
 			ECCodesWorkers:        8,
 			PointCacheEntries:     512,
 			PointCacheMemoryLimit: ByteSize(20 << 30),
-			RequestTimeout:        Duration{3 * time.Minute},
+			RequestTimeout:        Duration{15 * time.Minute},
 		},
 		Paths: PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
 		Providers: ProvidersConfig{

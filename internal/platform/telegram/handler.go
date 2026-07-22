@@ -27,6 +27,8 @@ const StartHelp = `Привет! Я строю астрономический п
 • используйте: /forecast 59.9386 30.3141.
 • «💾 Сохранить координаты» хранит до 10 точек; выбор — «📌 Мои точки», удаление — /deletepoint N.
 
+Вне ICON-EU — ICON Global; нативный TKE до +48 ч, поэтому Overall короче остальных графиков.
+
 Как читать результат:
 
 Высотные графики: по горизонтали — местное время; слева — давление, справа — высота ICON (850 hPa ≈ 1,5 км); светлее — больше, шкала под картой.
@@ -54,7 +56,7 @@ const StartHelp = `Привет! Я строю астрономический п
 
 Засветка: LPI/SQM для координат по Atlas 2024 и отдельное сравнение с World Atlas 2015; Бортль — ориентир по зениту и в Overall Index не входит.
 
-Время указано в часовой зоне координат. Расчётный сиинг — модельная оценка, не локальное измерение DIMM и не шкала Пикеринга.`
+Время — в часовой зоне координат. Сиинг — модельная оценка, не измерение DIMM и не шкала Пикеринга.`
 
 const NotReadyText = `Координаты распознаны, но выдача рабочего ICON-прогноза ещё разворачивается. Синтетические данные я пользователям не отправляю.`
 
@@ -103,6 +105,7 @@ type Handler struct {
 	renderOptions       render.Options
 	overallCalibration  forecast.OverallIndexCalibration
 	forecastMaxStaleAge time.Duration
+	fallbackMaxStaleAge time.Duration
 	lightPollution      LightPollutionProvider
 	worldAtlas2015      LightPollutionProvider
 	persistence         Persistence
@@ -154,7 +157,7 @@ func NewHandler(messenger Messenger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, sessions: map[int64]saveSession{}}, nil
+	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, fallbackMaxStaleAge: 18 * time.Hour, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, sessions: map[int64]saveSession{}}, nil
 }
 
 func (handler *Handler) SetForecastMaxStaleAge(maxAge time.Duration) error {
@@ -162,6 +165,14 @@ func (handler *Handler) SetForecastMaxStaleAge(maxAge time.Duration) error {
 		return errors.New("forecast maximum stale age must be positive")
 	}
 	handler.forecastMaxStaleAge = maxAge
+	return nil
+}
+
+func (handler *Handler) SetFallbackForecastMaxStaleAge(maxAge time.Duration) error {
+	if maxAge <= 0 {
+		return errors.New("fallback forecast maximum stale age must be positive")
+	}
+	handler.fallbackMaxStaleAge = maxAge
 	return nil
 }
 
@@ -303,7 +314,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		return handler.sendUserMessage(ctx, chatID, text, true, language)
 	}
 	if err := handler.sendUserMessage(ctx, chatID,
-		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nСтрою прогноз ICON-EU…", "Location accepted: %.4f, %.4f\nTime zone: %s\nBuilding the ICON-EU forecast…"), latitude, longitude, label), true, language); err != nil {
+		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nСтрою самый свежий доступный прогноз ICON…", "Location accepted: %.4f, %.4f\nTime zone: %s\nBuilding the freshest available ICON forecast…"), latitude, longitude, label), true, language); err != nil {
 		return err
 	}
 	type lightPollutionResult struct {
@@ -329,7 +340,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	dataStarted := time.Now()
 	series, err := handler.provider.Vertical(ctx, location)
 	if err != nil {
-		return handler.sendUserMessage(ctx, chatID, language.text("Не удалось получить актуальный ICON-EU профиль: ", "Could not obtain a current ICON-EU profile: ")+safeForecastError(err, language), true, language)
+		return handler.sendUserMessage(ctx, chatID, language.text("Не удалось получить актуальный профиль ICON: ", "Could not obtain a current ICON profile: ")+safeForecastError(err, language), true, language)
 	}
 	var surfaceSeries forecast.SurfaceSeries
 	var sky astronomy.Series
@@ -431,11 +442,22 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	if zoneError != nil {
 		locationZone = time.UTC
 	}
+	modelName := forecastModelName(series.Provider)
+	maxStaleAge := handler.forecastMaxStaleAge
+	turbulenceText := language.text(
+		"гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
+		"hybrid ICON model estimate using TKE up to dynamic MH 500–2000 m AGL and HMNSP99 above, with seeing and τ₀ at 500 nm.")
+	if series.Provider == "icon-global" {
+		maxStaleAge = handler.fallbackMaxStaleAge
+		turbulenceText = language.text(
+			"гибридная оценка ICON Global TKE на нижних native model levels + HMNSP99 выше на 500 нм; DWD публикует TKE до +48 ч, поэтому Overall заканчивается там без экстраполяции.",
+			"hybrid ICON Global estimate using TKE on lower native model levels and HMNSP99 above at 500 nm; DWD publishes TKE through +48 h, so Overall ends there without extrapolation.")
+	}
 	summary := fmt.Sprintf(language.text(
-		"ICON-EU run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
-		"ICON-EU run %s UTC\n%s\nPeriod: %s — %s\nGrid: %s\nOptical turbulence: %s; hybrid ICON model estimate using TKE up to dynamic MH 500–2000 m AGL and HMNSP99 above, with seeing and τ₀ at 500 nm."),
-		series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), handler.forecastMaxStaleAge, language), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
-		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion)
+		"%s run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; %s",
+		"%s run %s UTC\n%s\nPeriod: %s — %s\nGrid: %s\nOptical turbulence: %s; %s"),
+		modelName, series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), maxStaleAge, language), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
+		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion, turbulenceText)
 	if lightPollutionChannel != nil {
 		select {
 		case result := <-lightPollutionChannel:
@@ -485,7 +507,11 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		number++
 	}
 	if hasOverall {
-		photos = append(photos, struct{ path, caption string }{charts.OverallIndex, fmt.Sprintf(language.text("%d/%d · Общий почасовой индекс: ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, τ₀, облачная преграда и туман", "%d/%d · Overall hourly index: ICON TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above, τ₀, cloud obstruction, and fog"), number, total)})
+		overallCaption := language.text("%d/%d · Общий почасовой индекс: ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, τ₀, облачная преграда и туман", "%d/%d · Overall hourly index: ICON TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above, τ₀, cloud obstruction, and fog")
+		if series.Provider == "icon-global" {
+			overallCaption = language.text("%d/%d · Общий почасовой индекс до последнего Global TKE (+48 ч): TKE + HMNSP99, τ₀ и native model-level облачная преграда; VIS недоступен", "%d/%d · Overall hourly index through the last Global TKE (+48 h): TKE + HMNSP99, τ₀, and native model-level cloud obstruction; VIS is unavailable")
+		}
+		photos = append(photos, struct{ path, caption string }{charts.OverallIndex, fmt.Sprintf(overallCaption, number, total)})
 		number++
 	}
 	if hasCloud {
@@ -529,7 +555,7 @@ func forecastFreshnessText(baseTime, now time.Time, maxAge time.Duration, langua
 	if age > maxAge {
 		return fmt.Sprintf(language.text("⚠️ Данные устарели (stale run): возраст run %s, порог %s. Прогноз может не учитывать последние изменения атмосферы.", "⚠️ Stale run: run age %s exceeds the %s threshold. The forecast may not reflect recent atmospheric changes."), ageText, thresholdText)
 	}
-	return fmt.Sprintf(language.text("Актуальность данных (freshness): run актуален, возраст %s (порог %s).", "Data freshness: current run, age %s (threshold %s)."), ageText, thresholdText)
+	return fmt.Sprintf(language.text("Актуальность данных (freshness): выбран последний полный run, возраст %s (порог предупреждения %s).", "Data freshness: latest complete run selected, age %s (warning threshold %s)."), ageText, thresholdText)
 }
 
 func formatForecastAge(age time.Duration, language userLanguage) string {
@@ -567,6 +593,13 @@ func safeForecastError(err error, language userLanguage) string {
 		return language.text("текущий run ещё не опубликован.", "the current run has not been published yet.")
 	}
 	return language.text("внутренняя ошибка данных.", "internal data error.")
+}
+
+func forecastModelName(provider string) string {
+	if provider == "icon-global" {
+		return "ICON Global"
+	}
+	return "ICON-EU"
 }
 
 func (handler *Handler) sendUserMessage(ctx context.Context, chatID int64, text string, locationButton bool, language userLanguage) error {

@@ -15,6 +15,7 @@ ARG APP_GID=1000
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        cdo \
         libeccodes-tools \
         tzdata \
     && rm -rf /var/lib/apt/lists/*

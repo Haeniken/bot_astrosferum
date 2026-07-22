@@ -165,6 +165,9 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 			boundaryLayerDepthM, calibration.GroundCn2Scale,
 		)
 		if !groundLayerPhysics {
+			if !cloud.TurbulenceValidUntil.IsZero() && frame.ValidAt.After(cloud.TurbulenceValidUntil) {
+				break
+			}
 			return nil, fmt.Errorf("native ICON ground-layer turbulence is incomplete at %s", frame.ValidAt.Format(time.RFC3339))
 		}
 		seeingArcsec := metrics.SeeingArcsec

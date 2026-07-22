@@ -33,9 +33,9 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 | VK | Bots Long Poll API | No public callback endpoint required |
 | Scheduler | Embedded in `bot_astrosferum serve` | No host cron or scheduler container |
 | Operations | `sync`, `doctor`, `render-sample` subcommands | Production code and image are reused |
-| GRIB2 | ecCodes, plus CDO only for ICON Global remapping | No custom decoder; ICON-EU remains direct |
-| Priority model in western Russia | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
-| Model elsewhere in Russia | DWD ICON Global | Stable, global, official open GRIB feed |
+| GRIB2 | ecCodes, plus CDO only for ICON Global point extraction | No custom decoder; ICON-EU remains direct |
+| Priority model inside the European domain | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
+| Model outside the European domain | DWD ICON Global | Stable worldwide official open GRIB feed |
 | ICON-Ru | Shadow provider until locally verified | Its public WIS product is coarser and has fewer fields than the native model |
 | Application storage | Atomic files | A database is unnecessary for one instance |
 | Point cache | Versioned `gob.gz` plus an in-memory LRU | Preserves `NaN`, stays compact, and needs no Redis |
@@ -65,16 +65,15 @@ Sources: [DWD — NWP forecast data](https://www.dwd.de/EN/ourservices/nwp_forec
 
 ICON-EU is therefore the default production provider for the four priority regions and other points inside the open domain. This is a justified starting point, not a claim that it is universally more accurate; the provider remains under continuous verification.
 
-### 3.2. ICON Global is the Russia-wide fallback
+### 3.2. ICON Global is the worldwide fallback
 
-ICON Global has a coarser grid of roughly 13 km, but covers all of Russia, has a stable official DWD GRIB feed, and supplies the required class of fields. It is used:
+ICON Global has a coarser grid of roughly 13 km, but covers the complete globe, has a stable official DWD GRIB feed, and supplies the same required class of fields. It is used:
 
 - for any point outside the available ICON-EU domain;
-- when the current ICON-EU run is incomplete or stale;
 - as the mandatory baseline in local verification;
 - optionally for an extended forecast horizon.
 
-Open ICON Global files use an `unstructured_grid`, for which ecCodes 2.28 does not implement nearest-neighbour lookup. The provider therefore uses CDO with the official DWD `ICON_GLOBAL2WORLD_0125_EASY` weights to remap onto a regular `0.125°` grid, validates the result, and then invokes the shared ecCodes extractor. This is an in-container preprocessing step, not a separate service.
+Open ICON Global files use an `unstructured_grid` whose GRIB messages reference, but do not embed, the node coordinates. The provider keeps the complete native global bundles and downloads the official DWD `icon_grid_0026_R03B07_G.nc` geometry once. For a requested point, in-container CDO applies that geometry and selects the nearest native node; the tiny regular one-point result then enters the shared ecCodes extractor. The source is not cropped and no second world raster is stored.
 
 Source: [DWD Open Data — ICON Global GRIB](https://opendata.dwd.de/weather/nwp/icon/grib/).
 
@@ -104,7 +103,6 @@ ICON-Ru WIS is therefore attached as a **shadow provider**. Forecasts for contro
 ```text
 point inside open ICON-EU domain -> ICON-EU for the complete bundle
 point outside ICON-EU domain     -> ICON Global for the complete bundle
-ICON-EU unavailable or stale     -> ICON Global, explicitly disclosed
 ICON-Ru WIS                      -> shadow verification only
 ```
 
@@ -340,7 +338,7 @@ type Provider interface {
 MVP implementations:
 
 - `iconeu`: primary DWD ICON-EU provider within the available domain;
-- `iconglobal`: DWD ICON Global provider for the rest of Russia and fallback;
+- `iconglobal`: DWD ICON Global provider outside the ICON-EU domain and fallback;
 - `iconruwis`: ICON-Ru WIS shadow-verification provider.
 
 `Coverage` records domain geometry and longitude normalization, available fields and levels, forecast steps, horizon, and actual product resolution.
@@ -352,8 +350,7 @@ A future native ICON-Ru adapter can be added without changing platform handlers,
 | Condition | Production bundle | Notes |
 |---|---|---|
 | Point inside available ICON-EU element-package domain | ICON-EU | Surface and atmosphere from one run |
-| Point outside available ICON-EU domain | ICON Global | Remaining Russian territory |
-| ICON-EU incomplete or older than `max_stale_age` | ICON Global | Explicitly disclosed fallback |
+| Point outside available ICON-EU domain | ICON Global | Complete remaining world territory |
 | Lead time beyond the 72-hour main horizon | Provider-specific through +120 h | Future/optional response |
 | ICON-Ru WIS | Not selected | Verification pipeline only |
 
@@ -370,7 +367,7 @@ Fallback is never silent: provider, grid, and run are shown in text and in each 
 3. It creates `data/models/<provider>/incoming/<run-id>/`.
 4. Files download to `*.part` names with bounded parallelism.
 5. HTTP size, decompression, `grib_ls`, parameters, levels, and steps are validated. Valid time is derived from `step`, `stepUnits`, and `stepRange`; live DWD files may encode `180 m` instead of `3 h`.
-6. ICON Global is remapped with official DWD weights while ICON-EU skips that step. Independently validated messages are then grouped into `surface/fNNN.grib2` and `atmosphere/fNNN.grib2` per forecast step.
+6. ICON Global messages are retained on the full native grid and grouped by forecast step. At point extraction CDO applies the official static DWD grid geometry and performs nearest-native-node remapping; ICON-EU skips this step.
 7. `manifest.json` is written and critical files are synced.
 8. `incoming/<run-id>` is renamed to `runs/<run-id>`.
 9. `current.json.tmp` atomically replaces `current.json`.
@@ -386,6 +383,27 @@ on consecutive lower levels `58…74`, and `TKE` on half levels `58…75`; a
 separate time-invariant bundle carries the required `HHL`. The manifest
 switches only after every file passes message-count, shortName, level, size,
 and SHA-256 validation.
+
+ICON Global publishes the same cloud/PBL contract on the full native grid. Its
+height-equivalent indices are `71,76,81,86,91,94,96,98,
+100,102,104…120` for `CLC/P/T/QC/QI`, `104…120` for lower `U/V`, and
+`104…121` for half-level `TKE/HHL`. These are the ICON-EU indices shifted by
+`+46`, verified against actual HHL heights in the common domain. The complete
+79-hour extension is validated in a staging directory and exposed by one
+atomic manifest replacement. Point extraction applies the official Global
+grid before the shared cloud extractor, so rendering and Overall use the same
+types and equations for both providers.
+
+DWD Global publishes model-level TKE only through `+48 h`. Bundles through
+that time contain 187 messages; `+49…+78 h` bundles retain every
+`CLC/P/T/QC/QI/U/V` message (169 total) and intentionally omit TKE. The cloud
+heatmap therefore remains hourly for the full horizon, while the hybrid
+TKE/HMNSP99 Overall series ends at the last native-TKE time instead of
+extrapolating turbulence. Pressure-level wind/seeing diagnostics continue.
+
+For subsequent cycles, the Global `current` symlink is not switched after the
+smaller pressure/surface stage. It remains on the preceding complete run until
+the model-level extension is also complete, then switches once atomically.
 
 ### 12.2. Run states
 
@@ -412,7 +430,8 @@ The manifest contains:
 
 ### 12.4. Retention and disk policy
 
-- retain two complete published runs for production providers;
+- retain two complete published runs for production providers, including
+  their surface and model-level cloud bundles;
 - retain one ICON-Ru shadow run or only extracted control-point series;
 - remove abandoned `incoming` directories older than 24 hours;
 - retain at most two point-cache runs and 512 cells per run; retain at most 256 render bundles for 48 hours;
@@ -424,7 +443,7 @@ The manifest contains:
 
 ## 13. Point extraction
 
-No custom GRIB parser is required. ecCodes supports nearest-point access on regular grids through `grib_get -l latitude,longitude,1`; see the [official ecCodes documentation](https://confluence.ecmwf.int/display/ECC/grib_get). ICON-EU is regular already; ICON Global reaches this common path only after validated CDO remapping to `0.125°`.
+No custom GRIB parser is required. ecCodes supports nearest-point access on regular grids through `grib_get -l latitude,longitude,1`; see the [official ecCodes documentation](https://confluence.ecmwf.int/display/ECC/grib_get). ICON-EU is regular already. For ICON Global, CDO first uses the official native grid geometry to produce a single regular point, after which the same normalized extractor is used.
 
 Flow:
 
@@ -439,10 +458,11 @@ Flow:
 
 User coordinates are never manually rounded. Nearby users share a cache entry only when the provider selects the same model cell.
 
-Point cache key:
+Provider-specific point cache keys:
 
 ```text
-point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
+ICON-EU:     point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
+ICON Global: point-v2-native-cloud/<run>/<grid-cell>.gob.gz
 ```
 
 ## 14. Normalization and quality checks
@@ -797,7 +817,7 @@ Redis provides no useful benefit for one process.
 |---|---|
 | Candidate run incomplete | Previous current remains active |
 | Provider unreachable | Use last complete run within `max_stale_age` |
-| ICON-EU unavailable | Use ICON Global and disclose fallback |
+| Point outside ICON-EU coverage | Use ICON Global and disclose the selected model |
 | ICON-Ru shadow unavailable | Production unaffected; verification records a gap |
 | Some upper levels missing | Missing cells and lower confidence |
 | One chart fails | Send text and remaining charts |
@@ -806,7 +826,7 @@ Redis provides no useful benefit for one process.
 | Low disk | Do not sync; prune disposable cache; preserve current |
 | ecCodes error | Mark file/run invalid and do not cache success |
 
-Freshness limits are configured per provider. Base time is always visible so stale data cannot masquerade as current.
+Freshness limits are warning thresholds configured per provider; they do not select or pin a cache entry. Base time and run ID are always visible. Point and render cache keys include run ID, so publication of a newer complete run automatically bypasses every artifact from the previous run.
 
 ## 21. Configuration
 
@@ -821,7 +841,7 @@ app:
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
-  request_timeout: 3m
+  request_timeout: 15m
 
 paths:
   data: /app/data
@@ -1003,12 +1023,12 @@ Do not log tokens, full update payloads, private message text, or exact user coo
 
 ### Stage 0 — mandatory data-source spike
 
-Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#12-data-source-selection-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global CDO remapping is validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
+Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#12-data-source-selection-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global pressure, surface, model-level cloud/PBL data and native-grid point extraction are validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
 
 1. Download a minimal complete ICON-EU field set and record real filenames/GRIB keys.
 2. Confirm the open data geometry contains Saint Petersburg and Moscow.
 3. Verify model-level `U/V/T/P/QV/TKE/HHL`, surface fields, units, and publication delay.
-4. Download an equivalent minimal ICON Global set for fallback and baseline.
+4. Download and validate the equivalent ICON Global set for fallback and baseline. Completed for pressure, surface, cloud/PBL, and HHL.
 5. Connect to ICON-Ru WIS 2.0 for shadow verification.
 6. Measure run size, download time, and `grib_get -l` latency on the production host.
 
@@ -1026,7 +1046,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 ### Stage 2 — complete data path
 
 - atomic runs and scheduler;
-- ICON Global fallback adapter;
+- ICON Global fallback adapter (implemented);
 - ICON-Ru WIS shadow adapter;
 - domain-based routing and single-provider bundles;
 - point/render cache;

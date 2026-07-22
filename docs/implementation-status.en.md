@@ -16,10 +16,12 @@ Deployment target: operator-managed host
 - Go `1.26.5`, `tzf v1.2.3`, and `gonum/plot v0.17.0`;
 - Telegram accepts native locations, `59.9386, 30.3141`, and `/forecast 59.9386 30.3141`;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
-- the user summary reports model-run age against configurable `max_stale_age`; beyond the threshold it shows an explicit `⚠️ stale run` warning while still serving the last complete publication;
+- the user summary reports the selected model, run ID, and model-run age against configurable `max_stale_age`; this threshold only controls the `⚠️ stale run` warning and never pins cached data. Point and render cache identities contain the run ID, so a newly published run is an automatic cache miss;
 - Telegram language follows `User.language_code`: only `ru*` receives Russian, while every other or missing code receives English; help, statuses, errors, buttons, captions, the weather table, and all PNG titles/axes/legends are localized, and render-cache identity includes the language;
 - timezone lookup is offline and every PNG labels the coordinate timezone;
 - DWD discovery selects the latest complete ICON-EU `00/06/12/18` cycle available through `+72 h`;
+- coordinates outside the ICON-EU domain route to the latest complete ICON Global `00/06/12/18` cycle on its full native global grid; CDO uses the official static DWD grid geometry for nearest-native-cell point extraction, without cropping the source or creating a second world raster;
+- ICON Global now synchronizes the same 79-hour, 27-level `CLC/P/T/QC/QI + lower U/V/TKE + HHL` contract as ICON-EU, using height-equivalent model indices shifted by `+46`; DWD Global TKE ends at `+48 h`, so bundles are 187 messages/hour through that point and 169 thereafter, the cloud map remains complete, and hybrid Overall stops rather than extrapolating missing turbulence; direct `VIS` also remains unavailable in the DWD Global feed;
 - atomic sync streams pressure-level `U/V/FI/T`, retains no `.bz2`, and validates every bundle with ecCodes and SHA-256;
 - legacy pressure-level runs atomically download only missing `FI/T`; the scheduler independently publishes versioned hourly surface/cloud bundles, while ecCodes 2.45 `clwmr/QI` names normalize to stable internal `qc/qi`;
 - `current` changes through an atomic symlink operation only after complete validation;
@@ -101,7 +103,7 @@ Published run `2026071912`:
 
 Last verified live state before the new deployment: extraction and all seven PNG files from the old version passed again on production run `2026072100` for an anonymized historical control case on 2026-07-21. The atomic publication contains 79×16 surface fields (`surface-hourly-v16`, 1.2 GiB) and 79×19×4 model-layer fields plus HHL (`cloud-hourly-v2`, 2.4 GiB); superseded versioned directories were removed after switching. The old cloud-physics check gave `99.90%` transmission and Overall `9.98` at 2026-07-22 09:00 UTC with `CLCT=72.8%`, `TQI=0.000015 kg/m²`, and `τ=0.00105`; at 02:00, `CLCT=100%` and `τ=2.78` gave `6.20%` transmission and Overall `1.03`. The first case is now a regression input for the unresolved-CLC floor, not the desired result. Old-version output is `3200×1080` weather, `3200×960` overall, `3200×1100` cloud obstruction, and four `1280×960` charts.
 
-A bounded performance layer is now present: surface/wind/cloud extraction runs in parallel into one point bundle, concurrent identical misses are coalesced, `gob.gz` cache retention is two runs × 512 cells, and the in-memory LRU is bounded by both 512 cells and 20 GiB. Seven-chart render bundles live for 48 hours, capped at 256. Production uses `point-v6-native-cloud-mass-mh`; obsolete cache schemas were removed automatically. Telegram uses six chat-affine workers with a three-minute timeout; ecCodes has a global eight-process limit. Cache staging older than one hour and Docker logs beyond `3 × 10 MiB` are removed automatically.
+A bounded performance layer is now present: surface/wind/cloud extraction runs in parallel into one point bundle, concurrent identical misses are coalesced, `gob.gz` cache retention is two runs × 512 cells, and the in-memory LRU is bounded by both 512 cells and 20 GiB. Seven-chart render bundles live for 48 hours, capped at 256. Production uses provider-versioned point caches; obsolete schemas are ignored automatically. Telegram uses six chat-affine workers with a 15-minute request timeout so the first full-native Global point extraction can complete; ecCodes/CDO share a global eight-process limit. Each DWD object download still has a bounded two-minute HTTP timeout with three retries, while the scheduler itself is not capped by the Telegram request timeout. Cache staging older than one hour and Docker logs beyond `3 × 10 MiB` are removed automatically.
 
 The first production request after the cache-schema change on run `2026072100` spent `38.5 s` extracting, `1.82 s` rendering seven PNG files, and `1.75 s` sending, for `42.24 s` total. A repeated CLI run loaded the point bundle from disk in `2 ms`; the seven-PNG set occupies about `2.7 MiB`. Render cache contains exactly seven files and remains bounded to 48 hours/256 sets.
 
@@ -117,8 +119,7 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 ## Next vertical slice
 
-1. Implement ICON Global fallback for Russian points outside ICON-EU.
-2. Add the equivalent VK adapter after the Telegram path stabilizes.
+1. Add the equivalent VK adapter after the Telegram path stabilizes.
 
 Production `seeing-hybrid-tke-mh-hmnsp99-v4` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

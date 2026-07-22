@@ -669,7 +669,7 @@ Runtime-каталог: `/opt/docker/bot_astrosferum/data/verification`
 Начальная production-политика подтверждена технически:
 
 - ICON-EU используется напрямую для Санкт-Петербурга, Москвы и остальных точек внутри фактического домена;
-- ICON Global остаётся fallback для остальной России, но требует обязательного preprocessing из `unstructured_grid` в регулярную сетку;
+- ICON Global остаётся мировым fallback и требует официальной native-grid geometry для одноточечного извлечения из `unstructured_grid`;
 - ICON-Ru WIS 2.0 пока подходит только для shadow verification: публичный набор недостаточен для полного seeing pipeline, а фактическую доставку нужно принимать через MQTT;
 - локальная машина не содержит ни одного модельного файла. Все загруженные данные находятся только на production-сервере внутри каталога проекта.
 
@@ -847,30 +847,61 @@ surface-бандлов `f000…f078`. Контракт `surface-hourly-v17` со
 
 ecCodes 2.28 не поддерживает nearest-neighbour для этого типа сетки. Поэтому ICON Global не может использовать тот же прямой `grib_get -l`, что ICON-EU.
 
-Проверенный KISS-процесс:
+Первичный spike проверил полный мировой remap официальными weights DWD
+`ICON_GLOBAL2WORLD_0125_EASY`. Он дал регулярную сетку `2879 × 1441`, а один
+remapped `T_2M` занимал 8 297 464 байта. Повторять это для каждого поля и часа
+означало бы хранить вторую, значительно большую копию глобального прогноза.
+Поэтому production использует прямой point-путь:
 
 ```text
 DWD ICON Global GRIB (unstructured)
-  -> CDO remap + официальные DWD weights WORLD 0.125°
-  -> регулярный GRIB2
-  -> ecCodes validation и nearest-point extraction
+  + официальная геометрия DWD icon_grid_0026_R03B07_G.nc
+  -> CDO выбирает один ближайший native-узел
+  -> одноточечный регулярный GRIB2
+  -> общий ecCodes extractor
 ```
 
-Использован официальный архив DWD `ICON_GLOBAL2WORLD_0125_EASY.tar.bz2` размером 50,677,442 байт. Результат:
+Для целевой позиции `(lambda, phi)` CDO выбирает native-узел `i*` по минимуму
+углового расстояния большого круга:
 
-| Свойство | Значение |
-|---|---:|
-| `gridType` | `regular_ll` |
-| `Ni × Nj` | `2879 × 1441` |
-| Домен | `-180° … 179.75°`, `-90° … 90°` |
-| Шаг | `0.125° × 0.125°` |
-| Точек | 4,148,639 |
-| Размер тестового `T_2M` | 8,297,464 байт |
-| SHA-256 | `c0845b267e7b4c0a8ab3a4552d7cf32a6eb246d72a2db4daad35856eeb58aca8` |
+```math
+i^*=\arg\min_i\arccos\left(\sin\phi\sin\phi_i+
+\cos\phi\cos\phi_i\cos(\lambda-\lambda_i)\right).
+```
 
-После remap ecCodes успешно получил `T_2M` для обоих контрольных городов. При упаковке CDO/ecCodes 2.28 вывел предупреждение о `section2Padding`, но завершился с кодом 0; выход независимо прошёл `grib_count`, `grib_ls`, `cdo sinfo` и nearest-point extraction. Production pipeline всё равно обязан считать stderr диагностикой и публиковать run только после полной независимой проверки результата.
+Так сохраняется полный мировой охват без обрезки России или других областей,
+а bilinear interpolation не создаёт мнимую информацию сверх native mesh около
+13 км. Статическая grid geometry скачивается один раз и атомарно в model
+volume. Forecast bundles неизменяемы. Сначала все 25 pressure и 79 почасовых
+surface сроков проходят проверку числа сообщений и SHA-256; затем все 79
+почасовых model-level bundles и HHL geometry проходят проверку полей, уровней,
+числа, размера и SHA-256. Новый run становится `current` одной атомарной заменой
+symlink только после обоих этапов, поэтому во время тяжёлой cloud-загрузки
+запросы продолжают читать предыдущий полный run. Дополнение уже опубликованного
+legacy run выполняется одной атомарной заменой manifest.
 
-Следствие для образа: CDO нужен только preprocessing-пути ICON Global; ICON-EU остаётся прямым и более дешёвым. Устанавливать CDO на host не требуется — spike выполнен в `bot_astrosferum-tools:spike`.
+ICON Global использует тот же физический контракт, что ICON-EU: 27 full levels
+`71,76,81,86,91,94,96,98,100,102,104…120` с `CLC/P/T/QC/QI`, непрерывные
+нижние `104…120` с `U/V`, half levels `104…121` с `TKE` и ограничивающие их
+`HHL`. Эти индексы соответствуют по фактической высоте уровням ICON-EU
+`25,30,35,40,45,48,50,52,54,56,58…74`; live-сравнение HHL в общей области
+дало постоянный сдвиг индекса `+46` (например, HHL 58/104 около 2,41 км, а
+HHL 74/120 около 30 м в проверенном узле). Поэтому общий extractor и формулы
+строят ту же карту cloud obstruction и тот же гибрид TKE/HMNSP99 в Overall
+для обоих providers. DWD официально публикует нужные native продукты
+[CLC](https://opendata.dwd.de/weather/nwp/icon/grib/00/clc/),
+[QC](https://opendata.dwd.de/weather/nwp/icon/grib/00/qc/),
+[QI](https://opendata.dwd.de/weather/nwp/icon/grib/00/qi/),
+[TKE](https://opendata.dwd.de/weather/nwp/icon/grib/00/tke/) и
+[HHL](https://opendata.dwd.de/weather/nwp/icon/grib/00/hhl/). В Global feed
+DWD Global TKE заканчивается на `+48 ч`, хотя остальные выбранные model-level
+fields остаются почасовыми до `+78 ч`. Первые 49 bundles поэтому содержат 187
+сообщений, последние 30 — 169. Cloud obstruction остаётся полной; гибридная
+последовательность Overall заканчивается на `+48 ч`, а не экстраполирует TKE и
+не переключается молча на известную оптимистичную free-atmosphere оценку. В
+Global feed по-прежнему нет публичного `VIS`, поэтому туман не выводится из отсутствующего
+значения, а proxy прозрачности отмечается как недоступный. CDO установлен
+только в application image; host не требует метеопакетов.
 
 ### 12.4. ICON-Ru WIS 2.0
 
@@ -890,8 +921,8 @@ DWD ICON Global GRIB (unstructured)
 ### 12.5. Решения для реализации
 
 1. `iconeu.Sync` скачивает только требуемые поля/уровни, распаковывает, валидирует и объединяет GRIB по forecast step.
-2. `iconglobal.Sync` делает то же, но перед объединением remap-ит каждое поле официальными DWD weights на 0.125°.
-3. Оба provider публикуют одинаковый нормализованный manifest и дальше используют общий ecCodes extractor.
+2. `iconglobal.Sync` следует тому же атомарному lifecycle, сохраняя bundles на полной native-сетке; point store применяет официальную геометрию DWD через CDO.
+3. Coverage router выбирает ICON-EU внутри его домена и ICON Global снаружи; оба нормализуют результат в общие forecast types до rendering.
 4. `iconruwis` работает отдельно, только для control points и verification; его сбой не влияет на user response.
 5. Raw `.bz2`, runs, cache, verification и временные файлы находятся только в `/opt/docker/bot_astrosferum/data` и исключены из Git/Docker build context.
 6. Полная 72-часовая загрузка не выполняется локально и не запускается на сервере без предварительной проверки свободного места.

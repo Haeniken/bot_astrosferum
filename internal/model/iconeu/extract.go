@@ -54,7 +54,7 @@ func (store VerticalStore) Vertical(ctx context.Context, location forecast.Locat
 			defer waitGroup.Done()
 			for index := range jobs {
 				step := manifest.Steps[index]
-				frame, err := extractFrame(workContext, runner, filepath.Join(manifest.Directory, step.File), location, step)
+				frame, err := ExtractFrame(workContext, runner, filepath.Join(manifest.Directory, step.File), location, step)
 				results <- extraction{index: index, frame: frame, err: err}
 				if err != nil {
 					cancel()
@@ -101,7 +101,10 @@ func (store VerticalStore) Vertical(ctx context.Context, location forecast.Locat
 	return series, nil
 }
 
-func extractFrame(ctx context.Context, runner CommandRunner, path string, location forecast.Location, step StepFile) (forecast.VerticalFrame, error) {
+// ExtractFrame reads one regular-grid pressure-level bundle at a point.  It is
+// shared with ICON Global after that provider has remapped its native grid to
+// a one-point regular grid.
+func ExtractFrame(ctx context.Context, runner CommandRunner, path string, location forecast.Location, step StepFile) (forecast.VerticalFrame, error) {
 	coordinates := strconv.FormatFloat(location.Latitude, 'f', 6, 64) + "," + strconv.FormatFloat(location.Longitude, 'f', 6, 64) + ",1"
 	output, err := runner.CombinedOutput(ctx, "grib_get", "-f", "-F", "%.10g", "-p", "shortName,level", "-l", coordinates, path)
 	if err != nil {
@@ -154,8 +157,12 @@ func extractFrame(ctx context.Context, runner CommandRunner, path string, locati
 		levels = append(levels, forecast.VerticalLevel{PressureHPA: pressure, HeightM: height, TemperatureK: temperature, UMS: vector.u, VMS: vector.v})
 	}
 	sort.Slice(levels, func(i, j int) bool { return levels[i].PressureHPA > levels[j].PressureHPA })
-	if len(levels) != len(DefaultPressureLevelsHPA) {
-		return forecast.VerticalFrame{}, fmt.Errorf("%s produced %d pressure levels", filepath.Base(path), len(levels))
+	expectedLevels := len(DefaultPressureLevelsHPA)
+	if step.Messages > 0 && step.Messages%4 == 0 {
+		expectedLevels = step.Messages / 4
+	}
+	if len(levels) != expectedLevels {
+		return forecast.VerticalFrame{}, fmt.Errorf("%s produced %d pressure levels, expected %d", filepath.Base(path), len(levels), expectedLevels)
 	}
 	confidence := math.Max(0.65, 0.96-0.26*float64(step.ForecastHour)/72)
 	return forecast.VerticalFrame{ValidAt: step.ValidAt, Levels: levels, Confidence: confidence}, nil

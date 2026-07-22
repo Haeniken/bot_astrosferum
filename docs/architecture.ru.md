@@ -33,9 +33,9 @@ Runtime закреплён на официальном образе OSGeo GDAL 3
 | VK | Bots Long Poll API | Не нужен публичный callback endpoint |
 | Планировщик | Встроен в `bot_astrosferum serve` | Не нужен cron-контейнер или host cron |
 | Ручные операции | Подкоманды `sync`, `doctor`, `render-sample` | Те же код и образ, что в production |
-| GRIB2 | ecCodes; CDO только для remap ICON Global | Не пишем собственный GRIB-декодер, ICON-EU читаем напрямую |
-| Приоритетная модель для западной части России | DWD ICON-EU | Открытая сетка ~7 км и полный набор surface/model-level полей |
-| Модель для остальной России | DWD ICON Global | Единое глобальное покрытие и стабильный открытый GRIB-поток |
+| GRIB2 | ecCodes; CDO только для point extraction ICON Global | Не пишем собственный GRIB-декодер, ICON-EU читаем напрямую |
+| Приоритетная модель внутри европейского домена | DWD ICON-EU | Открытая сетка ~7 км и полный набор surface/model-level полей |
+| Модель вне европейского домена | DWD ICON Global | Стабильный официальный GRIB-поток с мировым покрытием |
 | ICON-Ru | Shadow provider до локальной верификации | Публичный WIS-продукт грубее и беднее по полям, чем native-модель |
 | Хранилище приложения | Файлы с атомарной публикацией | Для одного экземпляра БД не нужна |
 | Кэш точки | Версионированный `gob.gz` + LRU в RAM | Сохраняет `NaN`, компактно хранится и не требует Redis |
@@ -65,16 +65,15 @@ DWD публикует ICON-EU на регулярной сетке `0.0625°`, 
 
 Это делает ICON-EU базовым production provider для Петербурга, Москвы и других точек внутри открытого домена. Это обоснованный стартовый выбор, но не заявление, что ICON-EU всегда точнее: модель продолжает сравниваться с наблюдениями.
 
-### 3.2. ICON Global — основной fallback для всей России
+### 3.2. ICON Global — мировой fallback
 
-ICON Global имеет более грубую сетку около 13 км, но покрывает всю Россию, имеет стабильный официальный открытый GRIB-поток DWD и тот же класс необходимых полей. Он используется:
+ICON Global имеет более грубую сетку около 13 км, но покрывает весь мир, имеет стабильный официальный открытый GRIB-поток DWD и тот же класс необходимых полей. Он используется:
 
 - для любой точки вне доступного домена ICON-EU;
-- если текущий ICON-EU run неполон или устарел;
 - как обязательный baseline в локальной верификации;
 - опционально для extended horizon.
 
-Открытый ICON Global приходит на `unstructured_grid`, для которой ecCodes 2.28 не умеет nearest-neighbour lookup. Поэтому provider сначала делает CDO remap с официальными DWD weights `ICON_GLOBAL2WORLD_0125_EASY` в регулярную сетку `0.125°`, валидирует результат, а затем использует общий ecCodes extractor. Это preprocessing внутри того же контейнера, а не отдельный сервис.
+Открытый ICON Global приходит на `unstructured_grid`: GRIB ссылается на номера узлов, но не встраивает их координаты. Provider хранит полные native global bundles и один раз скачивает официальную геометрию DWD `icon_grid_0026_R03B07_G.nc`. Для запрошенной точки CDO применяет эту геометрию и выбирает ближайший native-узел; маленький регулярный одноточечный результат передаётся общему ecCodes extractor. Источник не обрезается, вторая мировая raster-копия не создаётся.
 
 Источник: [DWD Open Data — ICON Global GRIB](https://opendata.dwd.de/weather/nwp/icon/grib/).
 
@@ -104,7 +103,6 @@ Discovery spike подтвердил origin topic
 ```text
 точка внутри открытого ICON-EU domain -> ICON-EU для всего bundle
 точка вне ICON-EU domain             -> ICON Global для всего bundle
-ICON-EU недоступен/устарел            -> ICON Global с явной пометкой
 ICON-Ru WIS                           -> shadow verification only
 ```
 
@@ -341,7 +339,7 @@ type Provider interface {
 Реализации MVP:
 
 - `iconeu`: DWD ICON-EU, основной provider в доступном европейском домене;
-- `iconglobal`: DWD ICON Global, основной provider для остальной России и fallback;
+- `iconglobal`: DWD ICON Global вне домена ICON-EU и fallback;
 - `iconruwis`: WIS-продукт ICON-Ru, shadow verification provider.
 
 Позднее может появиться `iconrunative`, но обработчики Telegram/VK, калькулятор и renderer об этом знать не должны.
@@ -359,8 +357,7 @@ type Provider interface {
 | Условие | Production bundle | Примечание |
 |---|---|---|
 | Точка внутри доступного ICON-EU element-package domain | ICON-EU | Surface и atmosphere из одного run |
-| Точка вне доступного ICON-EU domain | ICON Global | Вся остальная Россия |
-| ICON-EU неполон или старше `max_stale_age` | ICON Global | Явный fallback в ответе |
+| Точка вне доступного ICON-EU domain | ICON Global | Вся остальная территория мира |
 | Срок > основного горизонта 72 ч | Provider-specific до +120 ч | Позднее, не показывается в основном MVP-ответе |
 | ICON-Ru WIS | Не участвует | Только verification/shadow pipeline |
 
@@ -377,7 +374,7 @@ Fallback никогда не происходит молча: provider, сетк
 3. Создаёт `data/models/<provider>/incoming/<run-id>/`.
 4. Скачивает файлы во временные имена `*.part` с ограничением параллелизма.
 5. Проверяет HTTP size, распаковку, `grib_ls`, ожидаемые параметры, уровни и сроки. Valid time строится из `step`, `stepUnits` и `stepRange`: DWD фактически выдаёт, например, `180 m`, а не обязательно `3 h`.
-6. Для ICON Global выполняет CDO remap официальными weights; ICON-EU этот шаг пропускает. После независимой валидации группирует сообщения в один `surface/fNNN.grib2` и один `atmosphere/fNNN.grib2` на срок.
+6. Сообщения ICON Global сохраняются на полной native-сетке и группируются по сроку. При извлечении точки CDO применяет официальную статическую геометрию DWD и выбирает ближайший native-узел; ICON-EU этот шаг пропускает.
 7. Записывает `manifest.json`, затем делает `fsync` критичных файлов.
 8. Переименовывает каталог `incoming/<run-id>` в `runs/<run-id>`.
 9. Атомарно заменяет `current.json` через `current.json.tmp -> current.json`.
@@ -393,6 +390,27 @@ Fallback никогда не происходит молча: provider, сетк
 `58…75`; отдельный time-invariant bundle хранит нужные `HHL`. Manifest
 переключается только после проверки количества, shortName, level, размера и
 SHA-256 каждого файла.
+
+ICON Global публикует тот же почасовой cloud/PBL контракт на полной native
+grid. Эквивалентные по высоте индексы: `71,76,81,86,91,94,96,
+98,100,102,104…120` для `CLC/P/T/QC/QI`, `104…120` для нижних `U/V` и
+`104…121` для half-level `TKE/HHL`. Это индексы ICON-EU со сдвигом `+46`,
+проверенным по фактическим HHL в общей области. Полное 79-часовое расширение
+валидируется в staging-каталоге и открывается одной атомарной заменой manifest.
+Перед общим cloud extractor point-путь применяет официальную Global grid,
+поэтому rendering и Overall используют одинаковые типы и формулы для обоих
+providers.
+
+DWD Global публикует model-level TKE только до `+48 ч`. Bundles до этого срока
+содержат 187 сообщений; bundles `+49…+78 ч` сохраняют все
+`CLC/P/T/QC/QI/U/V` (169 сообщений) и намеренно не содержат TKE. Поэтому cloud
+heatmap остаётся почасовой на всём горизонте, а гибридный TKE/HMNSP99 Overall
+заканчивается на последнем native-TKE сроке без экстраполяции турбулентности.
+Pressure-level wind/seeing диагностика продолжается.
+
+В следующих циклах Global symlink `current` не переключается после меньшего
+pressure/surface этапа. Он остаётся на предыдущем полном run до готовности
+model-level расширения, затем один раз заменяется атомарно.
 
 ### 12.2. Состояния run
 
@@ -417,7 +435,8 @@ discovered -> downloading -> validating -> ready -> published
 
 ### 12.4. Политика хранения и диска
 
-- хранить два полных опубликованных прогона production providers;
+- хранить два полных опубликованных прогона production providers вместе с их
+  surface и model-level cloud bundles;
 - для ICON-Ru shadow хранить один run либо только извлечённые контрольные точки;
 - очищать зависшие `incoming` старше 24 часов;
 - point cache хранит не более двух run и 512 точек на run; render cache — не более 256 комплектов и 48 часов;
@@ -429,7 +448,7 @@ discovered -> downloading -> validating -> ready -> published
 
 ## 13. Извлечение точки
 
-Собственный GRIB-парсер не нужен. ecCodes поддерживает выбор ближайшего узла регулярной сетки через `grib_get -l latitude,longitude,1`; это документировано в [официальной справке ecCodes](https://confluence.ecmwf.int/display/ECC/grib_get). ICON-EU уже имеет регулярную сетку, а ICON Global попадает сюда только после проверенного CDO remap на `0.125°`.
+Собственный GRIB-парсер не нужен. ecCodes поддерживает выбор ближайшего узла регулярной сетки через `grib_get -l latitude,longitude,1`; это документировано в [официальной справке ecCodes](https://confluence.ecmwf.int/display/ECC/grib_get). ICON-EU уже имеет регулярную сетку. Для ICON Global CDO сначала создаёт один регулярный point по официальной native-геометрии, после чего используется тот же нормализованный extractor.
 
 Поток извлечения:
 
@@ -444,10 +463,11 @@ discovered -> downloading -> validating -> ready -> published
 
 Координаты пользователя вручную не округляются. Две близкие точки разделяют кэш только тогда, когда provider выбрал для них один и тот же модельный узел.
 
-Ключ point cache:
+Provider-specific ключи point cache:
 
 ```text
-point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
+ICON-EU:     point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
+ICON Global: point-v2-native-cloud/<run>/<grid-cell>.gob.gz
 ```
 
 ## 14. Нормализация и контроль качества
@@ -803,7 +823,7 @@ MVP равноправно принимает координаты двумя с
 |---|---|
 | Новый run неполон | Остаётся предыдущий current |
 | Provider недоступен | Используется свежий последний полный run в пределах `max_stale_age` |
-| ICON-EU недоступен | Для нового запроса используется ICON Global с явной пометкой |
+| Точка вне покрытия ICON-EU | Используется ICON Global с явным указанием модели |
 | ICON-Ru shadow недоступен | Production-ответ не затрагивается; verification получает gap |
 | Часть верхних уровней отсутствует | Missing cells + сниженный confidence |
 | Один график не построился | Отправляется текст и остальные графики |
@@ -812,7 +832,7 @@ MVP равноправно принимает координаты двумя с
 | Мало диска | Sync не стартует, удаляется disposable cache, current сохраняется |
 | ecCodes вернул ошибку | Файл/run помечается invalid, ошибка не кэшируется как успешный результат |
 
-Допустимая свежесть задаётся отдельно для surface и upper data. Пользователь всегда видит base time, поэтому старый прогноз не маскируется под свежий.
+Порог свежести задаётся отдельно для provider и управляет только предупреждением, а не выбором или удержанием cache entry. Пользователь всегда видит base time и run ID. Ключи point/render cache содержат run ID, поэтому публикация нового полного run автоматически обходит все артефакты предыдущего.
 
 ## 21. Конфигурация
 
@@ -827,7 +847,7 @@ app:
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
-  request_timeout: 3m
+  request_timeout: 15m
 
 paths:
   data: /app/data
@@ -1009,12 +1029,12 @@ Runtime автоматически сохраняет только два мод
 
 ### Этап 0 — обязательный data-source spike
 
-Текущие измеренные результаты и оставшиеся проверки объединены в [научной методике](scientific-method.ru.md#12-выбор-и-проверка-источников-данных). Для ICON-EU проверены field keys, domain, объём и длительность полного актуального run; для ICON Global подтверждён CDO remap; discovery metadata и topic ICON-Ru получены. Остаются фактическая WIS notification и наблюдательная калибровка.
+Текущие измеренные результаты и оставшиеся проверки объединены в [научной методике](scientific-method.ru.md#12-выбор-и-проверка-источников-данных). Для ICON-EU проверены field keys, domain, объём и длительность полного актуального run; для ICON Global проверены pressure, surface, model-level cloud/PBL данные и native-grid point extraction через CDO; discovery metadata и topic ICON-Ru получены. Остаются фактическая WIS notification и наблюдательная калибровка.
 
 1. Скачать минимальный полный fieldset ICON-EU и зафиксировать реальные filenames/GRIB keys.
 2. Проверить, что открытый домен содержит Санкт-Петербург и Москву.
 3. Сверить model levels `U/V/T/P/QV/TKE/HHL`, surface fields, единицы и задержку публикации.
-4. Скачать эквивалентный минимальный набор ICON Global для fallback и baseline.
+4. Скачать и проверить эквивалентный набор ICON Global для fallback и baseline. Выполнено для pressure, surface, cloud/PBL и HHL.
 5. Подключиться к публичному WIS 2.0 потоку ICON-Ru для shadow verification.
 6. Измерить размер run, скорость загрузки и время `grib_get -l` на production-сервере.
 
@@ -1032,7 +1052,7 @@ Runtime автоматически сохраняет только два мод
 ### Этап 2 — полноценные данные
 
 - атомарные runs и scheduler;
-- ICON Global fallback adapter;
+- ICON Global fallback adapter (реализован);
 - ICON-Ru WIS shadow adapter;
 - domain-based provider routing и единый-provider bundle;
 - point/render cache;

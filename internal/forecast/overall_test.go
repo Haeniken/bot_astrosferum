@@ -43,6 +43,23 @@ func TestOverallIndexIsHourlyAndCloudsActAsVeto(t *testing.T) {
 	}
 }
 
+func TestOverallIndexStopsAtDeclaredNativeTKEHorizon(t *testing.T) {
+	cloud := SyntheticCloudFixture()
+	cloud.TurbulenceValidUntil = cloud.Frames[2].ValidAt
+	for index := 3; index < len(cloud.Frames); index++ {
+		for level := range cloud.Frames[index].Levels {
+			cloud.Frames[index].Levels[level].TKEJkg = math.NaN()
+		}
+	}
+	frames, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), clearSyntheticSurface(), cloud, DefaultOverallIndexCalibration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 3 || !frames[len(frames)-1].ValidAt.Equal(cloud.TurbulenceValidUntil) {
+		t.Fatalf("Overall horizon = %d frames through %s", len(frames), frames[len(frames)-1].ValidAt)
+	}
+}
+
 func TestOverallIndexIgnoresDewButPenalizesHighFog(t *testing.T) {
 	vertical := SyntheticVerticalFixture()
 	surface := clearSyntheticSurface()

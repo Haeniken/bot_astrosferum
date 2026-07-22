@@ -6,7 +6,7 @@ app:
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
-  request_timeout: 3m
+  request_timeout: 15m
 
 paths:
   data: /app/data

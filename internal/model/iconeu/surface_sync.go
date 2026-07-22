@@ -25,7 +25,7 @@ func canonicalSurfaceShortName(name string) string {
 	switch strings.TrimSpace(name) {
 	case "max_i10fg":
 		return "VMAX_10M"
-	case "MH", "mld":
+	case "MH", "H_ML_LK", "mld":
 		return "mld"
 	default:
 		return strings.TrimSpace(name)

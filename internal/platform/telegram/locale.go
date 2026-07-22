@@ -57,6 +57,8 @@ How to request a forecast:
 • use: /forecast 59.9386 30.3141;
 • “💾 Save coordinates” stores up to 10 locations; open “📌 My locations” to select one, or use /deletepoint N to delete it.
 
+Outside ICON-EU, the latest complete ICON Global run uses the same model-level profile. Global TKE is available through +48 h, so its hybrid Overall chart is shorter than the other charts.
+
 How to read the result:
 
 Altitude charts: horizontal axis is local time; left axis is pressure, right axis is ICON height (850 hPa ≈ 1.5 km); lighter colors mean larger values, see the scale below each map.

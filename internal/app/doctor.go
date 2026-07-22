@@ -26,6 +26,9 @@ func Doctor(ctx context.Context, cfg config.Config) []Check {
 		checkExecutable(ctx, "grib_ls", "-V"),
 		checkExecutable(ctx, "gdalinfo", "--version"),
 	}
+	if cfg.Providers.ICONGlobal.Enabled {
+		checks = append(checks, checkExecutable(ctx, "cdo", "-V"))
+	}
 	checks = append(checks, checkFreeSpace(cfg.Paths.Data, int64(cfg.Sync.MinFreeSpace)))
 	if cfg.Platforms.Telegram.Enabled {
 		checks = append(checks, checkSecret("telegram token", cfg.Platforms.Telegram.TokenFile))
