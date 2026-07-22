@@ -130,6 +130,10 @@ func ExtractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 	if err != nil {
 		return forecast.CloudFrame{}, err
 	}
+	return cloudFrameFromValues(values, validAt, modelLevels, groundModelLevels, heights, filepath.Base(path))
+}
+
+func cloudFrameFromValues(values map[cloudValueKey]float64, validAt time.Time, modelLevels, groundModelLevels []int, heights map[int]float64, sourceName string) (forecast.CloudFrame, error) {
 	frame := forecast.CloudFrame{ValidAt: validAt, Levels: make([]forecast.CloudLevel, 0, len(modelLevels))}
 	for _, level := range modelLevels {
 		cover, coverOK := values[cloudValueKey{"ccl", level}]
@@ -140,11 +144,11 @@ func ExtractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 		halfLevelA, halfLevelAOK := heights[level]
 		halfLevelB, halfLevelBOK := heights[level+1]
 		if !coverOK || !pressureOK || !temperatureOK || !liquidOK || !iceOK || !halfLevelAOK || !halfLevelBOK {
-			return forecast.CloudFrame{}, fmt.Errorf("%s is incomplete at model level %d", filepath.Base(path), level)
+			return forecast.CloudFrame{}, fmt.Errorf("%s is incomplete at model level %d", sourceName, level)
 		}
 		layerThicknessM := math.Abs(halfLevelA - halfLevelB)
 		if !finitePositiveCloudExtraction(pressure) || !finitePositiveCloudExtraction(temperature) || !finitePositiveCloudExtraction(layerThicknessM) {
-			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid pressure, temperature, or HHL thickness at model level %d", filepath.Base(path), level)
+			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid pressure, temperature, or HHL thickness at model level %d", sourceName, level)
 		}
 		u, v, tke := math.NaN(), math.NaN(), math.NaN()
 		if containsCloudModelLevel(groundModelLevels, level) {
@@ -154,7 +158,7 @@ func ExtractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 			lowerTKE, lowerTKEOK := values[cloudValueKey{"tke", level}]
 			upperTKE, upperTKEOK := values[cloudValueKey{"tke", level + 1}]
 			if !uOK || !vOK || lowerTKEOK != upperTKEOK {
-				return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete ground-layer dynamics at model level %d", filepath.Base(path), level)
+				return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete ground-layer dynamics at model level %d", sourceName, level)
 			}
 			if lowerTKEOK {
 				tke = math.Max(0, (lowerTKE+upperTKE)/2)

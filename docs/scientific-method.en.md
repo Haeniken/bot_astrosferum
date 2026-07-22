@@ -1,11 +1,27 @@
 # Scientific method and Overall Astronomy Index
 
-Status: research-software method and calculation note, revised 21 July 2026.
+Status: research-software method and calculation note, revised 22 July 2026.
 This document is the canonical description of sources, units, formulas,
 control calculations, validation, uncertainty, and configurable engineering
 decisions in `bot_astrosferum`.
 
-## Scope and scientific status
+The directional Horizon method described in section 7 is an implemented
+user-facing capability. It is enabled by configuration, is deliberately
+limited to ICON-EU, and follows the same reproducibility and current-run
+requirements as the ordinary forecast.
+
+## Document map
+
+- Sections 1–2 define scientific status, outputs, and provenance.
+- Section 3 is the canonical formula ledger: every numbered equation used by
+  the implementation appears there with its research or project provenance.
+- Section 4 connects the canonical equations to implementation details,
+  calibration parameters, and control calculations.
+- Section 5 defines reproducibility, validation, and responsible use.
+- Section 6 records the measured data-source contracts.
+- Section 7 specifies the optional directional Horizon method.
+
+## 1. Scope and scientific status
 
 `bot_astrosferum` is research-oriented scientific software. It acquires
 numerical weather-prediction data, applies documented physical and engineering
@@ -20,7 +36,9 @@ structured observing logs. A universal scientific `1…10` sky-quality scale
 does not exist; Overall is an auditable mapping of physical and practical
 factors to a convenient range.
 
-## Research question and outputs
+## 2. Outputs and data provenance
+
+### 2.1. Research question and outputs
 
 The practical question is: how suitable is a coordinate and hour for
 astronomical observing, given modeled turbulence, wind, cloud obstruction,
@@ -32,10 +50,11 @@ The answer remains decomposed into auditable outputs:
 - effective cloud obstruction by native model level;
 - wind speed, vector shear, and direction-change diagnostics;
 - wind-derived and combined astronomy-condition indices;
+- optional ICON-EU directional conditions at the 10-degree Horizon reference;
 - Sun, Moon, Jupiter, and Saturn planning events;
 - point light-pollution context, reported separately from the hourly index.
 
-## Data provenance
+### 2.2. Data provenance
 
 Every forecast image identifies the provider, product, model run, grid, time
 zone, algorithm version, and renderer version. The primary weather source is
@@ -49,9 +68,9 @@ Architecture and runtime status are recorded in the
 [KISS architecture](architecture.en.md) and
 [implementation status](implementation-status.en.md). Data-source selection,
 measured contracts, and acquisition verification are consolidated in
-[section 12](#12-data-source-selection-and-server-verification) below.
+[section 6](#6-data-source-contracts-and-server-verification) below.
 
-## Formula ledger and research provenance
+## 3. Canonical formula ledger and research provenance
 
 This is the complete calculation chain used by the current implementation.
 Equations marked **published** are transcribed from the linked research;
@@ -59,26 +78,31 @@ equations marked **project rule** are explicit, configurable engineering
 choices made by `bot_astrosferum`. The latter must not be presented as
 peer-reviewed physical laws.
 
-### A. Physical optical-turbulence model
+### 3.1. Physical optical-turbulence model
 
 For every model layer, potential temperature and vector wind shear are
 
-```text
-[F1] theta = T * (1000/P)^(R/cp),       R/cp = 0.286
-     S     = sqrt((du/dz)^2 + (dv/dz)^2)
+```math
+\begin{aligned}
+\theta &= T\left(\frac{1000}{P}\right)^{R/c_p},
+&\qquad \frac{R}{c_p}=0.286,\\
+S &= \sqrt{\left(\frac{du}{dz}\right)^2+\left(\frac{dv}{dz}\right)^2}.
+\end{aligned}\tag{F1}
 ```
 
 Above the planetary boundary layer, HMNSP99 is evaluated exactly as
 
-```text
-[F2] M = -7.9e-5 * (P/T^2) * d(theta)/dz
-
-     L0^(4/3) = 0.1^(4/3) * 10^Y
-
-     Y = 0.362 + 16.728*S - 192.347*dT/dz   (troposphere)
-       = 0.757 + 13.819*S -  57.784*dT/dz   (stratosphere)
-
-     Cn2_FA = 2.8 * L0^(4/3) * M^2
+```math
+\begin{aligned}
+M &= -7.9\times10^{-5}\frac{P}{T^2}\frac{d\theta}{dz},\\
+L_0^{4/3} &= 0.1^{4/3}\,10^Y,\\
+Y &=
+\begin{cases}
+0.362+16.728S-192.347\,\dfrac{dT}{dz}, & \text{troposphere},\\
+0.757+13.819S-57.784\,\dfrac{dT}{dz}, & \text{stratosphere},
+\end{cases}\\
+C_{n,\mathrm{FA}}^2 &= 2.8\,L_0^{4/3}M^2.
+\end{aligned}\tag{F2}
 ```
 
 `P` is hPa, `T` and `theta` are K, `z` is m, `S` is s^-1, and `Cn2` is
@@ -92,97 +116,178 @@ selection is a **project rule** implementing the WMO lapse-rate definition.
 
 Within the boundary layer, native ICON TKE is used in the Masciadri relation:
 
-```text
-[F3] Cn2_GL = 3.35e-6
-              * P^[2*(1 - 2*R/cp)]
-              * theta^(-10/3)
-              * abs(d(theta)/dz)^(4/3)
-              * TKE^(2/3)
+```math
+C_{n,\mathrm{GL}}^2
+=3.35\times10^{-6}
+P^{\,2(1-2R/c_p)}
+\theta^{-10/3}
+\left|\frac{d\theta}{dz}\right|^{4/3}
+\mathrm{TKE}^{2/3}.
+\tag{F3}
 ```
 
 **Published basis:** equation (12) of
 [Cuevas et al. (2024)](https://academic.oup.com/mnras/article/529/3/2208/7617711),
 following the PBL parametrization of Masciadri & Jabouille (2001). Using
 ICON's prognostic TKE in this published relation is the model adaptation made
-here; `ground_Cn2_scale=1.0` applies no empirical fit by default.
+here. The paper prints `(d theta/dz)^(4/3)`; taking the absolute derivative is
+an explicit numerical adaptation that keeps the fractional power real when a
+model layer has a negative gradient. `ground_Cn2_scale=1.0` applies no
+empirical fit by default.
 
 The two non-overlapping regions are integrated and converted to seeing:
 
-```text
-[F4] h_PBL  = clamp(ICON_MH, 500 m, 2000 m) AGL
-     J_GL   = integral(surface .. h_PBL, Cn2_GL dz)
-     J_FA   = integral(h_PBL .. model_top, Cn2_FA dz)
-     J      = J_GL + J_FA
-
-     r0     = [0.423 * (2*pi/lambda)^2 * J]^(-3/5)
-     epsilon_rad = 0.98 * lambda/r0
-                 = 5.25 * lambda^(-1/5) * J^(3/5)
-     epsilon_arcsec = 206264.806247 * epsilon_rad
+```math
+\begin{aligned}
+h_{\mathrm{PBL}}
+&=\operatorname{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL},\\
+J_{\mathrm{GL}}&=\int_{\mathrm{surface}}^{h_{\mathrm{PBL}}}C_{n,\mathrm{GL}}^2\,dz,\\
+J_{\mathrm{FA}}&=\int_{h_{\mathrm{PBL}}}^{\mathrm{model\ top}}C_{n,\mathrm{FA}}^2\,dz,\\
+J&=J_{\mathrm{GL}}+J_{\mathrm{FA}},\\[2pt]
+r_0&=\left[0.423\left(\frac{2\pi}{\lambda}\right)^2J\right]^{-3/5},\\
+\varepsilon_{\mathrm{rad}}
+&=0.98\frac{\lambda}{r_0}
+=C_\varepsilon\lambda^{-1/5}J^{3/5},\\
+C_\varepsilon
+&=0.98\left[0.423(2\pi)^2\right]^{3/5}
+=5.306963958\ldots,\\
+\varepsilon_{\mathrm{arcsec}}
+&=206264.806247\,\varepsilon_{\mathrm{rad}}.
+\end{aligned}\tag{F4}
 ```
 
-`lambda=500e-9 m`. The `r0` and seeing equations are equations (13) and (14)
+`lambda=500e-9 m`. The `r0` and `0.98 lambda/r0` equations are equations
+(13) and (14)
 of [Cuevas et al. (2024)](https://academic.oup.com/mnras/article/529/3/2208/7617711);
 the underlying Fried parameter originates in
 [Fried (1965)](https://opg.optica.org/abstract.cfm?uri=josa-55-11-1427).
+The implementation evaluates these two base definitions directly. Their
+algebraically consistent coefficient is `5.306963958…`.
 The `500..2000 m` clamp is a configurable **project rule**, not a published
 universal PBL boundary.
+
+The ordinary Overall calculation uses the ICON cell's HHL surface elevation as
+the zero of AGL height. It therefore affects native cloud height, the placement
+of `h_PBL`, and the ground/free-atmosphere split in [F4]. There is no separate
+elevation multiplier: adding one would count the same model geometry twice.
+HHL is a coarse model-cell surface, not a local DEM or an obstacle/skyline
+survey.
 
 Wind affects the physical result twice, but through two different moments:
 vector shear is already in HMNSP99 `Cn2`, while absolute wind speed determines
 the atmospheric coherence time:
 
-```text
-[F5] J_V  = integral(Cn2(z) * |V(z)|^(5/3) dz)
-     tau0 = 0.058 * lambda^(6/5) * J_V^(-3/5)
+```math
+\begin{aligned}
+J_V&=\int C_n^2(z)\,\lvert V(z)\rvert^{5/3}\,dz,\\
+k&=\frac{2\pi}{\lambda},\\
+D_\phi(t)&=2.910\,k^2J_Vt^{5/3},\\
+D_\phi(\tau_0)&=1,\\
+\tau_0&=\left(2.910\,k^2J_V\right)^{-3/5}
+=C_\tau\lambda^{6/5}J_V^{-3/5},\\
+C_\tau&=\left[2.910(2\pi)^2\right]^{-3/5}
+=0.058056167701097\ldots.
+\end{aligned}\tag{F5}
 ```
 
-**Published basis:** equation (11) of
-[Zhang et al. (2021)](https://academic.oup.com/mnras/article/505/1/582/6273151)
-and the equivalent effective-wind definition discussed by
-[Osborn et al. (2020)](https://academic.oup.com/mnras/article/496/4/4822/5863963).
+**Published basis:** equations (4)–(5) of
+[Kellerer & Tokovinin (2007)](https://www.aanda.org/articles/aa/pdf/2007/02/aa5788-06.pdf)
+give the temporal phase structure function and effective-wind definition.
+[Qian et al. (2021)](https://academic.oup.com/mnras/article/505/1/582/6273151)
+publish the equivalent expanded convention rounded to three decimal places,
+while
+[Aristidi et al. (2020)](https://academic.oup.com/mnras/article/496/4/4822/5863963)
+use the effective-wind form. The implementation evaluates the phase-structure
+definition directly; `C_tau` above is shown only as its algebraic control value.
+Here `2.910` is the source-published base coefficient; the implementation does
+not introduce another rounding step. In particular, it does not substitute the
+three-decimal shorthand `0.058`: relative to the same base coefficient, its
+algebraically expanded value is `0.058056167701097...`. Consequently, using the
+shorthand would make `tau0` about `0.0968%` smaller. The expanded value is kept
+only as a regression check, while production code evaluates the first form in
+[F5]. This choice does not claim numerical precision beyond the
+source-reported `2.910`.
 No separate direction-change penalty is multiplied into Overall, because it
 would count the vector-shear contribution again.
 
-### B. Cloud obstruction
+### 3.2. Cloud obstruction
 
 For liquid and ice separately, the condensate mass path and optical depth are
 
-```text
-[F6] rho_air   = P_Pa/(Rd*T),                  Rd = 287.05 J/(kg*K)
-     CWP_phase = q_phase * rho_air * dz_native
-     tau_phase = 3*Qext_phase*CWP_phase/(4*rho_phase*r_eff_phase)
-     tau       = tau_liquid + tau_ice
+```math
+\begin{aligned}
+\rho_{\mathrm{air}}&=\frac{P_{\mathrm{Pa}}}{R_dT},
+&R_d&=287.05\ \mathrm{J\,kg^{-1}\,K^{-1}},\\
+\mathrm{CWP}_{\mathrm{phase}}
+&=q_{\mathrm{phase}}\rho_{\mathrm{air}}\,\Delta z_{\mathrm{native}},\\
+\tau_{\mathrm{phase}}
+&=\frac{3Q_{\mathrm{ext,phase}}\mathrm{CWP}_{\mathrm{phase}}}
+{4\rho_{\mathrm{phase}}r_{\mathrm{eff,phase}}},\\
+\tau&=\tau_{\mathrm{liquid}}+\tau_{\mathrm{ice}}.
+\end{aligned}\tag{F6}
 ```
 
 Defaults are `Qext_liquid=2.0`, `Qext_ice=2.1`,
 `rho_liquid=1000 kg/m3`, `rho_ice=916.7 kg/m3`,
-`r_eff_liquid=10 um`, and `r_eff_ice=25 um`. The optical-depth relation
-reduces to `tau=3*LWP/(2*rho_water*r_eff)` for `Qext=2`, matching equation
-(19) of
-[Gryspeerdt et al. (2019)](https://www.nature.com/articles/s41467-019-12982-0).
-The fixed effective radii and ice extinction efficiency are **project
-assumptions**, required because public one-moment ICON fields contain mass but
-not particle number or effective radius.
+`r_eff_liquid=10 um`, and `r_eff_ice=25 um`. For `Qext=2`, the
+optical-depth relation reduces to
 
-ICON condensate is a grid-box mean. For cloudy fraction `C`, the code treats
-`tau/C` as in-cloud optical depth and applies Beer-Lambert extinction:
-
-```text
-[F7] T_cloudy = exp(-tau/C)
-     q_cloud  = T_all_sky = (1-C) + C*T_cloudy
-     B_cond   = 1 - q_cloud = C*(1-exp(-tau/C))
+```math
+\tau=\frac{3\,\mathrm{LWP}}{2\rho_{\mathrm{water}}r_{\mathrm{eff}}}.
 ```
 
-This all-sky mixture is a **project derivation** from the published optical
-depth relation, not an equation claimed by Gryspeerdt et al. A diagnosed-cloud
+This matches equation (19) of
+[Lowe et al. (2019)](https://www.nature.com/articles/s41467-019-12982-0).
+That source supports the liquid-water form only. The ice term, fixed
+effective radii, and ice extinction efficiency are **project
+assumptions**, required because public one-moment ICON fields contain mass but
+not particle number or effective radius.
+The density `P/(Rd*T)` is the dry-air approximation; without model `DEN` or
+specific humidity on the retained cloud levels, moist-air density is not
+reconstructed. This small approximation is disclosed rather than hidden.
+
+ICON condensate is a grid-box mean. For diagnosed cloudy fraction `C`, the
+code first defines the nonsingular effective fraction `C_hat` below, then
+treats `tau/C_hat` as in-cloud optical depth and applies Beer-Lambert
+extinction:
+
+```math
+\begin{aligned}
+\widehat C&=
+\begin{cases}
+C, & C\ge10^{-6},\\
+0, & C<10^{-6}\ \land\ \tau<10^{-9},\\
+\min\!\left[1,\max\!\left(0.01,1-e^{-\tau}\right)\right], & \text{otherwise},
+\end{cases}\\
+q_{\mathrm{cloud}}=T_{\mathrm{all\ sky}}
+&=
+\begin{cases}
+1, & \widehat C=0,\\
+(1-\widehat C)+\widehat C\exp\!\left(-\dfrac{\tau}{\widehat C}\right),
+& \widehat C>0,
+\end{cases}\\
+B_{\mathrm{cond}}&=1-q_{\mathrm{cloud}}.
+\end{aligned}\tag{F7}
+```
+
+The clear/cloudy mixture and the bounded inference used only when rounded
+`C=0` coexists with condensate are **project derivations** from the published
+optical-depth relation, not equations claimed by Lowe et al. A diagnosed-cloud
 uncertainty guard is then applied when public `QC/QI` or `TQC/TQI` do not
 represent diagnostic `CLC`:
 
-```text
-[F8] g_low=0.45;  g_middle=0.55*g_low;  g_high=0.18*g_low
-     B_tier = g_tier*C_tier
-     B_guard = min(C_cap, 1-(1-B_low)*(1-B_middle)*(1-B_high))
-     q_cloud = min(q_cloud, 1-B_guard)
+```math
+\begin{aligned}
+g_{\mathrm{low}}&=0.45,
+&g_{\mathrm{middle}}&=0.55\,g_{\mathrm{low}},
+&g_{\mathrm{high}}&=0.18\,g_{\mathrm{low}},\\
+B_{\mathrm{tier}}&=g_{\mathrm{tier}}C_{\mathrm{tier}},\\
+C_{\mathrm{cap}}&=\max(\mathrm{CLCT},\mathrm{CLCL},\mathrm{CLCM},\mathrm{CLCH}),\\
+B_{\mathrm{guard}}
+&=\min\!\left(C_{\mathrm{cap}},
+1-(1-B_{\mathrm{low}})(1-B_{\mathrm{middle}})(1-B_{\mathrm{high}})\right),\\
+q_{\mathrm{cloud}}&=\min(q_{\mathrm{cloud}},1-B_{\mathrm{guard}}).
+\end{aligned}\tag{F8}
 ```
 
 The product is the random-overlap expression for the three already aggregated
@@ -193,41 +298,75 @@ rules**; they are not fitted cloud optical properties. The formula is not
 called maximum-random overlap because adjacent native layers are not being
 grouped into maximum-overlap blocks in this calculation.
 
-### C. Engineering mapping to Overall `1..10`
+### 3.3. Engineering mapping to Overall `1..10`
 
 The physical outputs are mapped without rounding:
 
-```text
-[F9] q_seeing = clamp(ln(epsilon_bad/epsilon) /
-                      ln(epsilon_bad/epsilon_best), 0, 1)
+```math
+\begin{aligned}
+q_{\mathrm{seeing}}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
+{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
+q_{\tau}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
+{\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
+q_{\mathrm{coherence}}&=1-w_{\tau}(1-q_{\tau}),\\
+q_{\mathrm{turbulence}}
+&=q_{\mathrm{seeing}}^{w_{\mathrm{seeing}}}q_{\mathrm{coherence}},\\
+f_{\mathrm{turbulence}}
+&=(1-p_{\mathrm{turbulence}})
++p_{\mathrm{turbulence}}q_{\mathrm{turbulence}}.
+\end{aligned}\tag{F9}
+```
 
-     q_tau = clamp(ln(tau0/tau_bad) /
-                   ln(tau_best/tau_bad), 0, 1)
-     q_coherence = 1 - w_tau*(1-q_tau)
+```math
+\begin{aligned}
+t&=\operatorname{clamp}\!\left(\frac{x-a}{b-a},0,1\right),\\
+\operatorname{smoothstep}(x;a,b)&=t^2(3-2t),\\
+r_{\mathrm{surface}}
+&=\max\!\left[\operatorname{smoothstep}(V_{10};8.5,15),
+\operatorname{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
+q_{\mathrm{surface}}&=1-0.20\,r_{\mathrm{surface}}.
+\end{aligned}\tag{F10}
+```
 
-[F10] smoothstep(x;a,b): t=clamp((x-a)/(b-a),0,1);  f=t^2*(3-2*t)
-      r_surface=max(smoothstep(V10;8.5,15), smoothstep(gust;12,22))
-      q_surface=1-0.20*r_surface
+```math
+q_{\mathrm{fog}}=
+\begin{cases}
+0.10, & \mathrm{VIS}<1\,\mathrm{km},\ \mathrm{RH}\ge95\%,\ T-T_d\le1.5^\circ\mathrm{C},\\
+0.75, & \mathrm{VIS}<5\,\mathrm{km},\ \mathrm{RH}\ge90\%,\ T-T_d\le2.5^\circ\mathrm{C},\\
+1.00, & \text{otherwise}.
+\end{cases}\tag{F11}
+```
 
-[F11] q_fog = 0.10  if visibility<1 km, RH>=95%, T-Td<=1.5 C
-      q_fog = 0.75  if visibility<5 km, RH>=90%, T-Td<=2.5 C
-      q_fog = 1.00  otherwise
-
-[F12] Q = q_seeing^w_seeing * q_coherence
-          * q_cloud^w_cloud * q_surface * q_fog
-      Overall = 1 + 9*clamp(Q,0,1)
+```math
+\begin{aligned}
+Q&=f_{\mathrm{turbulence}}
+q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
+q_{\mathrm{surface}}q_{\mathrm{fog}},\\
+\mathrm{Overall}&=1+9\,\operatorname{clamp}(Q,0,1).
+\end{aligned}\tag{F12}
 ```
 
 Defaults are `epsilon_best=0.5 arcsec`, `epsilon_bad=2.0 arcsec`,
-`tau_best=5.2 ms`, `tau_bad=1.6 ms`, `w_tau=0.25`, `w_seeing=1`, and
-`w_cloud=2`.
+`tau_best=5.2 ms`, `tau_bad=1.6 ms`, `w_tau=0.25`, `w_seeing=1`,
+`w_cloud=2`, and `p_turbulence=0.25`.
 [ESO observing-condition categories](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html)
-inform the [F9] reference ranges. [F10] is intentionally mild because the
+provide observational context for [F9], including the `0.5 arcsec` image-quality
+and `5.2/1.6 ms` coherence-time values. The `2.0 arcsec` saturation endpoint and
+their use in a continuous utility curve are project choices, not an ESO
+good/bad classification. [F10] is intentionally mild because the
 site measurements of
 [Catala et al. (2013)](https://academic.oup.com/mnras/article/436/1/590/975197)
 found only a weak surface-wind/seeing relation except at high wind, while
-[ESO operations](https://www.eso.org/sci/facilities/paranal/sciops/At_Telescope.html)
-provide practical wind limits. The
+[CRIRES visitor instructions](https://www.eso.org/sci/facilities/paranal/instruments/crires/visitor.html)
+and the official
+[VLT environmental specifications](https://www.eso.org/sci/facilities/paranal/telescopes/ut/envspecs.html)
+provide operational context: pointing into wind is restricted above `12 m/s`,
+while VLT full-performance limits distinguish wind orientation and gusts.
+The exact `8.5/15` and `12/22 m/s` endpoints in [F10] remain project choices. The
 [WMO International Cloud Atlas](https://cloudatlas.wmo.int/fog-compared-with-mist.html)
 defines fog by horizontal visibility below 1 km and supports the high-risk
 visibility boundary in [F11]. However, equations [F9]-[F12], all thresholds,
@@ -237,70 +376,149 @@ precipitation or dry haze from being mislabeled as fog.
 Dew risk, daylight, Bortle class, and planetary events do **not** enter [F12].
 Day/night is only visual shading on the hourly Overall chart.
 
-## 1. Why the old index was too optimistic
+The bounded `f_turbulence` is a convex mixture between target detectability
+and fine-resolution performance. Seeing is the FWHM of the atmospheric
+point-spread function: it redistributes
+point-source light and changes angular resolution and the signal-to-noise
+reference area, but it is not extinction. ESO accordingly treats image
+quality/turbulence and sky transparency as separate observing constraints and
+evaluates them against each science programme rather than declaring one
+universal threshold
+([ESO ETC definitions](https://www.eso.org/observing/etc/doc/helpuves.html),
+[ESO QC0 constraints](https://www.eso.org/sci/facilities/paranal/quality-control/qc0-ob-grading.html)).
+Equation [F9] interprets `p_turbulence` as the fraction of a
+target-agnostic utility assigned to fine-resolution performance; the remaining
+fraction represents observing modes in which the target remains detectable
+although fine detail is degraded.
 
-The saved user control point is:
+No published universal value of `p_turbulence` exists. Its default `0.25` is a
+versioned, configurable **project prior**, chosen by the explicit ordering
+requirement that cloud obstruction dominate a general-purpose score. With the
+defaults, the exact consequences are
 
-```text
-Historical diagnostic case; exact user-provided location removed from public artifacts.
+```math
+\begin{aligned}
+0.75&\le f_{\mathrm{turbulence}}\le1,\\
+1-\sqrt{0.75}&=0.133975\ldots,\\
+(1-0.20)^2&=0.64,\\
+7.75&\le\mathrm{Overall}_{\mathrm{turbulence\ only}}\le10.
+\end{aligned}
 ```
 
-On production run `ICON-EU 2026072100`, the old pressure-level HMNSP99 model
-produced an almost flat series around `0.70…0.77 arcsec` without a resolved
-planetary boundary layer (PBL). Its full audited-window range was
-`0.682…0.796 arcsec`, and 13 hours rounded to `10.0` on the Overall chart.
+Thus turbulence alone removes at most 25% of normalized utility, effective
+obstruction above about 13.4% has a stronger effect, and 20% obstruction causes
+a 36% loss. Cloud can still drive the score to its minimum. This numerical
+choice must eventually be
+calibrated against target-class-labelled observing logs; physical `epsilon`
+and `tau0` are neither clipped nor changed by it.
 
-There were three causes.
+## 4. Overall implementation and control calculations
 
-1. The checked profile placed `1000 hPa` at `67.12 m MSL`, below the model
-   surface `HHL75 = 219.75 m MSL`; `950 hPa` was already at `500.34 m MSL`.
-   Roughly the first 280 m above ground was unresolved. In `f036`, the part
-   below ~1.5 km contributed only about 0.6% of the `Cn²` integral.
-2. Seeing used a smoothstep between `good=0.7″` and `bad=2.5″`; every
-   `seeing <= 0.7″` immediately became the ideal `q_seeing=1`.
-3. Diagnostic `CLC/CLCT` cover sometimes coexisted with almost zero
-   grid-scale `QC/QI` or `TQC/TQI`. The condensate-only formula then treated
-   a cloudy hour as almost perfectly transparent.
+### 4.1. Current model and regression controls
 
-Example of the third cause for the historical control case, `2026-07-22 21:00 MSK`:
+The current calculation deliberately separates physical quantities from the
+user-facing utility. The physical layer computes the optical-turbulence
+integrals, zenith seeing `epsilon`, coherence time `tau0`, and effective cloud
+transmission `q_cloud` without clipping. The `1…10` layer only combines these
+different quantities into a planning aid:
 
-```text
-CLCT = 65.21% (low 23.05%, middle 52.33%)
-TQC  = 0
-TQI  = 4.41e-17 kg/m²
-tau  ~= 0
-old computed transmission ~= 100%
-old Overall = 10.0
+```math
+\begin{aligned}
+J&=\int C_n^2\,dz,\\
+\varepsilon&=C_\varepsilon\lambda^{-1/5}J^{3/5},
+&C_\varepsilon&=5.306963958\ldots,\\
+\tau_0&=C_\tau\lambda^{6/5}
+\left(\int C_n^2\lvert V\rvert^{5/3}\,dz\right)^{-3/5},\\[2pt]
+q_{\mathrm{seeing}}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
+{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
+q_{\tau}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
+{\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
+q_{\mathrm{turbulence}}
+&=q_{\mathrm{seeing}}^{w_{\mathrm{seeing}}}
+\left[1-w_{\tau}(1-q_{\tau})\right],\\
+f_{\mathrm{turbulence}}
+&=(1-p_{\mathrm{turbulence}})
++p_{\mathrm{turbulence}}q_{\mathrm{turbulence}},\\
+Q&=f_{\mathrm{turbulence}}q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
+q_{\mathrm{surface}}q_{\mathrm{fog}},\\
+\mathrm{Overall}&=1+9\,\operatorname{clamp}(Q,0,1).
+\end{aligned}
 ```
 
-This does not prove cloud transparency. In ICON, `CLC` is a diagnostic grid
-fraction that includes sub-grid variability, whereas `QC/QI` are prognostic
-grid-scale mixing ratios. They describe different aspects of the cloud field
-and need not close numerically. DWD explicitly describes this split in the
-[ICON tutorial's Cloud cover section](https://www.dwd.de/EN/ourservices/nwp_icon_tutorial/pdf_volume/icon_tutorial2020_en.pdf?__blob=publicationFile&v=9),
-while field semantics and vertical staggering are documented in the official
+With default `w_seeing=1`, `w_tau=0.25`, `w_cloud=2`, and
+`p_turbulence=0.25`, physically poor seeing is not a veto on every observing
+mode. The target can remain visible while fine detail and image quality
+degrade. Effective cloud obstruction instead represents transmission loss and
+can reduce the cloud term to zero. The relative bounds are
+
+```math
+\begin{aligned}
+0.75&\le f_{\mathrm{turbulence}}\le1,\\
+B_{\mathrm{equal}}&=1-\sqrt{0.75}=0.133975\ldots,\\
+q_{\mathrm{cloud}}(B=0.20)^{2}&=(1-0.20)^2=0.64.
+\end{aligned}
+```
+
+Thus about `13.4%` effective obstruction already matches the greatest possible
+turbulence loss, and `20%` obstruction has the stronger effect.
+
+The `p_turbulence=0.25` coefficient is not presented as a physical constant.
+It is a configurable prior for a general-purpose index: 75% of normalized
+utility remains available to observing modes governed by target visibility
+rather than limiting angular resolution. Fried theory and the `Cn²` moments
+provide the physical basis; ESO's separate treatment of image
+quality/turbulence and transparency provides the basis for keeping these
+effects distinct. The numerical prior still requires target-class-labelled
+observing logs and independent DIMM/MASS/SCIDAR calibration.
+
+A regression calculation over a retained 66-term input set checks the current
+semantics. Raw seeing quality is zero in 26 terms, including 15 with modeled
+cloud transmission of at least 80%. The two control cases are
+
+```math
+\begin{aligned}
+(\varepsilon,\tau_0,T_{\mathrm{cloud}})
+&=(2.63\ \mathrm{arcsec},1.67\ \mathrm{ms},0.9451)
+&&\Longrightarrow\quad \mathrm{Overall}=7.03,\\
+T_{\mathrm{cloud}}&=0.0006
+&&\Longrightarrow\quad \mathrm{Overall}\approx1.00.
+\end{aligned}
+```
+
+This control demonstrates that zero raw seeing quality does not independently
+force the exact minimum, whereas an effectively opaque cloud column can do so.
+
+The mismatch between diagnostic `CLC` cover and grid-resolved `QC/QI`
+condensate is handled by a separate bounded tier guard. DWD documents that
+split in the
+[ICON tutorial's cloud-cover section](https://www.dwd.de/EN/ourservices/nwp_icon_tutorial/pdf_volume/icon_tutorial2020_en.pdf?__blob=publicationFile&v=9)
+and the official
 [ICON database description](https://isabel.dwd.de/SharedDocs/downloads/DE/modelldokumentationen/nwv/icon/icon_dbbeschr_aktuell.pdf?nn=16102&view=nasPublication).
+`QC_DIA/QI_DIA` are absent from the checked public ICON-EU set, while
+`CLCT_MOD` is documented as a visualization field that ignores isolated
+cirrus. It is therefore not used as a substitute for physical obstruction.
 
-The model has diagnostic `QC_DIA/QI_DIA` fields that match the diagnostic
-scheme, but they are absent from the actual public
-[ICON-EU Open Data directory](https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/).
-The available `CLCT_MOD` is not a solution either: DWD defines it as a
-visualization field and notes that it ignores cirrus when only high cloud is
-present. That is unsuitable for observational astronomy, where thin cirrus
-matters.
-
-## 2. Free atmosphere: HMNSP99
+### 4.2. Free atmosphere: HMNSP99
 
 HMNSP99 remains the free-atmosphere parametrization above the PBL. Per layer:
 
-```text
-theta = T * (1000 / P)^0.286
-M     = -79e-6 * P / T² * d(theta)/dz
-S     = hypot(du, dv) / dz
-Y     = 0.362 + 16.728*S - 192.347*dT/dz  # troposphere
-      = 0.757 + 13.819*S -  57.784*dT/dz  # stratosphere
-L0^(4/3) = 0.1^(4/3) * 10^Y
-Cn²   = 2.8 * L0^(4/3) * M²
+```math
+\begin{aligned}
+\theta&=T\left(\frac{1000}{P}\right)^{0.286},\\
+M&=-79\times10^{-6}\frac{P}{T^2}\frac{d\theta}{dz},\\
+S&=\frac{\operatorname{hypot}(du,dv)}{dz},\\
+Y&=
+\begin{cases}
+0.362+16.728S-192.347\,\dfrac{dT}{dz}, & \text{troposphere},\\
+0.757+13.819S-57.784\,\dfrac{dT}{dz}, & \text{stratosphere},
+\end{cases}\\
+L_0^{4/3}&=0.1^{4/3}10^Y,\\
+C_n^2&=2.8\,L_0^{4/3}M^2.
+\end{aligned}
 ```
 
 `P` is in hPa, `T` in K, `z` in m, and `S` in s⁻¹. Coefficients and units
@@ -315,14 +533,15 @@ shows that free-atmosphere models perform better than ground-layer models and
 that the best tested approach combines a TKE-based PBL parametrization with a
 separate model above it.
 
-## 3. Ground layer: native ICON TKE, hourly `MH`, and the Masciadri equation
+### 4.3. Ground layer: native ICON TKE, hourly `MH`, and the Masciadri equation
 
 The ground-layer boundary is no longer fixed at `2 km AGL`. Every hourly
 forecast time uses the ICON single-level `MH` field (ecCodes `mld`, mixed-layer
 depth in metres), bounded as follows:
 
-```text
-h_PBL = clamp(MH, 500 m, 2000 m) AGL
+```math
+h_{\mathrm{PBL}}
+=\operatorname{clamp}(\mathrm{MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL}.
 ```
 
 The 500 m minimum prevents a very shallow or unstable `MH` from excluding the
@@ -344,14 +563,16 @@ packages are available in the
 At every full level, `|dθ/dz|` is obtained by a central difference over its
 neighbours. Equation 12 of Cuevas et al. / Masciadri is then applied:
 
-```text
-Cn² = 3.35e-6
-      * P^[2*(1 - 2R/cp)]
-      * theta^(-10/3)
-      * abs(d(theta)/dz)^(4/3)
-      * TKE^(2/3)
-
-R/cp = 0.286
+```math
+\begin{aligned}
+C_n^2
+&=3.35\times10^{-6}
+P^{\,2(1-2R/c_p)}
+\theta^{-10/3}
+\left|\frac{d\theta}{dz}\right|^{4/3}
+\mathrm{TKE}^{2/3},\\
+\frac{R}{c_p}&=0.286.
+\end{aligned}
 ```
 
 Here `P` is in hPa, `theta` in K, `z` in m, and `TKE` in `m²/s²`. Nodes are
@@ -359,16 +580,18 @@ integrated trapezoidally from the model surface to the hourly `h_PBL`; the
 first full level is extended through the small slab down to the surface.
 HMNSP99 is integrated only above the same boundary, so there is no overlap:
 
-```text
-h_PBL   = clamp(ICON_MH, 500 m, 2000 m)
-J_GL    = integral[0..h_PBL AGL](Cn² dz)
-J_FA    = integral[above h_PBL AGL](Cn² dz)
-J_total = J_GL + J_FA
+```math
+\begin{aligned}
+h_{\mathrm{PBL}}
+&=\operatorname{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m}),\\
+J_{\mathrm{GL}}&=\int_{0}^{h_{\mathrm{PBL}}\ \mathrm{AGL}}C_n^2\,dz,\\
+J_{\mathrm{FA}}&=\int_{h_{\mathrm{PBL}}\ \mathrm{AGL}}^{\mathrm{model\ top}}C_n^2\,dz,\\
+J_{\mathrm{total}}&=J_{\mathrm{GL}}+J_{\mathrm{FA}}.
+\end{aligned}
 ```
 
-The first server-side control calculation at the historical control case used
-the former fixed 2 km boundary and demonstrates the scale of the missing
-contribution:
+A server-side sensitivity calculation used a fixed `2 km AGL` comparison
+boundary to quantify the scale of the ground-layer contribution:
 
 | Lead | Hybrid seeing | Ground-layer share of `J` |
 |---|---:|---:|
@@ -376,9 +599,9 @@ contribution:
 | `f048` | `3.644″` | `94.43%` |
 
 Both use `ground Cn² scale = 1.0`, with no fit to the outcome. These are two
-diagnostic leads, not observational validation, but they directly explain why
-the pressure-level `0.70…0.77″` series and many old `10` values were
-implausibly optimistic.
+diagnostic leads, not observational validation. They show why a
+pressure-level-only `0.70…0.77″` series can understate the contribution below
+the free atmosphere.
 
 After adding `MH`, the field was `396 m` at both control leads. An unbounded
 396 m cutoff produced `1.9075″` at `f042` and `2.5158″` at `f048`; the
@@ -393,87 +616,115 @@ so the ground layer often dominates the integral:
 [Kornilov et al.](https://arxiv.org/abs/1403.6820). Those values cannot be
 used as a site-specific calibration, but the PBL cannot be ignored either.
 
-## 4. Seeing and coherence time
+### 4.4. Seeing and coherence time
 
 Both products are evaluated at `lambda = 500 nm` and at zenith. From the full
 integral:
 
-```text
-r0      = [0.423 * (2*pi/lambda)² * J_total]^(-3/5)
-seeing  = 0.98 * lambda / r0
+```math
+\begin{aligned}
+r_0&=\left[0.423\left(\frac{2\pi}{\lambda}\right)^2J_{\mathrm{total}}\right]^{-3/5},\\
+\varepsilon&=0.98\frac{\lambda}{r_0}.
+\end{aligned}
 ```
 
-The equivalent `seeing = 5.25*lambda^(-1/5)*J_total^(3/5)` expression returns
-radians before conversion to arcseconds. The equations and additive integral
-are given by [Cuevas et al. (2024)](https://academic.oup.com/mnras/article/529/3/2208/7617711).
+The equivalent expanded form is
+
+```math
+\varepsilon_{\mathrm{rad}}
+=5.306963958\ldots\,\lambda^{-1/5}J_{\mathrm{total}}^{3/5}.
+```
+
+It returns radians before conversion to arcseconds. The code evaluates the two
+base equations directly rather than storing the expanded decimal coefficient.
 
 Wind enters through atmospheric coherence time:
 
-```text
-M_wind = integral(Cn² * |V|^(5/3) dz)
-tau0   = 0.058 * lambda^(6/5) * M_wind^(-3/5)
+```math
+\begin{aligned}
+M_{\mathrm{wind}}&=\int C_n^2\lvert V\rvert^{5/3}\,dz,\\
+k&=\frac{2\pi}{\lambda},\\
+\tau_0&=\left(2.910\,k^2M_{\mathrm{wind}}\right)^{-3/5}.
+\end{aligned}
 ```
 
-This is the standard wind-weighted turbulence integral; see
-[Osborn et al. (2015)](https://academic.oup.com/mnras/article/451/3/3299/2907963).
+This is the standard wind-weighted turbulence integral and phase-structure
+definition in [Kellerer & Tokovinin (2007)](https://www.aanda.org/articles/aa/pdf/2007/02/aa5788-06.pdf);
+[Liu et al. (2015)](https://academic.oup.com/mnras/article/451/3/3299/2907963)
+use its rounded expanded form.
 It penalizes strong wind specifically where optical turbulence is present.
 
 No separate full `direction delta` penalty is added. The identity
 
-```text
-|Delta V|² = V1² + V2² - 2*V1*V2*cos(Delta direction)
+```math
+\lvert\Delta\mathbf{V}\rvert^2
+=V_1^2+V_2^2-2V_1V_2\cos(\Delta\varphi).
 ```
 
 shows that HMNSP vector shear already contains wind rotation. Multiplying by
 direction change again would double-count it. On the diagnostic chart,
-direction delta remains `0°`, rather than missing, when
-`min(speedA,speedB) < 2 m/s`: near-calm direction is unstable and has little
-practical effect.
+direction change follows the masking rule
 
-## 5. An auditable `1…10` mapping
+```math
+\min(V_A,V_B)<2\ \mathrm{m\,s^{-1}}
+\quad\Longrightarrow\quad\Delta\varphi_{\mathrm{chart}}=0^\circ.
+```
+
+Near-calm direction is unstable and has little practical effect.
+
+### 4.5. An auditable `1…10` mapping
 
 This is an engineering mapping, not a new physical scale. The reference
 seeing and `tau0` values come from official
 [ESO observing-condition categories](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html).
 To avoid a broad plateau, seeing quality varies logarithmically:
 
-```text
-q_seeing = clamp(
-  ln(seeing_bad / seeing) / ln(seeing_bad / seeing_best),
-  0, 1)
-
-seeing_best = 0.5 arcsec
-seeing_bad  = 2.0 arcsec
+```math
+\begin{aligned}
+q_{\mathrm{seeing}}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
+{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
+\varepsilon_{\mathrm{best}}&=0.5\ \mathrm{arcsec},
+&\varepsilon_{\mathrm{bad}}&=2.0\ \mathrm{arcsec}.
+\end{aligned}
 ```
 
 Coherence time, where larger is better, uses the analogous mapping:
 
-```text
-q_tau = clamp(
-  ln(tau0 / tau_bad) / ln(tau_best / tau_bad),
-  0, 1)
-
-tau_best = 5.2 ms
-tau_bad  = 1.6 ms
-q_coherence = 1 - 0.25 * (1 - q_tau)
+```math
+\begin{aligned}
+q_{\tau}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
+{\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
+\tau_{\mathrm{best}}&=5.2\ \mathrm{ms},
+&\tau_{\mathrm{bad}}&=1.6\ \mathrm{ms},\\
+q_{\mathrm{coherence}}&=1-0.25(1-q_{\tau}),\\
+q_{\mathrm{turbulence}}
+&=q_{\mathrm{seeing}}^{w_{\mathrm{seeing}}}q_{\mathrm{coherence}},\\
+f_{\mathrm{turbulence}}&=0.75+0.25q_{\mathrm{turbulence}}.
+\end{aligned}
 ```
 
-`tau weight = 0.25` makes wind relevant while capping the additional
-coherence-time penalty at `0…25%`. The factor may only lower seeing quality;
-it cannot improve it or replace the main `Cn²` integral.
+`tau weight = 0.25` keeps wind relevant inside the high-resolution term. The
+outer convex mixture caps the **combined** seeing and coherence-time influence
+at 25%; it does not clip or replace either physical `Cn²` moment.
 
-## 6. Effective ICON cloud obstruction
+### 4.6. Effective ICON cloud obstruction
 
 For cloud fraction `C` and a total-column or layer condensate path, visible
 optical depth is estimated separately for liquid and ice:
 
-```text
-tau_phase = 3 * Qext * CWP / (4 * rho * r_eff)
-B_cond    = C * (1 - exp(-tau/C))
+```math
+\begin{aligned}
+\tau_{\mathrm{phase}}&=\frac{3Q_{\mathrm{ext}}\mathrm{CWP}}{4\rho r_{\mathrm{eff}}},\\
+B_{\mathrm{cond}}&=C\left[1-\exp\!\left(-\frac{\tau}{C}\right)\right].
+\end{aligned}
 ```
 
 The cloud-water-path to optical-depth form follows
-[Gryspeerdt et al.](https://www.nature.com/articles/s41467-019-12982-0).
+[Lowe et al.](https://www.nature.com/articles/s41467-019-12982-0).
 `B_cond` is the fraction of sky blocked by model-resolved condensate, not mere
 cloud cover.
 
@@ -481,11 +732,13 @@ On native model levels, mixing ratio becomes condensate path using the actual
 full-layer thickness between adjacent `HHL` boundaries, rather than a pressure
 difference inferred between sparsely retained levels:
 
-```text
-dz_native = abs(HHL[k] - HHL[k+1])
-m_air     = P_Pa / (Rd*T) * dz_native
-CWP_phase = q_phase * m_air
-Rd        = 287.05 J/(kg*K)
+```math
+\begin{aligned}
+\Delta z_{\mathrm{native}}&=\lvert\mathrm{HHL}_k-\mathrm{HHL}_{k+1}\rvert,\\
+m_{\mathrm{air}}&=\frac{P_{\mathrm{Pa}}}{R_dT}\,\Delta z_{\mathrm{native}},\\
+\mathrm{CWP}_{\mathrm{phase}}&=q_{\mathrm{phase}}m_{\mathrm{air}},\\
+R_d&=287.05\ \mathrm{J\,kg^{-1}\,K^{-1}}.
+\end{aligned}
 ```
 
 Consequently, `T` is downloaded at all 27 heatmap levels. Sparse sampling
@@ -494,28 +747,34 @@ aloft never assigns the mass of skipped native layers to a retained level.
 To prevent diagnostic `CLC` with almost zero grid-scale `QC/QI` from becoming
 “perfect transparency”, a tier-aware conservative guard is applied:
 
-```text
-g_low    = base       = 0.45
-g_middle = 0.55*base = 0.2475
-g_high   = 0.18*base = 0.081
-
-B_effective,layer = max(B_cond, g_tier*C)
+```math
+\begin{aligned}
+g_{\mathrm{low}}&=g_{\mathrm{base}}=0.45,\\
+g_{\mathrm{middle}}&=0.55g_{\mathrm{base}}=0.2475,\\
+g_{\mathrm{high}}&=0.18g_{\mathrm{base}}=0.081,\\
+B_{\mathrm{effective,layer}}
+&=\max(B_{\mathrm{cond}},g_{\mathrm{tier}}C).
+\end{aligned}
 ```
 
 For the heatmap, tier follows the layer's actual AGL midpoint: low below 2 km,
 middle from 2 to 7 km, and high from 7 km. The column calculation instead uses
 the ready-made ICON `CLCL/CLCM/CLCH` tiers and overlaps their guards as:
 
-```text
-B_guard,column = min(C_cap,
-                     1 - (1-B_low)*(1-B_middle)*(1-B_high))
-C_cap = max(CLCT, CLCL, CLCM, CLCH)
+```math
+\begin{aligned}
+B_{\mathrm{guard,column}}
+&=\min\!\left[C_{\mathrm{cap}},
+1-(1-B_{\mathrm{low}})(1-B_{\mathrm{middle}})(1-B_{\mathrm{high}})\right],\\
+C_{\mathrm{cap}}&=\max(\mathrm{CLCT},\mathrm{CLCL},\mathrm{CLCM},\mathrm{CLCH}).
+\end{aligned}
 ```
 
 The base `45%` and the `55%`/`18%` tier multipliers are conservative
 engineering uncertainty factors, not physical opacity assigned to low,
 middle, or high cloud. Resolved `QC/QI` physics always wins when stronger,
-because the operation is `max(B_cond, guard)`.
+because [F8] takes the larger of resolved condensate obstruction and the tier
+guard.
 
 The hourly **Effective ICON cloud obstruction** heatmap applies this optical
 formula and tier-aware guard independently at each native model level using
@@ -526,7 +785,7 @@ therefore **need not be numerically identical**. They share the optical-depth
 kernel and unresolved-CLC guard policy, while the chart represents vertical
 structure and Overall represents total-column transmission.
 
-## 7. Fog, dew, and surface wind
+### 4.7. Fog, dew, and surface wind
 
 Dew is excluded from Overall. It remains an operational prompt to prepare a
 heater or dew shield and does not by itself worsen atmospheric seeing.
@@ -534,39 +793,50 @@ heater or dew shield and does not by itself worsen atmospheric seeing.
 Fog physically blocks observations, so the multiplier follows the existing
 `FogRisk`:
 
-```text
-q_fog = 1.00  # no risk
-q_fog = 0.75  # possible fog
-q_fog = 0.10  # high fog risk
+```math
+q_{\mathrm{fog}}=
+\begin{cases}
+1.00, & \text{no fog risk},\\
+0.75, & \text{possible fog},\\
+0.10, & \text{high fog risk}.
+\end{cases}
 ```
 
 Surface wind is a separate and deliberately mild practical factor because
 screens, a low setup, and site choice can partly mitigate it. SAAO observations
 show a weak relation between surface wind and seeing except in the highest
 range near `>=8.6 m/s`: [Catala et al.](https://academic.oup.com/mnras/article/436/1/590/975197).
-ESO's operational limits begin at `12 m/s`, with dome closure at `18 m/s`:
-[ESO Paranal operations](https://www.eso.org/sci/facilities/paranal/sciops/At_Telescope.html).
+ESO provides operational context rather than the exact project thresholds:
+[CRIRES visitor instructions](https://www.eso.org/sci/facilities/paranal/instruments/crires/visitor.html)
+restrict pointing into wind above `12 m/s`, while
+[VLT environmental specifications](https://www.eso.org/sci/facilities/paranal/telescopes/ut/envspecs.html)
+state full-performance mean-wind limits of `14` or `18 m/s` depending on
+orientation and a gust limit of `27 m/s`.
 
 Calibration uses smoothstep risks for mean wind over `8.5…15 m/s` and gusts
 over `12…22 m/s`, takes the worse risk, and caps the penalty at 20%:
 
-```text
-r_surface = max(smoothstep(V10; 8.5, 15), smoothstep(gust; 12, 22))
-q_surface = 1 - 0.20 * r_surface
+```math
+\begin{aligned}
+r_{\mathrm{surface}}
+&=\max\!\left[\operatorname{smoothstep}(V_{10};8.5,15),
+\operatorname{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
+q_{\mathrm{surface}}&=1-0.20r_{\mathrm{surface}}.
+\end{aligned}
 ```
 
-## 8. Final composition and parameters
+### 4.8. Final composition and parameters
 
 With the default `w_seeing=1` and `w_cloud=2`:
 
-```text
-normalized = q_seeing^w_seeing
-             * q_coherence
-             * q_cloud^w_cloud
-             * q_surface
-             * q_fog
-
-Overall Astronomy Index = 1 + 9 * clamp(normalized, 0, 1)
+```math
+\begin{aligned}
+Q_{\mathrm{normalized}}
+&=f_{\mathrm{turbulence}}q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
+q_{\mathrm{surface}}q_{\mathrm{fog}},\\
+\mathrm{Overall\ Astronomy\ Index}
+&=1+9\,\operatorname{clamp}(Q_{\mathrm{normalized}},0,1).
+\end{aligned}
 ```
 
 The calculation does not round to an integer internally. An exact `10.0`
@@ -581,6 +851,7 @@ change together with regression examples:
 | best / bad seeing | `0.5″ / 2.0″` |
 | best / bad `tau0` | `5.2 / 1.6 ms` |
 | `tau0` weight | `0.25` |
+| combined optical-turbulence maximum penalty | `0.25` |
 | ground `Cn²` scale | `1.0` |
 | `MH` clamp AGL | `500…2000 m` |
 | unresolved `CLC` guard: low / middle / high | `0.45 / 0.2475 / 0.081` |
@@ -589,7 +860,7 @@ change together with regression examples:
 | mean-wind thresholds | `8.5 / 15 m/s` |
 | gust thresholds | `12 / 22 m/s` |
 
-## 9. Accuracy limits and future validation
+### 4.9. Accuracy limits and future validation
 
 The hybrid ICON result remains a model estimate. Its grid does not resolve
 local terrain, vegetation, site heating, or dome seeing; both Masciadri/TKE
@@ -597,9 +868,10 @@ and HMNSP99 have systematic error. Even after local calibration, Cuevas et al.
 found error around `0.30″` against Stereo-SCIDAR and a tendency to
 underestimate seeing.
 
-Therefore the old fixed-2-km values `2.221″/3.644″` and the new server-only
-`MH=396 m`, clamp-500 values `1.9145″/2.5478″` demonstrate sensitivity to the
-missing PBL but are not ground truth. Production run `2026072106` with
+The fixed-2-km comparison values `2.221″/3.644″` and the dynamic-boundary
+values with `MH=396 m` and a 500 m lower clamp, `1.9145″/2.5478″`, demonstrate
+sensitivity to PBL treatment but are not ground truth. Production run
+`2026072106` with
 `surface-hourly-v17` and `cloud-hourly-v4` is synchronized and passed
 post-deploy verification: 69 hours gave Overall `1.00…4.58`, no exact `10`,
 and seeing `0.72…2.84″`. The next scientific
@@ -608,7 +880,9 @@ logs around Saint Petersburg and Moscow. Until then, the
 UI must say “model estimate” and must not call Overall a measured seeing value
 or a Pickering scale.
 
-## 10. Reproducibility
+## 5. Reproducibility, validation, and interpretation
+
+### 5.1. Reproducibility
 
 Record the following for every result used in analysis or publication:
 
@@ -624,7 +898,7 @@ configuration; file-generation timestamps and upstream availability are
 operational metadata. Raw model data stay outside Git, but the run ID,
 manifests, configuration, and source revision make the calculation traceable.
 
-## 11. Validation protocol and responsible interpretation
+### 5.2. Validation protocol and responsible interpretation
 
 - Unit tests cover parsing, units, grid selection, optical-depth kernels,
   turbulence integration, cache identity, and retention.
@@ -650,7 +924,7 @@ Public examples contain only Saint Petersburg and Moscow. User identifiers,
 saved locations, tokens, and production credentials are runtime data and must
 never enter research artifacts or issue reports.
 
-## 12. Data-source selection and server verification
+## 6. Data-source contracts and server verification
 
 Status: original Stage 0 spike updated with the current data contract;
 `surface-hourly-v17`/`cloud-hourly-v4` is published in production
@@ -658,7 +932,7 @@ Initial measurement date: 2026-07-19; updated 2026-07-22
 Host: the production host
 Runtime directory: `/opt/docker/bot_astrosferum/data/verification`
 
-### 12.1. Conclusion
+### 6.1. Conclusion
 
 The initial production policy is technically viable:
 
@@ -669,7 +943,7 @@ The initial production policy is technically viable:
 
 This spike proves availability and technical processing, not comparative forecast accuracy. Accuracy is established separately against observations.
 
-### 12.2. ICON-EU
+### 6.2. ICON-EU
 
 Run `2026071906`, forecast step `+3 h`, was tested with 14 surface fields, six dynamic fields at five representative model levels, and all 75 `HHL` half levels.
 
@@ -760,14 +1034,21 @@ The sync fetched 25 valid times from `0…72 h` at three-hour intervals. Each se
 Pressure-level `U/V/FI/T` drives wind charts and HMNSP99 above the hourly
 boundary layer. Hourly model-level `CLC/P/T/QC/QI` plus `HHL` drives effective
 cloud obstruction: `QC/QI` are `kg/kg`, while native-layer air mass is
-`P_Pa/(287.05·T)·abs(HHL[k]−HHL[k+1])`. Sparse upper-level sampling therefore
+
+```math
+m_{\mathrm{air},k}=
+\frac{P_{k,\mathrm{Pa}}}{287.05\,T_k}
+\left|\mathrm{HHL}_k-\mathrm{HHL}_{k+1}\right|.
+```
+
+Sparse upper-level sampling therefore
 does not assign the mass of skipped layers to a retained cell.
 
-#### PBL and cloud refinement after the control-case audit
+#### Current PBL and cloud contract
 
-An anonymized historical control case showed that pressure levels do
+An anonymized control case confirms that pressure levels do
 not resolve the first few hundred metres above the model surface: HMNSP99 gave
-about `0.70…0.77″` without the PBL. The next versioned bundle therefore uses
+about `0.70…0.77″` without the PBL. The current versioned bundle therefore uses
 sparse cloud levels `25,30,35,40,45,48,50,52,54,56` plus consecutive levels
 `58…74`. All 27 full levels require `CLC/P/T/QC/QI`; the lower chain also
 requires `U/V`, while half-level `TKE/HHL` supplies turbulence and geometry.
@@ -778,20 +1059,27 @@ time-invariant `HHL` geometry.
 Server-side verification for only `f042/f048` confirmed availability and units
 of those DWD fields. The first fixed-2-km calculation produced `2.221″` and
 `3.644″`, respectively; the ground layer contained 88.36% and 94.43% of total
-`J`. The final design takes single-level `MH` every hour and uses
-`h_PBL=clamp(MH,500,2000) m AGL`, applying HMNSP99 only above the same
+`J`. The current design takes single-level `MH` every hour and uses
+
+```math
+h_{\mathrm{PBL}}=
+\operatorname{clamp}(\mathrm{MH},500\ \mathrm{m},2000\ \mathrm{m})
+\quad\mathrm{AGL},
+```
+
+applying HMNSP99 only above the same
 boundary. `MH` was `396 m` at both control leads: the unbounded cutoff gave
 `1.9075″/2.5158″`, while the 500 m minimum gave `1.9145″/2.5478″`. This is a
 server-only regression without observational calibration. Full hourly
 publication of run `2026072106` and post-deploy control validation are complete.
 
-The cloud audit found a second optimistic bias: diagnostic `CLC` can be large
-while grid-scale `QC/QI` is almost zero. Condensate obstruction
-`B_cond=C·(1−exp(−tau/C))` therefore receives a tier-aware guard: `0.45·C` for
-low, `0.2475·C` for middle, and `0.081·C` for high cloud. The latter values are
-`55%/18%` of the low-cloud base. They represent conservative engineering
-uncertainty, not physical opacity; stronger `B_cond` always wins through
-`max`.
+Diagnostic `CLC` can be large while grid-scale `QC/QI` is almost zero. The
+current contract therefore applies the condensate obstruction and tier-aware
+guard exactly as specified in [F7]–[F8]. The guard coefficients are `0.45` for
+low, `0.2475` for middle, and `0.081` for high cloud; the latter two are 55%
+and 18% of the low-cloud base. They represent conservative engineering
+uncertainty, not physical opacity; resolved-condensate obstruction is retained
+whenever it is stronger.
 
 The **Effective ICON cloud obstruction** heatmap applies the shared
 optical-depth kernel and guard policy at each native level. Overall instead
@@ -829,7 +1117,7 @@ native thickness or `MH` from being interpreted as current data.
 
 `TOT_PREC` accumulates from model initialization, so user-facing `mm/h` values are non-negative differences between adjacent hourly forecast times. The response uses a rolling window of up to 72 future hours without interpolating or inventing unavailable times. The `T−Td` spread is only used to advise about possible dew and equipment protection; dew does not penalize seeing or practical time ranking.
 
-### 12.3. ICON Global
+### 6.3. ICON Global
 
 Run `2026071906`, field `T_2M`, forecast step `+3 h`, was tested.
 
@@ -901,7 +1189,7 @@ missing value and the transparency proxy is marked unavailable. CDO is
 installed only in the application image; the host requires no meteorological
 packages.
 
-### 12.4. ICON-Ru WIS 2.0
+### 6.4. ICON-Ru WIS 2.0
 
 On 2026-07-19, discovery metadata are available from the DWD Global Discovery Catalogue and directly over HTTP from `wis2box.mecom.ru`. They confirm:
 
@@ -916,7 +1204,7 @@ Observed limitation: HTTPS on `wis2box.mecom.ru:443` timed out from the producti
 
 Metadata files remain server-only under `/opt/docker/bot_astrosferum/data/verification/icon-ru-wis-spike/`. Object naming, message sizes, and redelivery semantics still require capturing a real broker notification after a run is published.
 
-### 12.5. Implementation decisions
+### 6.5. Implementation decisions
 
 1. `iconeu.Sync` downloads only selected fields and levels, decompresses, validates, and merges messages per forecast step.
 2. `iconglobal.Sync` follows the same atomic lifecycle while retaining full native-grid bundles; its point store applies official DWD grid geometry through CDO.
@@ -926,7 +1214,486 @@ Metadata files remain server-only under `/opt/docker/bot_astrosferum/data/verifi
 6. A complete 72-hour run is never downloaded locally and is not started on the server without a free-space check.
 
 
-### 12.6. Remaining checks
+### 6.6. Remaining checks
 
 - capture one real ICON-Ru WIS notification and record object URL, name, size, and redelivery semantics;
 - perform observational calibration against DIMM/MASS/SCIDAR or high-quality logs; server-side checks validate the calculation, not forecast accuracy.
+
+## 7. Directional Horizon analysis
+
+### 7.1. Scope, time, and provider
+
+The optional Horizon product answers a directional question for every term of
+the immutable ICON-EU interval `f000..f072` (73 hourly terms spanning 72
+hours): in which of eight compass directions are conditions
+least obstructed for an object referenced at `10 deg` geometric elevation? The
+directions and azimuths are
+`N=0`, `NE=45`, `E=90`, `SE=135`, `S=180`, `SW=225`, `W=270`, and `NW=315 deg`.
+The scientific contract is versioned as
+`horizon-spherical-los-tke-hmnsp99-v6`.
+
+All eight directions use that same `f000..f072` time axis. Native hourly
+surface, cloud, TKE, MH, and visibility terms are used directly. Pressure-level
+`U/V/T/Z` are native every three hours; the raw variables are linearly
+interpolated between same-run bracketing terms, and the HMNSP/TKE profile,
+`Cn2`, seeing, `tau0`, and index are then recomputed for the requested hour.
+`Cn2`, seeing, `tau0`, or an index are never interpolated. No field is
+extrapolated beyond `f072` or across a run boundary. Solar altitude classifies
+the continuous time axis as day (`>=0 deg`), bright twilight (`0…-12 deg`),
+astronomical twilight (`-12…-18 deg`), or night (`<-18 deg`) for visual shading
+only. Each crossing is bracketed numerically to within five minutes before
+rounding to the chart pixel, rather than to the nearest model hour. It is not a
+score multiplier; a polar-day forecast is shown as a fully daylight-marked
+period rather than collapsed to one hour. Captions identify the run, its
+freshness, and the covered valid-time interval.
+
+Current-run identity and the freshness label are separate safeguards. The
+workflow confirms the same current run before cache reuse or heavy work, the
+source confirms it before and after acquisition, and delivery confirms it
+immediately before every send, including cache hits. A mismatch rejects the
+result. For an unchanged run, the caption calculates age at delivery time with
+the configured ICON-EU `max_stale_age`; that threshold labels freshness but does
+not alter [F13]-[F21].
+
+The method is **ICON-EU-only**. The observer and every actual midpoint lookup
+must be inside the open ICON-EU output domain, and pressure, surface, cloud, and
+HHL values must belong to the same immutable run and compatible time grid. ICON Global has
+no Horizon button and no runnable Horizon calculation. This is a product and
+data-quality boundary, not a statement that spherical geometry ceases outside
+Europe.
+
+### 7.2. Spherical line-of-sight geometry
+
+The current geometry is a spherical-Earth straight chord. With
+`R=6,371,008.8 m`, observer HHL elevation `h0`, reference elevation
+`e=10 deg`, and line-of-sight distance `s`, the ray radius, altitude, and
+sub-ray central angle are
+
+```math
+\begin{aligned}
+r_0&=R+h_0,\\
+r(s)&=\sqrt{r_0^2+s^2+2r_0s\sin e},\\
+h(s)&=r(s)-R,\\
+\alpha(s)&=\operatorname{atan2}(s\cos e,\ r_0+s\sin e),\\
+x(s)&=R\alpha(s).
+\end{aligned}\tag{F13}
+```
+
+The forward intersection with the fixed absolute top `H=22,300 m MSL` is
+
+```math
+s_{\mathrm{top}}
+=-r_0\sin e+\sqrt{(R+H)^2-r_0^2\cos^2 e}.
+\tag{F14}
+```
+
+Lengths in [F13]-[F14] are metres; trigonometric calculations use radians.
+
+At sea level this is `s_top=121.927 km` and `x_top=119.662 km`. Ground-distance
+boundaries are at no more than `0.5 km`; the midpoint of each resulting chord
+segment supplies one model lookup and the exact difference in `s` supplies its
+quadrature length `ds`. At 10 degrees a full ground step changes ray altitude
+by about 87 m, avoiding coarse PBL/cloud aliasing.
+The production constants produce 240 samples per direction at sea level.
+Nearest ICON-EU cells are deduplicated after all actual geodesic destinations
+have passed the coverage check.
+
+For origin latitude `phi1`, longitude `lambda1`, azimuth `A`, and central angle
+`alpha`, every spherical destination is
+
+```math
+\begin{aligned}
+\phi_2
+&=\arcsin\!\left(\sin\phi_1\cos\alpha
++\cos\phi_1\sin\alpha\cos A\right),\\
+\lambda_2
+&=\lambda_1+\operatorname{atan2}\!\left(
+\sin A\sin\alpha\cos\phi_1,\;
+\cos\alpha-\sin\phi_1\sin\phi_2\right).
+\end{aligned}\tag{F15}
+```
+
+Longitudes are normalized to `[-180,180)`. Exact geographic poles are rejected
+because compass azimuth is degenerate; near-polar and dateline-crossing paths
+remain well-defined.
+
+`10 deg` is a project product choice. At `5 deg` the footprint and sensitivity
+to refraction and unresolved terrain become much larger, whereas `20 deg` is no
+longer a useful near-horizon diagnostic. The constant is a geometric reference:
+the current code traces a straight `10 deg` chord and does not bend the ray or
+apply a pressure/temperature-dependent refraction correction. Equation 42 of the
+[NREL Solar Position Algorithm](https://www.nrel.gov/docs/fy08osti/34302.pdf)
+is the reference approximation used to quantify the omitted correction. This
+unsupported effect and the spherical rather than ellipsoidal Earth are part of
+the stated uncertainty.
+
+### 7.3. Directional optical turbulence and wind
+
+At each segment midpoint and forecast hour, the ray altitude selects exactly one
+local turbulence kernel already used by ordinary Overall: Masciadri/ICON TKE below
+`h_surface + clamp(MH,500,2000) m`, and HMNSP99 above it. Model values are
+interpolated vertically to the ray altitude. The line-of-sight moments are
+
+```math
+\begin{aligned}
+\mathbf U_0&=(\cos\phi_0\cos\lambda_0,\ \cos\phi_0\sin\lambda_0,\ \sin\phi_0),\\
+\mathbf E_0&=(-\sin\lambda_0,\ \cos\lambda_0,\ 0),\\
+\mathbf N_0&=(-\sin\phi_0\cos\lambda_0,\ -\sin\phi_0\sin\lambda_0,\ \cos\phi_0),\\[2pt]
+\mathbf D&=\cos e(\sin A\,\mathbf E_0+\cos A\,\mathbf N_0)+\sin e\,\mathbf U_0,\\[2pt]
+\mathbf E_j&=(-\sin\lambda_j,\ \cos\lambda_j,\ 0),\\
+\mathbf N_j&=(-\sin\phi_j\cos\lambda_j,\ -\sin\phi_j\sin\lambda_j,\ \cos\phi_j),\\
+\mathbf U_j&=(\cos\phi_j\cos\lambda_j,\ \cos\phi_j\sin\lambda_j,\ \sin\phi_j),\\[2pt]
+d_{E,j}&=\mathbf D\!\cdot\!\mathbf E_j,
+&d_{N,j}&=\mathbf D\!\cdot\!\mathbf N_j,
+&d_{U,j}&=\mathbf D\!\cdot\!\mathbf U_j,\\
+V_{\mathrm{los},j}&=u_jd_{E,j}+v_jd_{N,j},\\
+V_{\perp,j}&=\sqrt{\max\!\left(0,u_j^2+v_j^2-V_{\mathrm{los},j}^2\right)},\\[2pt]
+J_H(t,A)&=\sum_j C_n^2(t,j)\,\Delta s_j,\\
+J_{V,H}(t,A)&=\sum_j C_n^2(t,j)V_\perp(t,j)^{5/3}\,\Delta s_j,\\
+\varepsilon_H(t,A)&=C_\varepsilon\lambda^{-1/5}J_H(t,A)^{3/5},\\
+\tau_{0,H}(t,A)&=\left[2.910\left(\frac{2\pi}{\lambda}\right)^2
+J_{V,H}(t,A)\right]^{-3/5}.
+\end{aligned}\tag{F16}
+```
+
+`lambda=500 nm`; `epsilon_H` is converted from radians to arcseconds and
+`tau0_H` to milliseconds. Only horizontal ICON `u/v` are available here, so
+vertical wind is assumed zero. `D` is one fixed unit ray in ECEF coordinates;
+projection into each midpoint's local ENU basis accounts for great-circle
+bearing convergence and the changing local elevation of that straight chord.
+`Vperp` is therefore the horizontal-wind component transverse to the 3-D ray.
+This makes coherence time directional without adding an empirical wind rotation
+penalty. Terrain geometry may be reused across hours, but all meteorological
+values and moments in [F16] are recomputed for every hour. The
+long/short-exposure resolution basis follows
+[Fried (1966)](https://doi.org/10.1364/JOSA.56.001372). The wind-weighted
+coherence-time moment follows
+[Kellerer & Tokovinin (2007)](https://www.aanda.org/articles/aa/pdf/2007/02/aa5788-06.pdf).
+The PBL and HMNSP99 coefficients and their research provenance remain those
+documented in [F1]-[F5].
+
+In [F16], `Cn2` is in `m^(-2/3)`, `ds` in m, and wind in `m/s`; therefore
+`J_H` is in `m^(1/3)`. The numerical seeing and coherence coefficients assume
+those SI inputs.
+
+Public pressure profiles commonly end near 50 hPa, slightly below 22.3 km. The
+last valid HMNSP99 layer and top-level wind are extended only to the fixed top
+with quality weight `0.35`; nothing above 22.3 km is integrated. This bounded
+closure keeps the product usable but can understate turbulence above the chosen
+top and explicitly lowers confidence.
+
+For the homogeneous-`C_n^2` reference used by the quality mapping, the exact
+path ratio is taken from the same spherical straight-ray geometry as the
+physical line-of-sight integration:
+
+```math
+\begin{aligned}
+L_H(h_0,e)&=\sum_j\Delta s_j=s_{\mathrm{top}}(h_0,e),\\
+X_{\mathrm{geo}}(h_0,e)
+&=\frac{L_H(h_0,e)}{H-h_0},\\
+s_{\mathrm{geo}}(h_0,e)
+&=X_{\mathrm{geo}}(h_0,e)^{3/5},\\[2pt]
+X_{\mathrm{geo}}(0,10^\circ)
+&=\frac{121926.58412394}{22300}
+=5.467559826\ldots,\\
+s_{\mathrm{geo}}(0,10^\circ)&=2.771252681\ldots.
+\end{aligned}\tag{F17}
+```
+
+The reported `epsilon_H` and `tau0_H` are absolute slant estimates. The
+spherical line-of-sight integrals contain the actual sampled path. [F17] is
+used only in the later *quality mapping* [F20] to put the good/bad seeing
+reference anchors at the same fixed elevation; it never changes the physical
+LOS integral or reported arcseconds. This normalization is exact for constant
+`C_n^2` and constant transverse wind within the same bounded spherical
+geometry. It is a transparent project reference, not a substitution of
+molecular optical air mass for turbulence air mass. Atmospheric refraction
+and real vertical inhomogeneity remain represented by the stated limitations
+and by the actual sampled `C_n^2` profile, respectively.
+
+### 7.4. Cloud, fog, and terrain closure
+
+At each ray midpoint the retained native-level `P/T/QC/QI/CLC` profile is
+sampled at ray altitude. A containing HHL layer is preferred. Across a gap,
+`P`, `T`, liquid/ice mixing ratio, and cover are linearly interpolated between
+bracketing retained levels. Because `QC/QI` are grid-box means, samples are
+first grouped by unique horizontal ICON cell and low/middle/high tier. For each
+such block `b`, the all-sky condensate closure is
+
+```math
+\begin{aligned}
+\rho_j&=\frac{P_j}{R_dT_j},\\
+\mathrm{CWP}_{\mathrm{liquid},b}
+&=\sum_{j\in b}Q_{C,j}\rho_j\,\Delta s_j,\\
+\mathrm{CWP}_{\mathrm{ice},b}
+&=\sum_{j\in b}Q_{I,j}\rho_j\,\Delta s_j,\\[2pt]
+\tau_b
+&=\frac{3(2.0)\,\mathrm{CWP}_{\mathrm{liquid},b}}
+{4(1000)\,r_{\mathrm{liquid}}}
++\frac{3(2.1)\,\mathrm{CWP}_{\mathrm{ice},b}}
+{4(916.7)\,r_{\mathrm{ice}}},\\[2pt]
+C_b&=\operatorname{clamp}\!\left(\max_{j\in b}C_{\mathrm{LC},j},0,1\right),\\
+\widehat C_b&=
+\begin{cases}
+0, & C_b<10^{-6}\ \land\ \tau_b<10^{-9},\\
+\min\!\left(1,\max\!\left(0.01,1-e^{-\tau_b}\right)\right),
+& C_b<10^{-6}\ \land\ \tau_b\ge10^{-9},\\
+C_b, & C_b\ge10^{-6},
+\end{cases}\\
+T_b&=
+\begin{cases}
+1, & \widehat C_b=0,\\
+(1-\widehat C_b)+\widehat C_b
+\exp\!\left(-\dfrac{\tau_b}{\widehat C_b}\right),
+& \widehat C_b>0,
+\end{cases}\\
+T_{\mathrm{condensate}}&=\prod_bT_b,\\
+\tau_{\mathrm{grid\ mean}}&=\sum_b\tau_b.
+\end{aligned}\tag{F18}
+```
+
+In [F18], `P` is in Pa, `Rd=287.05 J/(kg*K)`, `T` in K, `QC/QI` in kg/kg,
+`ds` and effective radii in m, and each `CWP` in `kg/m^2`; `tau_b`,
+`tau_grid mean`, and
+transmission are dimensionless.
+
+The piecewise definition makes both zero-cover cases explicit. For the rare
+inconsistent block with rounded `C_b=0` but nonzero condensate, it applies the
+same bounded inference as ordinary Overall. `tau_grid mean` is the sum of
+grid-box-mean condensate optical depths; because cover is mixed separately, it
+is not generally equal to the negative natural logarithm of `T_condensate`. The density is the dry-air
+approximation already disclosed after [F6]. The constants and provenance are
+the same as [F6]-[F8]. Grouping prevents the 0.5 km quadrature from multiplying
+the same model-cell cover once per substep.
+
+Separately, the maximum cover encountered once in each AGL tier (`<2 km`,
+`2..7 km`, `>=7 km`) receives the existing low/middle/high guard `0.45`,
+`0.2475`, `0.081`; the three tier obstructions use random overlap. The final
+transmission is
+
+```math
+T_H=\min(T_{\mathrm{condensate}},T_{\mathrm{guard}}).
+```
+
+This is an effective all-sky directional
+obstruction proxy from grid-box means, not a literal or retrieved transmission
+along one infinitesimal beam. The distinction is part of the scientific limit,
+even though the result field retains the short name `CloudTransmission`.
+
+Sparse cloud profiles remain calculable but visibly reduce data quality. A
+native containing layer has weight `1`; interpolation uses
+
+```math
+q_{\mathrm{interp}}=
+\operatorname{clamp}\!\left(
+\frac{\Delta z_{\mathrm{lower}}+\Delta z_{\mathrm{upper}}}
+{2\,\Delta z_{\mathrm{bracket}}},0.35,0.85\right).
+```
+
+A bounded value below
+the first retained level has weight `0.50`; and the final level clamped only to
+the fixed model top has weight `0.25`. These weights are engineering disclosure,
+not probabilities.
+
+Fog is the ordinary observer-cell ICON-EU `VIS/RH/T-Td` classification [F11]
+and is therefore identical for all directions. Roughly 7 km output cannot
+support a credible directional near-site fog wall. Dew remains an equipment
+advisory and does not enter the score.
+
+For each midpoint, coarse terrain is blocked when
+
+```math
+\mathrm{HHL}_{\mathrm{surface}}(\mathrm{midpoint})
+\ge h_{\mathrm{ray}}(\mathrm{midpoint}).
+\tag{F19}
+```
+
+Both sides of [F19] are absolute metres MSL.
+
+A block is an explicit index-1 veto. Ordinary Overall already uses observer-cell
+HHL as its AGL origin; Horizon adds directional HHL intersection but no separate
+altitude bonus or penalty. HHL is neither a local DEM nor an optical skyline
+model and does not resolve local terrain or obstructions. The displayed
+terrain conclusion must therefore be labelled coarse model terrain. DWD
+describes ICON output and orography as grid-cell means in the
+[ICON model description](https://www.dwd.de/EN/research/weatherforecasting/num_modelling/01_num_weather_prediction_modells/icon_description.html), and
+[the ICON tutorial](https://www.dwd.de/DE/leistungen/nwv_icon_tutorial/pdf_einzelbaende/icon_tutorial2025.pdf)
+defines HHL as vertical half-level height; neither is a local survey.
+
+### 7.5. Directional index and limiting factor
+
+The physical `epsilon_H` remains the slant-path seeing calculated from the LOS
+`Cn2` integral. Directly applying zenith reference anchors to that value is not
+a useful quality mapping at the fixed `10 deg` elevation: even a homogeneous,
+otherwise good atmosphere acquires the Fried factor in [F17], which
+would saturate the mapping at its lower boundary. The reference anchors
+are therefore scaled to the same elevation, while the physical seeing value is
+not altered:
+
+```math
+\begin{aligned}
+X_{\mathrm{geo}}&=\frac{s_{\mathrm{top}}(h_0,10^\circ)}{H-h_0},
+&s_{\mathrm{geo}}&=X_{\mathrm{geo}}^{3/5},\\[2pt]
+q_{\mathrm{seeing},H}
+&=\operatorname{clamp}\!\left(
+\frac{\ln[(\varepsilon_{\mathrm{bad}}s_{\mathrm{geo}})/\varepsilon_H]}
+{\ln[(\varepsilon_{\mathrm{bad}}s_{\mathrm{geo}})/(\varepsilon_{\mathrm{best}}s_{\mathrm{geo}})]},0,1\right),\\
+\tau_{\mathrm{best},H}&=\frac{\tau_{\mathrm{best}}}{s_{\mathrm{geo}}},
+&\tau_{\mathrm{bad},H}&=\frac{\tau_{\mathrm{bad}}}{s_{\mathrm{geo}}},\\
+q_{\tau,H}
+&=\operatorname{clamp}\!\left(
+\frac{\ln(\tau_{0,H}/\tau_{\mathrm{bad},H})}
+{\ln(\tau_{\mathrm{best},H}/\tau_{\mathrm{bad},H})},0,1\right),\\
+q_{\mathrm{turbulence},H}
+&=q_{\mathrm{seeing},H}^{w_{\mathrm{seeing}}}
+\left[1-w_{\tau}(1-q_{\tau,H})\right],\\
+f_{\mathrm{turbulence},H}
+&=(1-p_{\mathrm{turbulence}})
++p_{\mathrm{turbulence}}q_{\mathrm{turbulence},H},\\
+Q_H&=f_{\mathrm{turbulence},H}T_H^{w_{\mathrm{cloud}}}
+q_{\mathrm{surface}}q_{\mathrm{fog}},\\
+\mathrm{HorizonIndex}&=1+9\,\operatorname{clamp}(Q_H,0,1).
+\end{aligned}\tag{F20}
+```
+
+The same default `p_turbulence=0.25`, `w_seeing=1`, `w_cloud=2`, and
+`w_tau=0.25` as zenith Overall is used, plus the ordinary fog and mild
+surface-wind coefficients. The combined seeing/`tau0` factor can blur detail
+but cannot make an otherwise clear direction mathematically unusable.
+Effective cloud obstruction remains stronger and can reach zero:
+
+```math
+0.75\le f_{\mathrm{turbulence},H}\le1,
+\qquad (1-0.20)^2=0.64<0.75.
+```
+
+The two elevation scalings follow directly from the physical moments:
+
+```math
+\begin{aligned}
+J_H&=X_{\mathrm{geo}}J,
+&\frac{\varepsilon_H}{\varepsilon_z}&=X_{\mathrm{geo}}^{3/5},\\
+J_{V,H}&=X_{\mathrm{geo}}J_V,
+&\frac{\tau_{0,H}}{\tau_{0,z}}&=X_{\mathrm{geo}}^{-3/5}.
+\end{aligned}
+```
+
+Scaling
+both reference pairs therefore preserves relative atmospheric quality at the
+fixed 10-degree comparison elevation while the displayed physical values stay
+slant-path values. The exponents are the Fried-moment result; the reference
+ratio is the exact homogeneous path ratio of [F13]-[F14], rather than a
+molecular-air-mass approximation. The common `0.25` utility cap remains the
+explicit, uncalibrated project prior justified after [F12], because the
+importance of fine resolution depends on target scale, focal length, sampling,
+and observing technique.
+
+A terrain block forces index 1. An incomplete direction is marked unavailable
+and also carries sentinel index 1; the UI must distinguish it from a valid poor
+direction. The main limiting factor is the smallest contributing factor, with
+stable ordering only to break equal values. The presentation names that factor
+explicitly: `optical seeing` means the model-derived turbulence integral,
+while `effective cloud obstruction` means the phase-resolved
+cloud-transmission term. It does not use the generic word “weather” for either
+case. A period summary reports the most frequent primary factor, not a separate
+score component.
+
+These defaults and every other `ASTRO_OVERALL_*` calibration value are shared
+with the ordinary Overall Astronomy Index rather than copied into a separate
+Horizon profile. The cloud effective-radius inputs are shared as well. The
+complete serialized calibration is part of Horizon cache identity, so a change
+cannot reuse a PNG calculated under the preceding values.
+
+The elevation-scaled anchors make this a comparison of forecast conditions at
+the fixed 10-degree reference, not a claim that a 10-degree target is as sharp
+as one at zenith. The PNG keeps the explicit elevation, and `SeeingArcsec`
+retains the unnormalized slant value. Atmospheric dispersion, extinction, and
+target/equipment-specific resolution remain outside the score.
+
+Daylight, Moon/planet position, dew, Bortle class, aerosols, molecular Rayleigh
+extinction, precipitation, and user equipment are not separate terms in [F20].
+Daylight and twilight are only visual bands on the hourly heatmap. Rayleigh
+optical depth is a
+real low-elevation attenuation described by
+[Bodhaine et al. (1999)](https://doi.org/10.1175/1520-0426(1999)016%3C1854:ORODC%3E2.0.CO;2),
+but it is not penalized because every sector is evaluated at the same elevation
+and the current product has no complete aerosol/extinction closure. Its omission
+must not be interpreted as a transparency prediction.
+
+### 7.6. Confidence is data quality, not probability
+
+Let `R` be the set of fully resolved meteorological segments, let `L` be the
+whole geometric path, and let `q_turb,j` and `q_cloud,j` be the bounded
+vertical-closure weights described above. The reported quality components are
+
+```math
+\begin{aligned}
+L&=\sum_j\Delta s_j,
+&L_R&=\sum_{j\in\mathcal R}\Delta s_j,\\
+P_{\mathrm{turb}}&=\frac{\sum_{j\in\mathcal R}q_{\mathrm{turb},j}\Delta s_j}{L},
+&P_{\mathrm{cloud}}&=\frac{\sum_{j\in\mathcal R}q_{\mathrm{cloud},j}\Delta s_j}{L},\\
+P_{\mathrm{path}}&=\min(P_{\mathrm{turb}},P_{\mathrm{cloud}}),\\[2pt]
+C_{\mathrm{lead}}
+&=\begin{cases}
+\dfrac{\sum_{j\in\mathcal R}c_{\mathrm{ICON},j}\Delta s_j}{L_R},&L_R>0,\\
+0,&L_R=0,
+\end{cases}\\
+R_{\mathrm{dir}}&=\frac{N_{\mathrm{available\ directions}}}{8},\\
+\mathrm{Confidence}
+&=\min\!\left(0.85,\;
+0.50P_{\mathrm{path}}+0.30C_{\mathrm{lead}}+0.20R_{\mathrm{dir}}\right).
+\end{aligned}\tag{F21}
+```
+
+If the direction is unavailable, reported `Confidence=0` regardless of the
+remaining shared inputs; an unavailable row must never look highly confident.
+If `L_R=0`, the direction is unavailable; no division result is exposed.
+For a direction already vetoed by [F19], `P_path` instead reports the resolved
+HHL-terrain share. In that branch `R` means segments with valid terrain HHL,
+and a missing vertical confidence contributes zero to the lead-time numerator.
+Cloud/turbulence completeness cannot change the veto and is therefore not
+presented as if it had been evaluated beyond the obstruction.
+
+The ICON lead-time input follows the project curve
+
+```math
+c_{\mathrm{ICON}}=\operatorname{max}\!\left(0.65,
+0.96-0.26\frac{h_{\mathrm{forecast}}}{72}\right).
+```
+
+Available values below `0.60`
+are labelled limited, `0.60..<0.80` usable, and `>=0.80` good coarse-model data;
+unavailable paths are labelled unavailable. The hard `0.85` ceiling represents
+the lack of a local DEM/obstacle model. These numbers express deterministic
+input completeness and model resolution. They are **not** a calibrated
+probability that the observation will succeed.
+
+### 7.7. Validation and remaining limitations
+
+Unit regressions cover spherical intersections and midpoints, exact surface
+distances, dateline normalization, near-polar coordinates, exact-pole rejection,
+full-footprint coverage, ECEF-to-local-ENU transverse-wind projection,
+physical slant seeing/coherence scaling, elevation-adjusted reference mapping,
+the bounded turbulence utility, step-size-stable cloud closure,
+sparse-profile confidence penalties, common observer fog, terrain veto,
+missing data, the `f000..f072` hourly series, raw-field three-hour interpolation
+followed by metric recomputation, and ordered time-by-eight-direction output.
+
+Every release validation runs one real calculation from a current ICON-EU run,
+an explicit ICON Global case with neither button nor job, localized readable
+rendering, callback/queue/cache tests, full Go
+lint/race/build checks, and production latency comparison while an ordinary
+forecast runs concurrently. Absolute skill still requires independent
+observations such as DIMM/MASS/SCIDAR, all-sky cameras, visibility observations,
+and observer logs. Until then the product is a reproducible model diagnostic,
+not a measured horizon profile or an observatory safety decision.
+
+The meteorological resolution, domain, and model top are documented on the
+[DWD NWP forecast-data page](https://www.dwd.de/EN/ourservices/nwp_forecast_data/nwp_forecast_data.html)
+and in the
+[DWD ICON description](https://www.dwd.de/EN/research/weatherforecasting/num_modelling/01_num_weather_prediction_modells/icon_description.html).
+The implementation stops at `22.3 km`, just below the documented ICON-EU top,
+rather than extrapolating beyond the selected data contract. The observer-local
+visibility input is a DWD diagnostic, not a direct optical-transmission
+measurement; see the
+[DWD visibility-method change note](https://www.dwd.de/DE/fachnutzer/forschung_lehre/numerische_wettervorhersage/nwv_aenderungen/_functions/DownloadBox_modellaenderungen/icon_d2/pdf_2024/pdf_icon_d2_23_04_2024.pdf?__blob=publicationFile&v=3).

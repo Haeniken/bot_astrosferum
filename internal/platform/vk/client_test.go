@@ -98,6 +98,86 @@ func TestSendHTMLMessageUsesVKKeyboardAndPlainText(t *testing.T) {
 	}
 }
 
+func TestSendMessageWithActionsAndAnswerAction(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if err := request.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		switch request.URL.Path {
+		case "/method/messages.send":
+			if request.Form.Get("peer_id") != "42" || request.Form.Get("message") != "Choose horizon" {
+				t.Fatalf("unexpected send form: %v", request.Form)
+			}
+			var keyboard struct {
+				Inline  bool `json:"inline"`
+				Buttons [][]struct {
+					Action struct {
+						Type    string `json:"type"`
+						Label   string `json:"label"`
+						Payload string `json:"payload"`
+					} `json:"action"`
+				} `json:"buttons"`
+			}
+			if err := json.Unmarshal([]byte(request.Form.Get("keyboard")), &keyboard); err != nil {
+				t.Fatal(err)
+			}
+			if !keyboard.Inline || len(keyboard.Buttons) != 1 {
+				t.Fatalf("unexpected action keyboard: %+v", keyboard)
+			}
+			action := keyboard.Buttons[0][0].Action
+			if action.Type != "callback" || action.Label != "Horizon" || action.Payload != `{"action":"v1:horizon.v1:point"}` {
+				t.Fatalf("unexpected callback action: %+v", action)
+			}
+			writeAPIResponse(response, `1`)
+		case "/method/messages.sendMessageEventAnswer":
+			if request.Form.Get("event_id") != "event-1" || request.Form.Get("user_id") != "9" || request.Form.Get("peer_id") != "42" {
+				t.Fatalf("unexpected answer form: %v", request.Form)
+			}
+			var eventData struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(request.Form.Get("event_data")), &eventData); err != nil {
+				t.Fatal(err)
+			}
+			if eventData.Type != "show_snackbar" || eventData.Text != "Queued" {
+				t.Fatalf("event_data = %+v", eventData)
+			}
+			writeAPIResponse(response, `1`)
+		default:
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := testClient(server.URL)
+	keyboard := bot.ActionKeyboard{{{Text: "Horizon", Data: "v1:horizon.v1:point"}}}
+	if err := client.SendMessageWithActions(context.Background(), 42, "<b>Choose</b> <i>horizon</i>", keyboard); err != nil {
+		t.Fatal(err)
+	}
+	token, err := encodeActionToken("event-1", 9, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AnswerAction(context.Background(), token, "Queued"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestActionTokenValidation(t *testing.T) {
+	if _, err := decodeActionToken("not-a-token"); err == nil {
+		t.Fatal("invalid token unexpectedly accepted")
+	}
+	if _, err := encodeActionToken("", 1, 1); err == nil {
+		t.Fatal("empty event id unexpectedly accepted")
+	}
+}
+
 func TestEncodeKeyboardFitsTenSavedLocations(t *testing.T) {
 	keyboard := bot.Keyboard{{{Text: "location", RequestLocation: true}}}
 	for index := range 10 {
@@ -272,6 +352,32 @@ func TestAPIErrorsDoNotExposeToken(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), client.token) {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestUploadTransportErrorDoesNotExposeSignedURL(t *testing.T) {
+	const signedURL = "https://upload.vk.ru/document?sig=upload-secret"
+	path := filepath.Join(t.TempDir(), "chart.png")
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := testClient("https://example.invalid")
+	client.apiHTTP = &http.Client{Transport: failingRoundTripper(func(request *http.Request) error {
+		return fmt.Errorf("dial failed for %s", request.URL.String())
+	})}
+	var result map[string]any
+	err := client.uploadFile(context.Background(), signedURL, "file", path, &result)
+	if err == nil || err.Error() != "VK upload transport failed" {
+		t.Fatalf("unexpected upload error: %v", err)
+	}
+	if strings.Contains(err.Error(), "upload-secret") || strings.Contains(err.Error(), signedURL) {
+		t.Fatalf("upload error exposed signed URL: %v", err)
+	}
+}
+
+type failingRoundTripper func(*http.Request) error
+
+func (transport failingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return nil, transport(request)
 }
 
 func testClient(serverURL string) *Client {

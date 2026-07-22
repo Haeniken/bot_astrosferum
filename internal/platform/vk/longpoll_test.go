@@ -2,11 +2,35 @@ package vk
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"bot_astrosferum/internal/app/bot"
 )
+
+func TestEnableLongPollRequestsMessagesAndActions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/method/groups.setLongPollSettings" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if request.Form.Get("message_new") != "1" || request.Form.Get("message_event") != "1" {
+			t.Fatalf("long poll settings = %v", request.Form)
+		}
+		writeAPIResponse(response, `1`)
+	}))
+	defer server.Close()
+	if err := testClient(server.URL).EnableLongPoll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestVKTransportHostAllowlist(t *testing.T) {
 	for _, host := range []string{"vk.ru", "api.vk.ru", "lp.vk.ru", "vk.com", "pu.vk.com", "API.VK.RU."} {
@@ -61,6 +85,45 @@ func TestConvertMessageNewWithGeo(t *testing.T) {
 	}
 }
 
+func TestConvertMessageEventToActionInvocation(t *testing.T) {
+	client := testClient("https://example.invalid")
+	var event longPollEvent
+	event.Type = "message_event"
+	event.GroupID = client.groupID
+	event.Object.UserID = 456
+	event.Object.PeerID = 123
+	event.Object.EventID = "event-17"
+	event.Object.ConversationMessageID = 17
+	event.Object.Payload = json.RawMessage(`{"action":"v1:horizon.v1:point"}`)
+
+	update, ok := client.convertEvent(event)
+	if !ok || update.Action == nil {
+		t.Fatalf("message_event was not converted: %+v", update)
+	}
+	action := update.Action
+	if update.ID != 17 || action.Data != "v1:horizon.v1:point" || action.Chat.ID != 123 || action.From == nil || action.From.ID != vkUserNamespace|456 {
+		t.Fatalf("unexpected action: %+v", update)
+	}
+	token, err := decodeActionToken(action.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.EventID != "event-17" || token.UserID != 456 || token.PeerID != 123 {
+		t.Fatalf("unexpected opaque token fields: %+v", token)
+	}
+	message := bot.Update{Message: &bot.Message{Chat: bot.Chat{ID: 123}}}
+	if vkUpdateShard(update, 6) != vkUpdateShard(message, 6) {
+		t.Fatal("callbacks and messages for one VK peer must use one worker")
+	}
+}
+
+func TestDecodeMessageEventPayloadAcceptsVKStringEncoding(t *testing.T) {
+	data, ok := decodeMessageEventPayload(json.RawMessage(`"{\"action\":\"v1:horizon.v1:point\"}"`))
+	if !ok || data != "v1:horizon.v1:point" {
+		t.Fatalf("decoded payload = %q, %v", data, ok)
+	}
+}
+
 func TestConvertEventRejectsOtherGroupsAndOutgoingAuthors(t *testing.T) {
 	client := testClient("https://example.invalid")
 	var event longPollEvent
@@ -94,6 +157,25 @@ func TestPollUsesBotsLongPollParameters(t *testing.T) {
 	}
 	if response.TS != "18" || response.Failed != 0 {
 		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestPollTransportErrorDoesNotExposeLongPollKey(t *testing.T) {
+	const secretKey = "long-poll-secret"
+	client := testClient("https://example.invalid")
+	client.longPollHTTP = &http.Client{Transport: failingRoundTripper(func(request *http.Request) error {
+		return fmt.Errorf("dial failed for %s", request.URL.String())
+	})}
+	_, err := client.poll(context.Background(), longPollServer{
+		Server: "https://lp.vk.ru/poll",
+		Key:    secretKey,
+		TS:     "17",
+	})
+	if err == nil || err.Error() != "poll VK events transport failed" {
+		t.Fatalf("unexpected Long Poll error: %v", err)
+	}
+	if strings.Contains(err.Error(), secretKey) || strings.Contains(err.Error(), "lp.vk.ru") {
+		t.Fatalf("Long Poll error exposed secret URL: %v", err)
 	}
 }
 

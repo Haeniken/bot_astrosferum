@@ -1,7 +1,9 @@
 # bot_astrosferum: KISS architecture
 
 Status: implemented MVP, architecture revision 0.3; the
-`surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production
+`surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production.
+The optional ICON-EU Horizon extension is implemented as a configuration-gated
+application capability.
 External sources last checked: 2026-07-19; last revision: 2026-07-22
 Deployment target: operator-managed host
 Deployment directory: `/opt/docker/bot_astrosferum`
@@ -32,8 +34,8 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 | Telegram | Bot API long polling | No ingress or webhook required |
 | VK | Bots Long Poll API | No public callback endpoint required |
 | Scheduler | Embedded in `bot_astrosferum serve` | No host cron or scheduler container |
-| Operations | `sync`, `doctor`, `render-sample` subcommands | Production code and image are reused |
-| GRIB2 | ecCodes, plus CDO only for ICON Global point extraction | No custom decoder; ICON-EU remains direct |
+| Operations | `sync`, `doctor`, `render-sample`, and point/Horizon render subcommands | Production code and image are reused; `render-horizon` remains a predeployment verification path |
+| GRIB2 | ecCodes for ordinary extraction; CDO for ICON Global points and optional ICON-EU Horizon batches | No custom decoder or per-point intermediate GRIB |
 | Priority model inside the European domain | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
 | Model outside the European domain | DWD ICON Global | Stable worldwide official open GRIB feed |
 | ICON-Ru | Documented candidate for a future shadow adapter | Its public WIS product is coarser and has fewer fields than the native model |
@@ -456,6 +458,13 @@ Flow:
 
 User coordinates are never manually rounded. Nearby users share a cache entry only when the provider selects the same model cell.
 
+The optional Horizon path is intentionally different: it needs the full period
+at many spatial cells, so each immutable pressure/surface/cloud/HHL bundle is
+read by one CDO `remapnn + outputtab` batch across all deduplicated lookup cells.
+It neither launches a separate `grib_get` loop for every midpoint nor stores
+intermediate GRIB. Results enter the separate bounded Horizon cache described
+in section 29, not the ordinary point cache.
+
 Provider-specific point cache keys:
 
 ```text
@@ -535,6 +544,16 @@ geometry and the model surface. The continuous lower section is required for
 the centred `theta` gradient and trapezoidal PBL integration; sparse levels
 aloft support the cloud chart. The subset is versioned and every run manifest
 records its exact list.
+
+The ordinary point calculation already uses the ICON cell's HHL model-surface
+elevation. It is the AGL origin for native cloud heights, the dynamic
+mixed-layer boundary, and the ground-layer turbulence integral. Elevation is
+therefore not ignored, but it is not added again as a standalone score bonus or
+penalty: that would double-count model geometry and imply a local precision
+which a roughly 7 km HHL cell does not have. HHL is neither a local DEM nor an
+optical skyline model and does not resolve local terrain or obstructions. Horizon
+analysis reuses the same HHL field only for a coarse directional ray/terrain
+intersection.
 
 Model-level data are interpolated to this scale only within the actual source range. No vertical extrapolation is allowed; cells beyond available data remain missing.
 
@@ -629,13 +648,15 @@ the centred gradient is evaluated on consecutive model levels `58…74`, then
 integrated trapezoidally from `HHL75`. Above that same hourly `h_PBL`, HMNSP99
 uses pressure-level `T/U/V/FI`. `J_total=J_ground+J_free` becomes zenith long-exposure seeing at
 `500 nm` through the standard integral. Wind enters
-`tau0=0.058·lambda^(6/5)·[integral(Cn²·|V|^(5/3)dz)]^(−3/5)`. HMNSP99 vector
+`tau0=[2.910·(2π/lambda)²·integral(Cn²·|V|^(5/3)dz)]^(−3/5)`. HMNSP99 vector
 shear already includes direction changes, so no separate `direction delta`
 multiplier is added.
 
 Seeing and `tau0` map logarithmically between `.env` boundaries
-`0.5…2.0 arcsec` and `5.2…1.6 ms`; `tau0` may only lower seeing quality with
-a mild weight of `0.25`. These anchors follow
+`0.5…2.0 arcsec` and `5.2…1.6 ms`; `tau0` contributes inside the turbulence
+quality with a mild weight of `0.25`. A convex utility mixture caps the
+combined seeing/`tau0` penalty at `25%`, leaving physical values unchanged.
+These anchors follow
 [ESO categories](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html),
 but the composition itself remains an engineering mapping.
 
@@ -668,7 +689,9 @@ reaches its maximum at `15/22 m/s`, and the total penalty is capped at 20%.
 With defaults `w_seeing=1` and `w_cloud=2`:
 
 ```text
-normalized = q_seeing^w_seeing * [1−0.25·(1−q_tau)] * q_cloud^w_cloud
+q_turbulence = q_seeing^w_seeing * [1−0.25·(1−q_tau)]
+f_turbulence = 0.75 + 0.25·q_turbulence
+normalized = f_turbulence * q_cloud^w_cloud
              * q_surface_wind * q_fog
 index = 1 + 9 * clamp(normalized, 0, 1)
 ```
@@ -713,8 +736,8 @@ The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / 
 
 The MVP renders seven images:
 
-1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Jupiter, and Saturn rows contain only event icons and times; Moon phase stays separate.
-2. **Overall Astronomy Index** — hourly `1…10` bars; the top label is the result, the in-bar label is `ε/T%` (hybrid seeing and effective cloud transmission), and `F` marks high fog risk. The formula also contains `tau0`, possible fog, and the mild surface-wind factor. Background bands derived from actual solar altitude distinguish day, civil (`0…−6°`), nautical (`−6…−12°`), astronomical twilight (`−12…−18°`), and astronomical night (`<−18°`) without changing the score.
+1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Jupiter, and Saturn rows contain only event icons and times; Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
+2. **Overall Astronomy Index** — hourly `1…10` bars; the top label is the result, the in-bar label is `ε/T%` (hybrid seeing and effective cloud transmission), and `F` marks high fog risk. The formula also contains `tau0`, possible fog, and the mild surface-wind factor. Background bands and the axis legend use the same four solar-altitude classes as chart 1/7, with sub-hour crossing positions; they do not change the score.
 3. **Effective ICON cloud obstruction vs height/time** — hourly blocked-sky fraction across 27 model levels: sparse in the free atmosphere and consecutive `58…74` below. Each cell uses direct `CLC`, `T`, liquid `QC`, ice `QI`, and native thickness `|HHL[k]−HHL[k+1]|`; air mass is `P/(Rd·T)·dz`. Base obstruction `C·(1−exp(−τ_layer/C))` receives tier-aware low/middle/high guards of `45%/24.75%/8.1%` of `C`, while stronger physical `QC/QI` obstruction always remains. These percentages express engineering uncertainty, not opacity. Overall uses total-column fields and random overlap of the three aggregated tiers, so its `T%` need not equal a heatmap cell. Color and label show effective obstruction `0…100%`, not cover or volumetric density.
 4. **Wind speed vs pressure/time** — wind-speed heatmap in m/s.
 5. **Vertical vector wind shear** — `hypot(Δu,Δv)/|Δz|` in m/s/km.
@@ -752,6 +775,10 @@ Render cache key:
 shared-render-v1/<sha256-bundle-key>/<chart>.png
 ```
 
+The SHA-256 identity currently includes the internal marker
+`shared-render-v18-phase-structure-coherence`; changing it invalidates derived
+images without renaming or duplicating the bounded cache root.
+
 ## 18. User flow
 
 ### 18.1. Input
@@ -784,7 +811,7 @@ ICON-EU run 2026072206 UTC
 Data freshness: 7 h 59 min
 Period: 22.07 09:00 — 25.07 09:00
 Grid: ICON-EU 0.0625°
-Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v4; hybrid ICON model estimate …
+Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v6; hybrid ICON model estimate …
 
 Light pollution: Bortle reference 8–9 (LPI …, SQM …, Light Pollution Atlas 2024).
 Light pollution comparison: Bortle reference 8–9 (LPI …, SQM …, World Atlas 2015).
@@ -849,6 +876,15 @@ app:
   point_cache_memory_limit: 20GiB
   request_timeout: 15m
 
+horizon_analysis:
+  enabled: true
+  queue_size: 4
+  cdo_workers: 2
+  job_timeout: 10m
+  cache_ttl: 48h
+  cache_entries: 128
+  estimated_duration: 3m
+
 paths:
   data: /app/data
   temp: /app/data/tmp
@@ -877,12 +913,13 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v4
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v6
   dew_version: dew-v1
-  conditions_version: conditions-v4-dynamic-mh-cloud-guard
+  conditions_version: conditions-v7-phase-structure-coherence
   overall_seeing_weight: 1.0
   overall_cloud_weight: 2.0
   overall_coherence_time_weight: 0.25
+  overall_optical_turbulence_max_penalty: 0.25
   overall_possible_fog_factor: 0.75
   overall_high_fog_factor: 0.10
   overall_good_seeing_arcsec: 0.5 # compatibility name: best threshold
@@ -997,7 +1034,7 @@ Do not log tokens, full update payloads, private message text, or exact user coo
 - command length and coordinate-range validation;
 - `os/exec` receives an argument slice; user input never enters a shell command;
 - downloaded GRIB is validated before publication;
-- exact coordinates are stored only after an explicit save action; unsaved coordinates are not associated with the user ID;
+- exact coordinates enter persistent user records only after an explicit save action. Unsaved coordinates may remain transiently in bounded render caches, including coordinate text embedded in generated PNGs, but those artifacts contain no user ID and expire under cache retention policy;
 - debug output omits internal paths, secrets, and commands.
 
 ## 25. Testing
@@ -1039,7 +1076,7 @@ Do not log tokens, full update payloads, private message text, or exact user coo
 
 ### Stage 0 — mandatory data-source spike
 
-Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#12-data-source-selection-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global pressure, surface, model-level cloud/PBL data and native-grid point extraction are validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
+Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#6-data-source-contracts-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global pressure, surface, model-level cloud/PBL data and native-grid point extraction are validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
 
 1. Download a minimal complete ICON-EU field set and record real filenames/GRIB keys.
 2. Confirm the open data geometry contains Saint Petersburg and Moscow.
@@ -1066,7 +1103,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - ICON-Ru WIS source study; a shadow adapter remains planned;
 - domain-based routing and single-provider bundles;
 - point/render cache;
-- weather/dew/seeing/conditions-v4-dynamic-mh-cloud-guard;
+- weather/dew/seeing/conditions-v7-phase-structure-coherence;
 - observational verification storage and scoring remain planned.
 
 ### Stage 3 — platform adapters
@@ -1114,3 +1151,175 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 8. Whether users prefer four separate images or a combined two-page report; rendering can support either without changing calculations.
 
 These items are resolved through the data-source spike and measured operation. They do not require changing the overall architecture.
+
+## 29. Optional ICON-EU Horizon analysis
+
+### 29.1. Product and provider boundary
+
+Horizon analysis is an optional second-stage action after the ordinary seven-chart
+forecast. It compares the eight fixed azimuths `N, NE, E, SE, S, SW, W, NW` at
+a fixed `10 deg` geometric-elevation reference for every available hourly term in
+the 72-hour ICON-EU period. It returns one compact time-by-direction heatmap and
+summary; it does not regenerate or duplicate the ordinary weather charts.
+The localized button displays the configured measured estimate (for example,
+`Horizon (~3 min)`); this is scheduling guidance, not the job timeout.
+
+This action is deliberately **ICON-EU-only**. The button may be offered only
+when all of the following are true:
+
+- the feature flag is enabled;
+- the ordinary forecast provider is exactly ICON-EU;
+- the period has pressure, surface, cloud, and HHL data from the same immutable
+  run, with no cross-run extrapolation;
+- the observer and every actual line-of-sight sample point remain inside the
+  published ICON-EU coverage.
+
+An ICON Global response exposes no Horizon button, and there is no Global
+Horizon job or synthetic replacement. Callback data is untrusted and may be
+stale or forged, so the workflow revalidates its signed provider/run/coordinate
+contract, rebuilds the fixed period and footprint, and derives the cache key
+from the current algorithm versions. A run change asks the user to build a new
+ordinary forecast instead of mixing runs.
+
+### 29.2. KISS package boundaries
+
+The extension follows the existing dependency direction:
+
+```text
+Telegram callback ----+
+                      +--> internal/app/bot action + Horizon job workflow
+VK message_event -----+                  |
+                                         +--> internal/model/iconeu batch snapshot
+                                         +--> internal/forecast calculation
+                                         +--> internal/render compact PNG
+```
+
+- `internal/app/bot` owns the versioned action route, hourly-period assembly, job
+  lifecycle, deduplication, cache policy, localization, and delivery;
+- `internal/model/iconeu` reads one pinned run/period and returns normalized
+  provider-neutral snapshots; it contains no index formula or user flow;
+- `internal/forecast` owns spherical geometry and all directional physical and
+  engineering calculations; it imports no platform or model adapter;
+- `internal/render` turns an already calculated result into one deterministic
+  image and performs no network access;
+- Telegram and VK remain peer transport adapters. Neither contains Horizon
+  science, queueing, or an import of the other adapter;
+- `cmd/bot_astrosferum` remains the composition root and constructs one shared
+  Horizon workflow for both platforms when the feature is enabled.
+
+The generic callback envelope is versioned and capped at the common Telegram
+`callback_data` limit. Horizon uses the explicit action ID `horizon.v1`; its
+compact payload is authenticated with a persistent HMAC key stored at mode
+`0600`, but it is still revalidated against current model state. This is
+sufficient for later actions without introducing a message broker, Redis,
+another service, or a second bot handler. The callback contract follows the
+[Telegram Bot API](https://core.telegram.org/bots/api); VK payloads are
+normalized into the same application action.
+
+### 29.3. Full hourly period from one immutable run
+
+The heatmap uses the fixed `f000..f072` interval of the immutable ICON-EU run:
+73 hourly terms spanning 72 hours, not a selected “best” hour. All eight
+directions share exactly the same time axis. Daylight,
+bright twilight (`0…−12°`), astronomical twilight, and night are visually marked at the computed sub-hour crossing positions; polar day
+remains a valid, visibly daylight-only period rather than triggering a special
+time selection. The caption identifies the run, live freshness, and complete
+valid-time interval so elapsed early terms remain explicit.
+
+The model adapter pins the whole period to one ICON-EU run. It batches every
+required pressure-level `U/V/T/Z` step, every hourly surface, cloud, TKE, MH,
+and visibility step, and the shared HHL geometry across all lookup cells. Raw
+three-hour pressure variables are linearly interpolated only between bracketing
+terms of that same run onto the hourly grid; HMNSP/TKE, `Cn2`, seeing, `tau0`,
+and the index are recomputed after interpolation and are never themselves
+interpolated. There is no extrapolation beyond `f072`, across a missing edge,
+or across a run boundary. Lookup coordinates in
+the same `0.0625 deg` output cell are deduplicated. CDO writes tabular values
+directly; no intermediate per-point GRIB copies are retained. The scientific
+equations and limitations are specified in
+[the Horizon section of the scientific method](scientific-method.en.md#7-directional-horizon-analysis).
+
+Run identity is checked before any cache reuse or heavy work. The source checks
+the same current run before and after acquisition, the workflow checks again
+after calculation/rendering, and the delivery workers recheck immediately
+before every send, including a cache hit. If any check observes a newer run or
+cannot confirm the current run, the PNG is not sent and the user is asked to
+request a new ordinary forecast. The caption is generated at delivery time and
+uses the configured ICON-EU `max_stale_age`, so cached and newly rendered
+results report freshness by the same rule.
+
+### 29.4. Separate heavy-work class
+
+Horizon work must not consume the ordinary point-forecast workers. The current
+source implements this single-process boundary:
+
+- one shared background worker and one bounded queue for both Telegram and VK;
+- a separate Horizon CDO semaphore controlled by
+  `horizon_analysis.cdo_workers`, at most two subprocesses by default;
+- two delivery workers and a separate bounded delivery queue, with bounded
+  admission for cache-hit uploads, so slow platform uploads cannot create an
+  unbounded goroutine or memory backlog;
+- immediate callback acknowledgement followed by queue position and an honest
+  approximate duration;
+- one active request per platform/user identity, a three-second repeat-click
+  guard, and fan-out for identical job keys bounded to
+  `max(32, queue_size*32)` waiters;
+- a job timeout and cancellation context owned by the background workflow, not
+  by the short callback request;
+- ordinary forecast workers, their semaphore, and their timeout remain
+  independent.
+
+Each extracted CDO table is normalized as its bounded worker finishes and the
+raw table is released; only the normalized 73-frame result remains for the
+calculation. Together with the two-process default this bounds Horizon's
+incremental RAM use. The application container has no separate Docker hard
+memory limit; `GOMEMLIMIT=24GiB` is a Go GC target, not an allocation guarantee.
+Any increase must follow measured peak RSS during the mandatory full-run smoke
+test and leave headroom for CDO, PostgreSQL, and the host page cache.
+
+A bounded in-process channel is enough. In-flight jobs are not durable across a
+restart: the user can retry, while an already completed atomic disk-cache entry
+survives. This is a simpler and more honest failure model than introducing a
+database-backed job system for one optional calculation.
+
+### 29.5. Cache and cleanup
+
+The Horizon cache is separate from the ordinary point/render caches. Its identity
+includes E5 coordinates, rounded observer HHL, provider and run ID, the fixed
+`window=f000-f072-hourly`, Horizon algorithm version, fixed geometry parameters,
+the complete calibration shared with Overall (`ASTRO_OVERALL_*` and
+`ASTRO_CLOUD_*` inputs), renderer algorithm version, and language. A calibration
+change therefore produces a different key rather than reusing an old result.
+The key material is hashed for the path, so raw coordinates do not appear in
+filenames or logs. A cache hit is valid only for the exact immutable run and
+calculation contract.
+
+The scientific marker is `horizon-spherical-los-tke-hmnsp99-v6`; the application
+cache schema is `horizon-cache-v1`. Changing either a formula or the
+serialized/rendered contract requires changing the corresponding marker.
+
+PNG and metadata are published by staging plus atomic rename. Retention is
+bounded by a hard `CreatedAt` TTL and entry count; mtime is used only for LRU
+ordering, so repeated hits do not extend lifetime. Cleanup runs at cache startup,
+after publication, and periodically at `min(cache_ttl/4, 1h)` while the heavy
+worker is running. A completed PNG admitted for delivery is hard-linked to a
+temporary `.lease-*` file, so eviction of its keyed directory cannot invalidate
+an in-progress upload; the delivery worker removes the lease after the attempt.
+Startup removes abandoned `.incoming-*` and `.lease-*` artifacts. Cleanup
+failures are surfaced or logged rather than being treated as successful cleanup.
+The current development defaults are 48 hours and 128 entries. Runtime cache and
+temporary data remain below the existing `data/` volume and are excluded from
+Git. The PNG contains displayed coordinates rounded to four decimal places, but
+the cache does not associate them with a user ID. Logs contain run ID,
+period/term count, point count, duration, and safe error classes, but not
+callback payloads, user identifiers, or exact coordinates.
+
+### 29.6. Operational gate
+
+The branch must not be described as deployed until all local checks pass, one
+real ICON-EU calculation succeeds, and a negative ICON Global case proves that
+neither button nor job is available. After deployment, `doctor`, startup logs,
+an ordinary forecast, the Horizon button/action, and ordinary-forecast latency
+during a concurrent Horizon job are mandatory gates. A failed gate requires
+stopping or rolling back the deployment and reporting the failure rather than
+sending a success notification.

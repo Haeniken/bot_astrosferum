@@ -71,9 +71,106 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runSyncICONGlobal(ctx, args[1:], stdout, stderr)
 	case "render-point":
 		return runRenderPoint(ctx, args[1:], stdout, stderr)
+	case "render-horizon":
+		return runRenderHorizon(ctx, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("render-horizon", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "/app/config/config.yaml", "configuration file")
+	latitude := flags.Float64("lat", 0, "latitude inside ICON-EU")
+	longitude := flags.Float64("lon", 0, "longitude inside ICON-EU")
+	output := flags.String("output", "/app/data/verification/horizon-live.png", "output PNG")
+	language := flags.String("language", "en", "chart language: en or ru")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("render-horizon accepts flags only")
+	}
+	if err := forecast.ValidateCoordinates(*latitude, *longitude); err != nil {
+		return err
+	}
+	if *language != "en" && *language != "ru" {
+		return errors.New("render language must be en or ru")
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if !cfg.HorizonAnalysis.Enabled {
+		return errors.New("horizon analysis is disabled")
+	}
+	resolver, err := forecast.NewTimeZoneResolver()
+	if err != nil {
+		return err
+	}
+	location, err := forecast.NewLocation(*latitude, *longitude, resolver.Resolve(*latitude, *longitude))
+	if err != nil {
+		return err
+	}
+	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
+	pointStore := iconeu.NewCachedStore(
+		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
+		int64(cfg.App.PointCacheMemoryLimit), logf,
+	)
+	started := time.Now()
+	cloud, err := pointStore.Cloud(ctx, location)
+	if err != nil {
+		return err
+	}
+	plan, err := forecast.NewHorizonPlan(location, cloud.SurfaceElevationM)
+	if err != nil {
+		return err
+	}
+	horizonStore := iconeu.NewHorizonStore(
+		cfg.Paths.Data, filepath.Join(cfg.Paths.Temp, "horizon-batch-cli"),
+		cfg.HorizonAnalysis.CDOWorkers, logf,
+	)
+	if !horizonStore.Supports(plan) {
+		return errors.New("horizon footprint is outside ICON-EU")
+	}
+	snapshots, err := horizonStore.Series(ctx, cloud.RunID, plan)
+	if err != nil {
+		return err
+	}
+	frames, err := forecast.ComputeHorizonSeries(ctx, snapshots, plan, overallCalibration(cfg.Algorithms))
+	if err != nil {
+		return err
+	}
+	currentRun, err := horizonStore.CurrentRunID()
+	if err != nil || currentRun != cloud.RunID {
+		return errors.New("ICON-EU horizon run changed before rendering")
+	}
+	if err := os.MkdirAll(filepath.Dir(*output), 0o750); err != nil {
+		return fmt.Errorf("create horizon output directory: %w", err)
+	}
+	if err := render.Horizon(ctx, *output, render.HorizonInput{
+		Location: location, Provider: "ICON-EU", RunID: cloud.RunID,
+		Grid: iconeu.Coverage().GridName, Frames: frames,
+	}, render.Options{Language: *language}); err != nil {
+		return err
+	}
+	currentRun, err = horizonStore.CurrentRunID()
+	if err != nil || currentRun != cloud.RunID {
+		_ = os.Remove(*output)
+		return errors.New("ICON-EU horizon run changed during rendering")
+	}
+	return writeJSON(stdout, struct {
+		RunID      string    `json:"run_id"`
+		PeriodFrom time.Time `json:"period_from"`
+		PeriodTo   time.Time `json:"period_to"`
+		Frames     int       `json:"frames"`
+		Duration   string    `json:"duration"`
+		File       string    `json:"file"`
+	}{
+		RunID: cloud.RunID, PeriodFrom: frames[0].ValidAt, PeriodTo: frames[len(frames)-1].ValidAt,
+		Frames: len(frames), Duration: time.Since(started).Round(time.Millisecond).String(), File: *output,
+	})
 }
 
 func runSyncICONGlobal(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -304,6 +401,39 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore, Fallback: globalStore,
 		}
 	}
+	var horizonJobs *bot.HorizonJobs
+	if cfg.HorizonAnalysis.Enabled {
+		horizonSource := iconeu.NewHorizonStore(
+			cfg.Paths.Data, filepath.Join(cfg.Paths.Temp, "horizon-batch"),
+			cfg.HorizonAnalysis.CDOWorkers, logf,
+		)
+		horizonJobs, err = bot.NewHorizonJobs(bot.HorizonJobsConfig{
+			QueueSize: cfg.HorizonAnalysis.QueueSize, JobTimeout: cfg.HorizonAnalysis.JobTimeout.Duration,
+			CacheRoot: filepath.Join(cfg.Paths.Data, "cache", "horizon"),
+			CacheTTL:  cfg.HorizonAnalysis.CacheTTL.Duration, CacheEntries: cfg.HorizonAnalysis.CacheEntries,
+			EstimatedDuration:      cfg.HorizonAnalysis.EstimatedDuration.Duration,
+			MaxStaleAge:            cfg.Providers.ICONEU.MaxStaleAge.Duration,
+			RenderAlgorithmVersion: render.HorizonRenderVersion,
+		}, horizonSource, func(renderContext context.Context, destination string, input bot.HorizonRenderInput, language string) error {
+			if err := renderContext.Err(); err != nil {
+				return err
+			}
+			if err := render.Horizon(renderContext, destination, render.HorizonInput{
+				Location: input.Location, Provider: input.Provider, RunID: input.RunID,
+				Grid: input.Grid, Frames: input.Frames,
+			}, render.Options{Language: language}); err != nil {
+				return err
+			}
+			return renderContext.Err()
+		}, overallCalibration(cfg.Algorithms), logf)
+		if err != nil {
+			return err
+		}
+		if err := horizonJobs.Start(ctx); err != nil {
+			return err
+		}
+		defer horizonJobs.Close()
+	}
 	database, err := pgstore.Open(ctx, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name, cfg.Database.User, cfg.Database.Password, cfg.Database.MaxConns)
 	if err != nil {
 		return err
@@ -326,7 +456,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("open World Atlas 2015: %w", err)
 	}
 	defer func() { _ = worldAtlas.Close() }()
-	configureHandler := func(handler *bot.Handler, adminIDs []int64, renderDirectory string) error {
+	configureHandler := func(handler *bot.Handler, platform string, adminIDs []int64, renderDirectory string) error {
 		handler.SetLogger(logf)
 		if err := handler.EnablePersistence(database, adminIDs); err != nil {
 			return err
@@ -351,7 +481,13 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 				return err
 			}
 		}
-		return handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "shared-render-v1"))
+		if err := handler.EnableRenderCache(filepath.Join(cfg.Paths.Data, "cache", "renders", "shared-render-v1")); err != nil {
+			return err
+		}
+		if horizonJobs != nil {
+			return handler.EnableHorizon(platform, horizonJobs)
+		}
+		return nil
 	}
 	type platformAdapter struct {
 		name string
@@ -371,7 +507,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
-		if err := configureHandler(handler, cfg.Platforms.Telegram.AdminIDs, "telegram-renders"); err != nil {
+		if err := configureHandler(handler, "telegram", cfg.Platforms.Telegram.AdminIDs, "telegram-renders"); err != nil {
 			return err
 		}
 		adapters = append(adapters, platformAdapter{name: "Telegram", run: func(runContext context.Context) error {
@@ -399,7 +535,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			}
 			adminIDs = append(adminIDs, key)
 		}
-		if err := configureHandler(handler, adminIDs, "vk-renders"); err != nil {
+		if err := configureHandler(handler, "vk", adminIDs, "vk-renders"); err != nil {
 			return err
 		}
 		adapters = append(adapters, platformAdapter{name: "VK", run: func(runContext context.Context) error {
@@ -675,6 +811,7 @@ func printUsage(writer io.Writer) error {
   sync-icon-eu   atomically sync one complete ICON-EU pressure-level wind run
   sync-icon-global atomically sync one complete native-grid ICON Global run
   render-point   render charts for a point from the current ICON-EU/Global run
+  render-horizon render one real ICON-EU eight-direction horizon analysis
   version        print the build version`)
 	return err
 }
@@ -686,8 +823,9 @@ func writeLog(writer io.Writer, format string, values ...any) {
 func overallCalibration(config config.AlgorithmsConfig) forecast.OverallIndexCalibration {
 	return forecast.OverallIndexCalibration{
 		SeeingWeight: config.OverallSeeingWeight, CloudWeight: config.OverallCloudWeight,
-		CoherenceTimeWeight: config.OverallCoherenceTimeWeight,
-		PossibleFogFactor:   config.OverallPossibleFogFactor, HighFogFactor: config.OverallHighFogFactor,
+		CoherenceTimeWeight:         config.OverallCoherenceTimeWeight,
+		OpticalTurbulenceMaxPenalty: config.OverallOpticalTurbulenceMaxPenalty,
+		PossibleFogFactor:           config.OverallPossibleFogFactor, HighFogFactor: config.OverallHighFogFactor,
 		GoodSeeingArcsec: config.OverallGoodSeeingArcsec, BadSeeingArcsec: config.OverallBadSeeingArcsec,
 		BestCoherenceTimeMS:          config.OverallBestCoherenceTimeMS,
 		BadCoherenceTimeMS:           config.OverallBadCoherenceTimeMS,

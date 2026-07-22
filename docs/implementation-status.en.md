@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
 Date: 2026-07-22
-Stage: Stage 3 live ICON → Telegram and VK
+Stage: Stage 3 live ICON → Telegram and VK; optional ICON-EU Horizon analysis implemented
 Deployment target: operator-managed host
 
 ## Complete
@@ -47,6 +47,76 @@ Freshness and bilingual rendering were deployed on 2026-07-21: the production bi
 
 The VK adapter was deployed on 2026-07-22. Production starts Telegram and VK Group Long Poll under independent supervisors; VK settings report API `5.199`, Long Poll enabled, and `message_new=1`. The selected server was under `*.vk.ru`, the application container remained `running` with `restart_count=0`, PostgreSQL remained healthy, and the active ICON-EU/Global run symlinks were unchanged. The old platform-named 16 MiB render cache was removed after the shared bounded cache was initialized.
 
+## Horizon analysis — implemented
+
+The optional Horizon analysis is an existing application function controlled
+by `ASTRO_HORIZON_ANALYSIS_ENABLED`. It is deliberately available only for an ordinary
+ICON-EU forecast and covers the complete immutable `f000..f072` interval. ICON
+Global exposes neither a Horizon button nor a runnable Horizon job. The
+implementation consists of:
+
+- an environment/configuration switch with validation, plus a disabled-state
+  path that does not require Horizon operational limits;
+- one small versioned application action router and normalized Telegram/VK
+  callback events; platform adapters contain no Horizon formula; the
+  composition root now constructs one shared Horizon service and attaches its
+  button/action handlers to both enabled platforms;
+- one shared bounded heavy-job queue and worker, per-user admission,
+  identical-key fan-out, timeout/cancellation, signed compact actions, and a
+  separate bounded two-worker delivery path with bounded cache-hit admission;
+- an atomic bounded disk cache with startup, periodic, and post-publication
+  cleanup; short-lived hard-link leases keep an admitted PNG stable across
+  eviction and abandoned staging/lease artifacts are removed at startup;
+- provider-neutral spherical 10-degree/8-azimuth geometry at 500 m midpoint
+  spacing and directional
+  turbulence, transverse-wind, cloud, observer-fog, coarse-HHL terrain, index,
+  and deterministic data-quality calculations;
+- ICON-EU-only footprint checks and full immutable `f000..f072` acquisition:
+  exact hourly surface/cloud/TKE/MH/visibility, same-run linear interpolation
+  of raw three-hour pressure `U/V/T/Z`, and batched CDO extraction of
+  deduplicated model cells with the separate `horizon_analysis.cdo_workers`
+  subprocess limit;
+- a 73-frame calculation contract that recomputes HMNSP/TKE, `Cn2`, seeing,
+  `tau0`, and the index for every hour rather than interpolating nonlinear
+  outputs, using the same complete calibration as Overall; that calibration is
+  also part of Horizon cache identity;
+- the shared target-agnostic utility mapping preserves physical seeing/`tau0`
+  but bounds their combined score loss to 25%;
+- current-run guards before cache reuse/heavy work, at the start and end of
+  acquisition, after calculation/rendering, and immediately before every send,
+  including cache hits; delivery-time captions use the configured ICON-EU
+  `max_stale_age`;
+- one localized `3200x1400` time-by-eight-direction heatmap for all 73 terms,
+  with day/twilight/night shading, unavailable cells, run period, freshness,
+  and compact limiter/quality disclosure;
+- unit tests in the affected packages for callback normalization, queue/cache
+  behavior, series identity, geometry, local-ENU wind projection,
+  dateline/high-latitude cases, provider boundaries, sparse/missing profiles,
+  and physical closures;
+- a `render-horizon` command for a real current-run ICON-EU verification render;
+- a geometric homogeneous-path reference derived from the implemented
+  spherical ray itself, rather than a molecular-air-mass approximation; the
+  physical slant seeing and `tau0` remain unchanged, while reference anchors
+  use the exact path ratio raised to the Fried `3/5` power.
+
+Production validation on 2026-07-22 used ICON-EU run `2026072218` and ICON
+Global run `2026072212`. At the saved Plavsk point, the first ordinary
+seven-chart calculation took `83.097 s`, the warm calculation took `9.193 s`,
+and the complete 73-frame Horizon calculation took `123.541 s`. An ordinary
+forecast completed in `10.074 s` while Horizon was actively extracting data,
+below the `14.193 s` non-regression threshold. The Global smoke produced seven
+charts in `174.586 s`; its Horizon command failed closed and created no PNG.
+Post-deployment doctor, PostgreSQL readiness, current-run identity, startup
+logs, restart/OOM state, bounded-cache cleanup, and secret/coordinate log scans
+all passed.
+
+Every deployment validates repository tests, race/vet/lint/build, one real
+current-run ICON-EU calculation, the explicit ICON Global no-button/no-job
+case, health and startup logs, ordinary and Horizon smoke tests, ordinary
+forecast latency during concurrent Horizon work, and the administrator report.
+Failure of any mandatory gate requires rollback or a failure report instead of
+a success notification.
+
 ## Production Overall change
 
 The audit of historical control case (an anonymized historical control case) found that the
@@ -66,6 +136,9 @@ Production uses the following replacement:
   boundary, and total `J` gives model-derived seeing at 500 nm;
 - `tau0` comes from `integral(Cn²·|V|^(5/3)dz)`; there is no second direction
   penalty because vector shear already includes wind rotation;
+- physical seeing and `tau0` map into one bounded turbulence utility
+  `f=0.75+0.25*q_turbulence`; they cannot veto a clear general-purpose hour,
+  while cloud transmission and fog retain their stronger obstruction role;
 - surface wind is a mild factor capped at 20%; dew is excluded, while possible
   and high fog use factors `0.75/0.10`;
 - the heatmap derives each native layer's air mass as
@@ -82,9 +155,9 @@ Production uses the following replacement:
 - point-cache schema is `point-v6-native-cloud-mass-mh`, preventing reuse of
   old entries without `MH`, `T`, or native layer thickness;
 - version markers match the new contract:
-  `seeing-hybrid-tke-mh-hmnsp99-v4`,
-  `conditions-v4-dynamic-mh-cloud-guard`, `render-v14-readable-axis-scales`, and
-  `shared-render-v16-vk-adapter`.
+  `seeing-hybrid-tke-mh-hmnsp99-v6`,
+  `conditions-v7-phase-structure-coherence`, `render-v15-four-solar-bands`, and
+  `shared-render-v18-phase-structure-coherence`.
 
 A server-side fixed-2-km calculation without fitting (`ground Cn² scale=1`)
 produced control-case seeing of `2.221″` at `f042` and `3.644″` at `f048`; the
@@ -128,5 +201,5 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 1. Accumulate observational verification data for the existing forecast methods and monitor both platform adapters in production.
 
-Production `seeing-hybrid-tke-mh-hmnsp99-v4` is not observationally calibrated until compared
+Production `seeing-hybrid-tke-mh-hmnsp99-v6` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

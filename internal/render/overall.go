@@ -49,7 +49,10 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	p.Y.Label.TextStyle.Font.Size = vg.Points(17)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, frames[0].ValidAt)
 	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Общий индекс пригодности для астрономии (1–10)\n%s · почасовой · ICON TKE до динамической MH (500–2000 м над землёй) + HMNSP99 выше · сиинг и τ₀ на 500 нм · эффективная облачная преграда + туман", "(%.2f, %.2f) Overall Astronomy Index (1–10)\n%s · hourly · ICON TKE to dynamic MH (500–2000 m AGL) + HMNSP99 aloft · seeing and tau0 at 500 nm · effective cloud obstruction + fog"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
-	p.X.Label.Text = fmt.Sprintf(localized(options, "Местное время · %s  |  подписи: сиинг″ / τ₀ мс / T%%; T = эффективное пропускание облаков; f/F = возможный/сильный туман; MH = почасовая глубина перемешанного слоя ICON  |  %s", "Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s"), timeZoneLabel, Version)
+	p.X.Label.Text = fmt.Sprintf(localized(options,
+		"Местное время · %s  |  подписи: сиинг″ / τ₀ мс / T%%; T = эффективное пропускание облаков; f/F = возможный/сильный туман; MH = почасовая глубина перемешанного слоя ICON  |  %s\nФон от светлого к тёмному: день · светлые сумерки 0…−12° · астрономические сумерки −12…−18° · ночь <−18°",
+		"Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s\nBackground, light to dark: day · bright twilight 0…−12° · astronomical twilight −12…−18° · night <−18°"),
+		timeZoneLabel, Version)
 	p.Y.Label.Text = localized(options, "Пригодность для наблюдений (1–10)", "Observing suitability (1–10)")
 	p.X.Min, p.X.Max = -0.6, float64(len(frames))-0.4
 	p.Y.Min, p.Y.Max = 0, 10.8
@@ -94,11 +97,16 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 
 type solarPhase int
 
+type solarPhaseInterval struct {
+	Start time.Time
+	End   time.Time
+	Phase solarPhase
+}
+
 const (
 	solarNight solarPhase = iota
 	solarAstronomicalTwilight
-	solarNauticalTwilight
-	solarCivilTwilight
+	solarBrightTwilight
 	solarDay
 )
 
@@ -106,10 +114,8 @@ func phaseForSunAltitude(altitude float64) solarPhase {
 	switch {
 	case altitude >= 0:
 		return solarDay
-	case altitude >= -6:
-		return solarCivilTwilight
 	case altitude >= -12:
-		return solarNauticalTwilight
+		return solarBrightTwilight
 	case altitude >= -18:
 		return solarAstronomicalTwilight
 	default:
@@ -121,25 +127,60 @@ func solarPhaseColor(phase solarPhase) color.Color {
 	return [...]color.NRGBA{
 		{R: 143, G: 163, B: 196, A: 255}, // astronomical night
 		{R: 178, G: 193, B: 217, A: 255}, // astronomical twilight
-		{R: 207, G: 218, B: 235, A: 255}, // nautical twilight
-		{R: 240, G: 220, B: 202, A: 255}, // civil twilight
+		{R: 224, G: 219, B: 219, A: 255}, // bright twilight: civil + nautical ranges
 		{R: 255, G: 242, B: 187, A: 255}, // day
 	}[phase]
 }
 
+// solarPhaseIntervals resolves visual solar bands independently of the model
+// hour. A short scan brackets each 0/-12/-18 degree crossing within five
+// minutes; the final raster then rounds only to its own
+// pixel grid. This matches the useful resolution of a 72-hour chart without
+// claiming second-level precision. Polar day/night needs no special case.
+func solarPhaseIntervals(sky astronomy.Series, start, end time.Time) []solarPhaseInterval {
+	if start.IsZero() || !end.After(start) {
+		return nil
+	}
+	const scanStep = 5 * time.Minute
+	currentStart := start
+	previousTime := start
+	previousPhase := phaseForSunAltitude(sky.SunAltitudeDegrees(start))
+	intervals := make([]solarPhaseInterval, 0, 16)
+	for previousTime.Before(end) {
+		nextTime := previousTime.Add(scanStep)
+		if nextTime.After(end) {
+			nextTime = end
+		}
+		nextPhase := phaseForSunAltitude(sky.SunAltitudeDegrees(nextTime))
+		if nextPhase != previousPhase {
+			boundary := previousTime.Add(nextTime.Sub(previousTime) / 2)
+			intervals = append(intervals, solarPhaseInterval{Start: currentStart, End: boundary, Phase: previousPhase})
+			currentStart = boundary
+			previousPhase = nextPhase
+		}
+		previousTime = nextTime
+	}
+	intervals = append(intervals, solarPhaseInterval{Start: currentStart, End: end, Phase: previousPhase})
+	return intervals
+}
+
 func addSolarBackground(p *plot.Plot, frames []forecast.OverallIndexFrame, sky astronomy.Series) error {
-	for index, frame := range frames {
-		phase := phaseForSunAltitude(sky.SunAltitudeDegrees(frame.ValidAt))
+	first := frames[0].ValidAt
+	start := first.Add(-30 * time.Minute)
+	end := frames[len(frames)-1].ValidAt.Add(30 * time.Minute)
+	for _, interval := range solarPhaseIntervals(sky, start, end) {
+		x0 := interval.Start.Sub(first).Hours()
+		x1 := interval.End.Sub(first).Hours()
 		polygon, err := plotter.NewPolygon(plotter.XYs{
-			{X: float64(index) - 0.5, Y: 0},
-			{X: float64(index) + 0.5, Y: 0},
-			{X: float64(index) + 0.5, Y: 10.8},
-			{X: float64(index) - 0.5, Y: 10.8},
+			{X: x0, Y: 0},
+			{X: x1, Y: 0},
+			{X: x1, Y: 10.8},
+			{X: x0, Y: 10.8},
 		})
 		if err != nil {
 			return fmt.Errorf("create solar background: %w", err)
 		}
-		polygon.Color = solarPhaseColor(phase)
+		polygon.Color = solarPhaseColor(interval.Phase)
 		polygon.Width = 0
 		p.Add(polygon)
 	}

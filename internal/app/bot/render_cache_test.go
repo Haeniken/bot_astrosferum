@@ -90,3 +90,35 @@ func TestRenderCacheKeyIncludesLanguage(t *testing.T) {
 		t.Fatal("render cache key ignored language")
 	}
 }
+
+func TestRenderCacheKeyChangesWithModelRun(t *testing.T) {
+	vertical := forecast.SyntheticVerticalFixture()
+	surface := forecast.SyntheticSurfaceFixture()
+	cloud := forecast.SyntheticCloudFixture()
+	calibration := forecast.DefaultOverallIndexCalibration()
+	baseline := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+	checks := []struct {
+		name   string
+		mutate func(*forecast.VerticalSeries, *forecast.SurfaceSeries, *forecast.CloudSeries)
+	}{
+		{name: "vertical", mutate: func(value *forecast.VerticalSeries, _ *forecast.SurfaceSeries, _ *forecast.CloudSeries) {
+			value.RunID = "2026072218"
+		}},
+		{name: "surface", mutate: func(_ *forecast.VerticalSeries, value *forecast.SurfaceSeries, _ *forecast.CloudSeries) {
+			value.RunID = "2026072218"
+		}},
+		{name: "cloud", mutate: func(_ *forecast.VerticalSeries, _ *forecast.SurfaceSeries, value *forecast.CloudSeries) {
+			value.RunID = "2026072218"
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			changedVertical, changedSurface, changedCloud := vertical, surface, cloud
+			check.mutate(&changedVertical, &changedSurface, &changedCloud)
+			changed := forecastRenderCacheKey(changedVertical, changedSurface, changedCloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+			if baseline == changed {
+				t.Fatalf("render cache ignored %s run", check.name)
+			}
+		})
+	}
+}

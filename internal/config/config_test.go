@@ -23,11 +23,54 @@ func TestLoadExample(t *testing.T) {
 	if cfg.App.ECCodesWorkers != 8 || cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
 		t.Fatalf("unexpected performance configuration: %+v", cfg.App)
 	}
+	if !cfg.HorizonAnalysis.Enabled || cfg.HorizonAnalysis.QueueSize != 4 || cfg.HorizonAnalysis.CDOWorkers != 2 ||
+		cfg.HorizonAnalysis.JobTimeout.Duration != 10*time.Minute || cfg.HorizonAnalysis.EstimatedDuration.Duration != 3*time.Minute {
+		t.Fatalf("unexpected horizon-analysis configuration: %+v", cfg.HorizonAnalysis)
+	}
 	if cfg.Sync.MinFreeSpace != ByteSize(150<<30) {
 		t.Fatalf("unexpected minimum free space: %d", cfg.Sync.MinFreeSpace)
 	}
 	if !cfg.Platforms.Telegram.Enabled || cfg.Platforms.VK.Enabled {
 		t.Fatalf("unexpected platform configuration")
+	}
+}
+
+func TestHorizonAnalysisLimitsValidation(t *testing.T) {
+	tests := []func(*Config){
+		func(cfg *Config) { cfg.HorizonAnalysis.QueueSize = 0 },
+		func(cfg *Config) { cfg.HorizonAnalysis.CDOWorkers = 5 },
+		func(cfg *Config) { cfg.HorizonAnalysis.JobTimeout = Duration{30 * time.Second} },
+		func(cfg *Config) { cfg.HorizonAnalysis.CacheTTL = Duration{30 * time.Minute} },
+		func(cfg *Config) { cfg.HorizonAnalysis.CacheEntries = 0 },
+		func(cfg *Config) { cfg.HorizonAnalysis.EstimatedDuration = Duration{time.Second} },
+	}
+	for index, mutate := range tests {
+		cfg := Defaults()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "horizon_analysis") {
+			t.Fatalf("case %d validation error = %v", index, err)
+		}
+	}
+	cfg := Defaults()
+	cfg.HorizonAnalysis.Enabled = false
+	cfg.HorizonAnalysis.QueueSize = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled horizon analysis rejected: %v", err)
+	}
+}
+
+func TestHorizonAnalysisEnvironmentToggle(t *testing.T) {
+	t.Setenv("ASTRO_HORIZON_ANALYSIS_ENABLED", "false")
+	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HorizonAnalysis.Enabled {
+		t.Fatal("environment did not disable horizon analysis")
+	}
+	t.Setenv("ASTRO_HORIZON_ANALYSIS_ENABLED", "not-a-boolean")
+	if _, err := Load(filepath.Join("..", "..", "config", "config.example.yaml")); err == nil || !strings.Contains(err.Error(), "ASTRO_HORIZON_ANALYSIS_ENABLED") {
+		t.Fatalf("invalid toggle error = %v", err)
 	}
 }
 
@@ -48,6 +91,7 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 	t.Setenv("ASTRO_OVERALL_SEEING_WEIGHT", "1.25")
 	t.Setenv("ASTRO_OVERALL_CLOUD_WEIGHT", "2.75")
 	t.Setenv("ASTRO_OVERALL_COHERENCE_TIME_WEIGHT", "0.3")
+	t.Setenv("ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY", "0.2")
 	t.Setenv("ASTRO_OVERALL_POSSIBLE_FOG_FACTOR", "0.7")
 	t.Setenv("ASTRO_OVERALL_HIGH_FOG_FACTOR", "0.05")
 	t.Setenv("ASTRO_OVERALL_GOOD_SEEING_ARCSEC", "0.6")
@@ -68,7 +112,8 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Algorithms.OverallSeeingWeight != 1.25 || cfg.Algorithms.OverallCloudWeight != 2.75 ||
-		cfg.Algorithms.OverallCoherenceTimeWeight != 0.3 || cfg.Algorithms.OverallPossibleFogFactor != 0.7 ||
+		cfg.Algorithms.OverallCoherenceTimeWeight != 0.3 || cfg.Algorithms.OverallOpticalTurbulenceMaxPenalty != 0.2 ||
+		cfg.Algorithms.OverallPossibleFogFactor != 0.7 ||
 		cfg.Algorithms.OverallHighFogFactor != 0.05 || cfg.Algorithms.OverallGoodSeeingArcsec != 0.6 ||
 		cfg.Algorithms.OverallBadSeeingArcsec != 3.0 || cfg.Algorithms.OverallBestCoherenceTimeMS != 6.0 ||
 		cfg.Algorithms.OverallBadCoherenceTimeMS != 1.5 || cfg.Algorithms.OverallBoundaryLayerMinM != 700 ||
@@ -84,13 +129,14 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 	cfg := Defaults()
 	algorithms := cfg.Algorithms
-	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v4" ||
-		algorithms.ConditionsVersion != "conditions-v4-dynamic-mh-cloud-guard" ||
+	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v6" ||
+		algorithms.ConditionsVersion != "conditions-v7-phase-structure-coherence" ||
 		cfg.Render.Version != "render-v9-dynamic-mh" {
 		t.Fatalf("unexpected algorithm/render versions: %+v %+v", algorithms, cfg.Render)
 	}
 	if algorithms.OverallGoodSeeingArcsec != 0.5 || algorithms.OverallBadSeeingArcsec != 2.0 ||
-		algorithms.OverallCoherenceTimeWeight != 0.25 || algorithms.OverallPossibleFogFactor != 0.75 ||
+		algorithms.OverallCoherenceTimeWeight != 0.25 || algorithms.OverallOpticalTurbulenceMaxPenalty != 0.25 ||
+		algorithms.OverallPossibleFogFactor != 0.75 ||
 		algorithms.OverallBestCoherenceTimeMS != 5.2 || algorithms.OverallBadCoherenceTimeMS != 1.6 ||
 		algorithms.OverallBoundaryLayerMinM != 500 || algorithms.OverallBoundaryLayerTopM != 2000 ||
 		algorithms.OverallGroundCn2Scale != 1 ||
@@ -116,6 +162,16 @@ func TestOverallBoundaryLayerBoundsValidation(t *testing.T) {
 		cfg.Algorithms.OverallBoundaryLayerTopM = test.maximum
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "boundary-layer bounds") {
 			t.Fatalf("bounds [%v, %v] validation error = %v", test.minimum, test.maximum, err)
+		}
+	}
+}
+
+func TestOverallOpticalTurbulenceMaximumPenaltyValidation(t *testing.T) {
+	for _, value := range []float64{-0.01, 1.01} {
+		cfg := Defaults()
+		cfg.Algorithms.OverallOpticalTurbulenceMaxPenalty = value
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "optical_turbulence_max_penalty") {
+			t.Fatalf("maximum penalty %v validation error = %v", value, err)
 		}
 	}
 }

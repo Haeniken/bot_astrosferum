@@ -28,7 +28,21 @@ var (
 	_ bot.Messenger             = (*Client)(nil)
 	_ bot.KeyboardMessenger     = (*Client)(nil)
 	_ bot.HTMLKeyboardMessenger = (*Client)(nil)
+	_ bot.ActionMessenger       = (*Client)(nil)
 )
+
+type incomingUpdate struct {
+	ID            int64          `json:"update_id"`
+	Message       *bot.Message   `json:"message"`
+	CallbackQuery *callbackQuery `json:"callback_query"`
+}
+
+type callbackQuery struct {
+	ID      string       `json:"id"`
+	From    *bot.User    `json:"from"`
+	Message *bot.Message `json:"message"`
+	Data    string       `json:"data"`
+}
 
 func NewClient(token string) (*Client, error) {
 	token = strings.TrimSpace(token)
@@ -108,10 +122,19 @@ func (client *Client) Run(ctx context.Context, handler *bot.Handler, workers int
 }
 
 func updateShard(update bot.Update, workers int) int {
-	if workers <= 1 || update.Message == nil {
+	if workers <= 1 {
 		return 0
 	}
-	return int(uint64(update.Message.Chat.ID) % uint64(workers))
+	var chatID int64
+	switch {
+	case update.Message != nil:
+		chatID = update.Message.Chat.ID
+	case update.Action != nil:
+		chatID = update.Action.Chat.ID
+	default:
+		return 0
+	}
+	return int(uint64(chatID) % uint64(workers))
 }
 
 func (client *Client) SendMessage(ctx context.Context, chatID int64, text string, locationButton bool) error {
@@ -127,6 +150,30 @@ func (client *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64,
 
 func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard bot.Keyboard) error {
 	return client.sendMessageWithKeyboard(ctx, chatID, text, keyboard, "HTML")
+}
+
+func (client *Client) SendMessageWithActions(ctx context.Context, chatID int64, text string, keyboard bot.ActionKeyboard) error {
+	markup, err := encodeActionKeyboard(keyboard)
+	if err != nil {
+		return err
+	}
+	payload := struct {
+		ChatID      int64  `json:"chat_id"`
+		Text        string `json:"text"`
+		ReplyMarkup any    `json:"reply_markup,omitempty"`
+	}{ChatID: chatID, Text: text, ReplyMarkup: markup}
+	return client.call(ctx, "sendMessage", payload, nil)
+}
+
+func (client *Client) AnswerAction(ctx context.Context, token, text string) error {
+	if strings.TrimSpace(token) == "" {
+		return errors.New("telegram callback token is required")
+	}
+	payload := struct {
+		CallbackQueryID string `json:"callback_query_id"`
+		Text            string `json:"text,omitempty"`
+	}{CallbackQueryID: token, Text: text}
+	return client.call(ctx, "answerCallbackQuery", payload, nil)
 }
 
 func (client *Client) sendMessageWithKeyboard(ctx context.Context, chatID int64, text string, keyboard bot.Keyboard, parseMode string) error {
@@ -226,12 +273,58 @@ func (client *Client) getUpdates(ctx context.Context, offset int64) ([]bot.Updat
 		Offset         int64    `json:"offset"`
 		Timeout        int      `json:"timeout"`
 		AllowedUpdates []string `json:"allowed_updates"`
-	}{Offset: offset, Timeout: 25, AllowedUpdates: []string{"message"}}
-	var updates []bot.Update
-	if err := client.call(ctx, "getUpdates", payload, &updates); err != nil {
+	}{Offset: offset, Timeout: 25, AllowedUpdates: []string{"message", "callback_query"}}
+	var incoming []incomingUpdate
+	if err := client.call(ctx, "getUpdates", payload, &incoming); err != nil {
 		return nil, err
 	}
+	updates := make([]bot.Update, 0, len(incoming))
+	for _, update := range incoming {
+		updates = append(updates, convertUpdate(update))
+	}
 	return updates, nil
+}
+
+func convertUpdate(update incomingUpdate) bot.Update {
+	converted := bot.Update{ID: update.ID, Message: update.Message}
+	callback := update.CallbackQuery
+	if callback == nil || callback.Message == nil || callback.Message.Chat.ID == 0 || callback.ID == "" || callback.Data == "" {
+		return converted
+	}
+	converted.Action = &bot.ActionInvocation{
+		Token: callback.ID,
+		Data:  callback.Data,
+		Chat:  callback.Message.Chat,
+		From:  callback.From,
+	}
+	return converted
+}
+
+func encodeActionKeyboard(keyboard bot.ActionKeyboard) (any, error) {
+	if len(keyboard) == 0 {
+		return nil, nil
+	}
+	rows := make([][]map[string]string, 0, len(keyboard))
+	for _, row := range keyboard {
+		encodedRow := make([]map[string]string, 0, len(row))
+		for _, button := range row {
+			text := strings.TrimSpace(button.Text)
+			if text == "" {
+				return nil, errors.New("telegram action button text is required")
+			}
+			if len(button.Data) == 0 || len(button.Data) > 64 {
+				return nil, errors.New("telegram callback data must contain 1 to 64 bytes")
+			}
+			encodedRow = append(encodedRow, map[string]string{"text": text, "callback_data": button.Data})
+		}
+		if len(encodedRow) > 0 {
+			rows = append(rows, encodedRow)
+		}
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return map[string]any{"inline_keyboard": rows}, nil
 }
 
 func (client *Client) call(ctx context.Context, method string, payload, result any) error {

@@ -9,20 +9,25 @@ import (
 
 // OverallIndexCalibration maps model seeing and direct observing obstructions
 // to a 1..10 astronomy-suitability index. Seeing/cloud weights are exponents;
-// the coherence and surface-wind fields are bounded fractional guards.
+// optical turbulence, coherence, and surface wind are bounded utility terms.
 type OverallIndexCalibration struct {
 	SeeingWeight        float64
 	CloudWeight         float64
 	CoherenceTimeWeight float64
-	PossibleFogFactor   float64
-	HighFogFactor       float64
-	GoodSeeingArcsec    float64
-	BadSeeingArcsec     float64
-	BestCoherenceTimeMS float64
-	BadCoherenceTimeMS  float64
-	BoundaryLayerMinM   float64
-	BoundaryLayerTopM   float64
-	GroundCn2Scale      float64
+	// OpticalTurbulenceMaxPenalty bounds the combined seeing/tau0 utility
+	// penalty. Physical seeing and coherence time remain unchanged diagnostics;
+	// only their contribution to the general-purpose score is capped because
+	// turbulence blurs detail while opaque cloud can remove a target.
+	OpticalTurbulenceMaxPenalty float64
+	PossibleFogFactor           float64
+	HighFogFactor               float64
+	GoodSeeingArcsec            float64
+	BadSeeingArcsec             float64
+	BestCoherenceTimeMS         float64
+	BadCoherenceTimeMS          float64
+	BoundaryLayerMinM           float64
+	BoundaryLayerTopM           float64
+	GroundCn2Scale              float64
 	// UnresolvedCloudObstruction is the maximum low-cloud obstruction used
 	// only when diagnostic CLC is not represented by grid-scale QC/QI. Middle
 	// and high cloud use smaller fractions of this configurable guard.
@@ -39,7 +44,8 @@ type OverallIndexCalibration struct {
 func DefaultOverallIndexCalibration() OverallIndexCalibration {
 	return OverallIndexCalibration{
 		SeeingWeight: 1, CloudWeight: 2, CoherenceTimeWeight: 0.25,
-		PossibleFogFactor: 0.75, HighFogFactor: 0.10,
+		OpticalTurbulenceMaxPenalty: 0.25,
+		PossibleFogFactor:           0.75, HighFogFactor: 0.10,
 		GoodSeeingArcsec: 0.5, BadSeeingArcsec: 2.0,
 		BestCoherenceTimeMS: 5.2, BadCoherenceTimeMS: 1.6,
 		BoundaryLayerMinM: 500, BoundaryLayerTopM: 2000, GroundCn2Scale: 1,
@@ -52,6 +58,23 @@ func DefaultOverallIndexCalibration() OverallIndexCalibration {
 }
 
 func (calibration OverallIndexCalibration) Validate() error {
+	values := []float64{
+		calibration.SeeingWeight, calibration.CloudWeight, calibration.CoherenceTimeWeight,
+		calibration.OpticalTurbulenceMaxPenalty,
+		calibration.PossibleFogFactor, calibration.HighFogFactor,
+		calibration.GoodSeeingArcsec, calibration.BadSeeingArcsec,
+		calibration.BestCoherenceTimeMS, calibration.BadCoherenceTimeMS,
+		calibration.BoundaryLayerMinM, calibration.BoundaryLayerTopM, calibration.GroundCn2Scale,
+		calibration.UnresolvedCloudObstruction, calibration.SurfaceWindMaxPenalty,
+		calibration.SurfaceWindStartMS, calibration.SurfaceWindFullMS,
+		calibration.SurfaceGustStartMS, calibration.SurfaceGustFullMS,
+		calibration.CloudLiquidRadiusMicrometers, calibration.CloudIceRadiusMicrometers,
+	}
+	for _, value := range values {
+		if !finite(value) {
+			return fmt.Errorf("overall calibration values must be finite")
+		}
+	}
 	if calibration.SeeingWeight <= 0 || calibration.SeeingWeight > 10 {
 		return fmt.Errorf("overall seeing weight must be greater than 0 and no greater than 10")
 	}
@@ -60,6 +83,9 @@ func (calibration OverallIndexCalibration) Validate() error {
 	}
 	if calibration.CoherenceTimeWeight < 0 || calibration.CoherenceTimeWeight > 1 {
 		return fmt.Errorf("overall coherence-time weight must be between 0 and 1")
+	}
+	if calibration.OpticalTurbulenceMaxPenalty < 0 || calibration.OpticalTurbulenceMaxPenalty > 1 {
+		return fmt.Errorf("overall optical-turbulence maximum penalty must be between 0 and 1")
 	}
 	if calibration.PossibleFogFactor < 0 || calibration.PossibleFogFactor > 1 {
 		return fmt.Errorf("overall possible-fog factor must be between 0 and 1")
@@ -99,28 +125,29 @@ func (calibration OverallIndexCalibration) Validate() error {
 }
 
 type OverallIndexFrame struct {
-	ValidAt                  time.Time `json:"valid_at"`
-	Index                    float64   `json:"index"`
-	WindIndex                float64   `json:"wind_index"` // legacy wind-only diagnostic, retained for comparison
-	SeeingArcsec             float64   `json:"seeing_arcsec"`
-	CoherenceTimeMS          float64   `json:"coherence_time_ms"`
-	PhysicalSeeing           bool      `json:"physical_seeing"`
-	PhysicalCoherence        bool      `json:"physical_coherence"`
-	GroundLayerPhysics       bool      `json:"ground_layer_physics"`
-	BoundaryLayerDepthM      float64   `json:"boundary_layer_depth_m"`
-	GroundLayerFraction      float64   `json:"ground_layer_fraction"`
-	SeeingQualityPercent     float64   `json:"seeing_quality_percent"`
-	CoherenceQualityPercent  float64   `json:"coherence_quality_percent"`
-	ClearSkyPercent          float64   `json:"clear_sky_percent"`
-	CloudCoverPercent        float64   `json:"cloud_cover_percent"`
-	CloudTransmissionPercent float64   `json:"cloud_transmission_percent"`
-	CloudOpticalDepth        float64   `json:"cloud_optical_depth"`
-	CloudCondensatePhysics   bool      `json:"cloud_condensate_physics"`
-	CloudUnresolvedGuard     bool      `json:"cloud_unresolved_guard"`
-	SurfaceWindFactorPercent float64   `json:"surface_wind_factor_percent"`
-	FogRisk                  int       `json:"fog_risk"`
-	HighFog                  bool      `json:"high_fog"`
-	Confidence               float64   `json:"confidence"`
+	ValidAt                        time.Time `json:"valid_at"`
+	Index                          float64   `json:"index"`
+	WindIndex                      float64   `json:"wind_index"` // legacy wind-only diagnostic, retained for comparison
+	SeeingArcsec                   float64   `json:"seeing_arcsec"`
+	CoherenceTimeMS                float64   `json:"coherence_time_ms"`
+	PhysicalSeeing                 bool      `json:"physical_seeing"`
+	PhysicalCoherence              bool      `json:"physical_coherence"`
+	GroundLayerPhysics             bool      `json:"ground_layer_physics"`
+	BoundaryLayerDepthM            float64   `json:"boundary_layer_depth_m"`
+	GroundLayerFraction            float64   `json:"ground_layer_fraction"`
+	SeeingQualityPercent           float64   `json:"seeing_quality_percent"`
+	CoherenceQualityPercent        float64   `json:"coherence_quality_percent"`
+	OpticalTurbulenceFactorPercent float64   `json:"optical_turbulence_factor_percent"`
+	ClearSkyPercent                float64   `json:"clear_sky_percent"`
+	CloudCoverPercent              float64   `json:"cloud_cover_percent"`
+	CloudTransmissionPercent       float64   `json:"cloud_transmission_percent"`
+	CloudOpticalDepth              float64   `json:"cloud_optical_depth"`
+	CloudCondensatePhysics         bool      `json:"cloud_condensate_physics"`
+	CloudUnresolvedGuard           bool      `json:"cloud_unresolved_guard"`
+	SurfaceWindFactorPercent       float64   `json:"surface_wind_factor_percent"`
+	FogRisk                        int       `json:"fog_risk"`
+	HighFog                        bool      `json:"high_fog"`
+	Confidence                     float64   `json:"confidence"`
 }
 
 // ComputeHourlyOverallIndex combines a single physical turbulence integral
@@ -183,11 +210,12 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		if physicalCoherence {
 			coherenceFraction = logarithmicHigherIsBetter(metrics.CoherenceTimeMS, calibration.BadCoherenceTimeMS, calibration.BestCoherenceTimeMS)
 		}
-		// tau0 is the wind-sensitive physical guard. It lowers the seeing term
-		// softly; it does not replace it or duplicate the vector-shear penalty.
-		coherenceFactor := 1 - calibration.CoherenceTimeWeight*(1-coherenceFraction)
+		// Seeing and tau0 remain physical diagnostics. Their mapping into this
+		// target-agnostic utility score is bounded: turbulence can blur fine
+		// detail, but unlike opaque cloud it does not remove the target.
+		opticalTurbulenceFactor := boundedOpticalTurbulenceFactor(seeingFraction, coherenceFraction, calibration)
 		surfaceWindFactor := surfaceWindFactor(frame, calibration)
-		normalized := math.Pow(seeingFraction, calibration.SeeingWeight) * coherenceFactor *
+		normalized := opticalTurbulenceFactor *
 			math.Pow(cloudFactor, calibration.CloudWeight) * surfaceWindFactor
 		fogRisk := frame.FogRisk()
 		switch fogRisk {
@@ -208,14 +236,27 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 			GroundLayerPhysics: groundLayerPhysics, BoundaryLayerDepthM: boundaryLayerDepthM,
 			GroundLayerFraction:  metrics.GroundLayerFraction,
 			SeeingQualityPercent: seeingFraction * 100, CoherenceQualityPercent: coherenceFraction * 100,
-			SurfaceWindFactorPercent: surfaceWindFactor * 100,
-			FogRisk:                  fogRisk, HighFog: highFog, Confidence: confidence,
+			OpticalTurbulenceFactorPercent: opticalTurbulenceFactor * 100,
+			SurfaceWindFactorPercent:       surfaceWindFactor * 100,
+			FogRisk:                        fogRisk, HighFog: highFog, Confidence: confidence,
 		})
 	}
 	if len(result) < 2 {
 		return nil, fmt.Errorf("surface and upper-air forecast periods do not overlap")
 	}
 	return result, nil
+}
+
+// boundedOpticalTurbulenceFactor is a convex mixture of target visibility and
+// high-resolution utility. The raw seeing/tau0 quality can reach zero at the
+// configured poor reference boundaries, but those are high-resolution
+// constraints rather than evidence that all observing is impossible.
+func boundedOpticalTurbulenceFactor(seeingQuality, coherenceQuality float64, calibration OverallIndexCalibration) float64 {
+	seeingQuality = clampSurfaceValue(seeingQuality, 0, 1)
+	coherenceQuality = clampSurfaceValue(coherenceQuality, 0, 1)
+	coherenceFactor := 1 - calibration.CoherenceTimeWeight*(1-coherenceQuality)
+	rawQuality := math.Pow(seeingQuality, calibration.SeeingWeight) * coherenceFactor
+	return 1 - calibration.OpticalTurbulenceMaxPenalty*(1-clampSurfaceValue(rawQuality, 0, 1))
 }
 
 func finiteOrZero(value float64) float64 {
@@ -340,6 +381,38 @@ func interpolateVerticalProfile(series VerticalSeries, target time.Time) ([]Vert
 		}
 	}
 	return levels, true
+}
+
+// InterpolateVerticalFrame returns raw pressure-level state on an intermediate
+// model hour. Only the linear state variables (height, temperature and wind)
+// and deterministic input confidence are interpolated. Nonlinear Cn2, seeing,
+// coherence time and suitability indices must be recomputed from this frame.
+func InterpolateVerticalFrame(series VerticalSeries, target time.Time) (VerticalFrame, bool) {
+	levels, available := interpolateVerticalProfile(series, target)
+	if !available {
+		return VerticalFrame{}, false
+	}
+	right := sort.Search(len(series.Frames), func(index int) bool { return !series.Frames[index].ValidAt.Before(target) })
+	if right < len(series.Frames) && series.Frames[right].ValidAt.Equal(target) {
+		frame := series.Frames[right]
+		frame.Levels = levels
+		return frame, true
+	}
+	if right == 0 || right == len(series.Frames) {
+		return VerticalFrame{}, false
+	}
+	left := right - 1
+	span := series.Frames[right].ValidAt.Sub(series.Frames[left].ValidAt)
+	if span <= 0 || !finite(series.Frames[left].Confidence) || !finite(series.Frames[right].Confidence) {
+		return VerticalFrame{}, false
+	}
+	fraction := float64(target.Sub(series.Frames[left].ValidAt)) / float64(span)
+	return VerticalFrame{
+		ValidAt: target,
+		Levels:  levels,
+		Confidence: series.Frames[left].Confidence +
+			fraction*(series.Frames[right].Confidence-series.Frames[left].Confidence),
+	}, true
 }
 
 func interpolateFinite(left, right, fraction float64) float64 {

@@ -217,6 +217,55 @@ func TestOverallSeeingScaleReservesTenForExceptionalSeeing(t *testing.T) {
 	}
 }
 
+func TestOverallOpticalTurbulencePenaltyIsBoundedAndWeakerThanCloudObstruction(t *testing.T) {
+	calibration := DefaultOverallIndexCalibration()
+	best := boundedOpticalTurbulenceFactor(1, 1, calibration)
+	if math.Abs(best-1) > 1e-12 {
+		t.Fatalf("best optical-turbulence factor = %v, want 1", best)
+	}
+	worst := boundedOpticalTurbulenceFactor(0, 0, calibration)
+	wantWorst := 1 - calibration.OpticalTurbulenceMaxPenalty
+	if math.Abs(worst-wantWorst) > 1e-12 {
+		t.Fatalf("worst optical-turbulence factor = %v, want bounded floor %v", worst, wantWorst)
+	}
+	// At the default square, 20% effective cloud obstruction is already a
+	// larger penalty and cloud transmission can continue all the way to zero.
+	cloudFactor := math.Pow(0.80, calibration.CloudWeight)
+	if !(cloudFactor < worst) {
+		t.Fatalf("20%% cloud factor %v is not stronger than worst turbulence %v", cloudFactor, worst)
+	}
+	moderate := boundedOpticalTurbulenceFactor(0.5, 0.5, calibration)
+	if !(moderate > worst && moderate < 1) {
+		t.Fatalf("moderate optical-turbulence factor = %v, want between %v and 1", moderate, worst)
+	}
+}
+
+func TestOverallPoorSeeingDoesNotVetoOtherwiseClearObserving(t *testing.T) {
+	calibration := DefaultOverallIndexCalibration()
+	// Force every physically valid synthetic value beyond the poor
+	// high-resolution boundary without changing the physical calculation.
+	calibration.GoodSeeingArcsec = 0.01
+	calibration.BadSeeingArcsec = 0.02
+	surface := clearSyntheticSurface()
+	for index := range surface.Frames {
+		surface.Frames[index].WindSpeedMS = 0
+		surface.Frames[index].WindGustMS = 0
+	}
+	frames, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 1 + 9*(1-calibration.OpticalTurbulenceMaxPenalty)
+	for index, frame := range frames {
+		if frame.SeeingQualityPercent != 0 {
+			t.Fatalf("frame %d seeing quality = %v, want forced poor boundary", index, frame.SeeingQualityPercent)
+		}
+		if math.Abs(frame.Index-want) > 1e-9 {
+			t.Fatalf("frame %d clear poor-seeing index = %v, want bounded %v", index, frame.Index, want)
+		}
+	}
+}
+
 func TestSurfaceWindPenaltyIsDelayedAndMild(t *testing.T) {
 	calibration := DefaultOverallIndexCalibration()
 	if got := surfaceWindFactor(SurfaceFrame{WindSpeedMS: 5, WindGustMS: 8}, calibration); got != 1 {

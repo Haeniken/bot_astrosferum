@@ -1,8 +1,9 @@
 package bot
 
 type Update struct {
-	ID      int64    `json:"update_id"`
-	Message *Message `json:"message"`
+	ID      int64
+	Message *Message
+	Action  *ActionInvocation
 }
 
 type Message struct {
@@ -33,6 +34,25 @@ type Button struct {
 }
 
 type Keyboard [][]Button
+
+type ActionID string
+
+// ActionInvocation is a platform-neutral callback from an inline action
+// button. Token is opaque platform state used only to acknowledge the action;
+// Data is the versioned application payload.
+type ActionInvocation struct {
+	Token string
+	Data  string
+	Chat  Chat
+	From  *User
+}
+
+type ActionButton struct {
+	Text string
+	Data string
+}
+
+type ActionKeyboard [][]ActionButton
 
 func DefaultKeyboard() Keyboard {
 	return Keyboard{{{Text: "📍 Отправить геопозицию", RequestLocation: true}}, {{Text: "💾 Сохранить координаты"}, {Text: "📌 Мои точки"}}}
