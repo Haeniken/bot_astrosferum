@@ -24,7 +24,7 @@ import (
 const (
 	DefaultWidth  = 1280
 	DefaultHeight = 960
-	Version       = "render-v10-localized"
+	Version       = "render-v14-readable-axis-scales"
 )
 
 type Options struct {
@@ -119,8 +119,8 @@ func heatMap(spec heatSpec, series forecast.VerticalSeries, diagnostics forecast
 	p.X.Tick.Label.Rotation = math.Pi / 3
 	p.X.Tick.Label.XAlign = draw.XRight
 	p.X.Tick.Label.YAlign = draw.YCenter
-	p.X.Tick.Label.Font.Size = vg.Points(9)
-	p.Y.Tick.Label.Font.Size = vg.Points(9)
+	p.X.Tick.Label.Font.Size = vg.Points(11)
+	p.Y.Tick.Label.Font.Size = vg.Points(14)
 
 	grid := &matrixGrid{values: spec.values}
 	colors := magma(96)
@@ -161,6 +161,9 @@ func CloudObstruction(destination string, series forecast.CloudSeries, calibrati
 	}
 	p := plot.New()
 	stylePlot(p)
+	p.Title.TextStyle.Font.Size = vg.Points(19)
+	p.X.Label.TextStyle.Font.Size = vg.Points(12)
+	p.Y.Label.TextStyle.Font.Size = vg.Points(14)
 	zone := forecast.TimeZoneLabel(series.Location.TimeZone, diagnostics.Times[0])
 	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Эффективная облачная преграда ICON: CLC + QC/QI (%%)\n%s", "(%.2f, %.2f) ICON Effective Cloud Obstruction: CLC + QC/QI (%%)\n%s"), series.Location.Latitude, series.Location.Longitude, zone)
 	p.X.Label.Text = fmt.Sprintf(localized(options, "Почасовое местное время · %s  |  видимая оптическая толщина QC/QI + высотно-зависимая защита от неопределённости CLC (нижние > средние > верхние)  |  run %s UTC  |  %s", "Hourly local time · %s  |  QC/QI visible optical depth + height-aware CLC uncertainty guard (low > middle > high)  |  run %s UTC  |  %s"), zone, series.RunID, Version)
@@ -172,15 +175,15 @@ func CloudObstruction(destination string, series forecast.CloudSeries, calibrati
 	p.X.Tick.Label.Rotation = math.Pi / 3
 	p.X.Tick.Label.XAlign = draw.XRight
 	p.X.Tick.Label.YAlign = draw.YCenter
-	p.X.Tick.Label.Font.Size = vg.Points(8)
-	p.Y.Tick.Label.Font.Size = vg.Points(9)
+	p.X.Tick.Label.Font.Size = vg.Points(16)
+	p.Y.Tick.Label.Font.Size = vg.Points(16)
 	colors := magma(96)
 	heat := plotter.NewHeatMap(&matrixGrid{values: obstruction}, colors)
 	heat.Min, heat.Max, heat.Rasterized = 0, 100, true
 	heat.NaN = color.NRGBA{R: 205, G: 209, B: 214, A: 255}
 	p.Add(heat)
 	addDayBoundaries(p, diagnostics.Times, series.Location.TimeZone, len(diagnostics.HeightKM))
-	labels, err := heatLabels(heatSpec{values: obstruction, minimum: 0, maximum: 100, decimals: 0, labelSize: vg.Points(10)}, colors)
+	labels, err := heatLabels(heatSpec{values: obstruction, minimum: 0, maximum: 100, decimals: 0, labelSize: vg.Points(13.5)}, colors)
 	if err != nil {
 		return err
 	}
@@ -201,7 +204,8 @@ func seeingBars(fileName string, series forecast.VerticalSeries, diagnostics for
 	p.X.Tick.Label.Rotation = math.Pi / 3
 	p.X.Tick.Label.XAlign = draw.XRight
 	p.X.Tick.Label.YAlign = draw.YCenter
-	p.X.Tick.Label.Font.Size = vg.Points(9)
+	p.X.Tick.Label.Font.Size = vg.Points(11)
+	p.Y.Tick.Label.Font.Size = vg.Points(14)
 	p.Y.Tick.Marker = plot.ConstantTicks([]plot.Tick{
 		{Value: 0, Label: "0"}, {Value: 2, Label: "2"}, {Value: 4, Label: "4"},
 		{Value: 6, Label: "6"}, {Value: 8, Label: "8"}, {Value: 10, Label: "10"},
@@ -431,14 +435,18 @@ func saveHeatAtomic(p *plot.Plot, options Options, destination string, heights [
 	axisX := data.Max.X + vg.Points(7)
 	axisStyle := draw.LineStyle{Color: color.NRGBA{R: 55, G: 58, B: 64, A: 255}, Width: vg.Points(0.7)}
 	full.StrokeLine2(axisStyle, axisX, data.Min.Y, axisX, data.Max.Y)
-	labelStyle := text.Style{Font: font.From(plot.DefaultFont, vg.Points(8)), Color: color.NRGBA{R: 55, G: 58, B: 64, A: 255}, XAlign: draw.XLeft, YAlign: draw.YCenter, Handler: plot.DefaultTextHandler}
+	supplementalSize := vg.Points(14)
+	if options.Width >= 3000 {
+		supplementalSize = vg.Points(16)
+	}
+	labelStyle := text.Style{Font: font.From(plot.DefaultFont, supplementalSize), Color: color.NRGBA{R: 55, G: 58, B: 64, A: 255}, XAlign: draw.XLeft, YAlign: draw.YCenter, Handler: plot.DefaultTextHandler}
 	for index, heightKM := range heights {
 		y := data.Y(p.Y.Norm(float64(index)))
 		full.StrokeLine2(axisStyle, axisX, y, axisX+vg.Points(3), y)
 		full.FillText(labelStyle, vg.Point{X: axisX + vg.Points(5), Y: y}, fmt.Sprintf("%.1f", heightKM))
 	}
 	headingStyle := labelStyle
-	headingStyle.Font.Size = vg.Points(9)
+	headingStyle.Font.Size = supplementalSize + vg.Points(1)
 	headingStyle.Font.Weight = xfont.WeightSemiBold
 	full.FillText(headingStyle, vg.Point{X: axisX, Y: data.Max.Y + vg.Points(12)}, localized(options, "Высота (км)", "Height (km)"))
 	barLeft, barRight := full.Min.X+vg.Points(130), full.Max.X-vg.Points(130)

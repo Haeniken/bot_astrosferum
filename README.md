@@ -10,23 +10,47 @@ Research-oriented Go bot for astronomy-condition forecasts.
 
 ## Saint Petersburg example
 
-The images below are real output for Saint Petersburg from ICON-EU run `2026072106 UTC`. They are a dated reproducibility snapshot, not a current forecast. The hero above is illustrative artwork and does not encode measurements.
+The images below are real English-language output for Saint Petersburg from ICON-EU run `2026072206 UTC`. They are a dated reproducibility snapshot, not a current forecast. The hero above is illustrative artwork and does not encode measurements.
 
-### Hourly weather and astronomical events
+### 1/7 · Hourly weather and astronomical events
 
-![Saint Petersburg hourly weather](docs/assets/examples/saint-petersburg/weather-hourly.png)
+![Saint Petersburg hourly weather](docs/assets/examples/saint-petersburg/en/weather-hourly.png)
 
-### Overall Astronomy Index
+### 2/7 · Overall Astronomy Index
 
-![Saint Petersburg Overall Astronomy Index](docs/assets/examples/saint-petersburg/overall-astronomy-index-hourly.png)
+![Saint Petersburg Overall Astronomy Index](docs/assets/examples/saint-petersburg/en/overall-astronomy-index-hourly.png)
 
-### Effective cloud obstruction by height
+Use this combined hourly score to shortlist the most promising observing windows: it brings modeled seeing, coherence time, cloud obstruction, and fog into one ranking. It is a planning estimate rather than a measurement, so inspect the following diagnostic charts before committing to a session.
 
-![Saint Petersburg effective cloud-obstruction heatmap](docs/assets/examples/saint-petersburg/cloud-obstruction-height-hourly.png)
+### 3/7 · Effective cloud obstruction by height
 
-### Vertical vector wind shear
+![Saint Petersburg effective cloud-obstruction heatmap](docs/assets/examples/saint-petersburg/en/cloud-obstruction-height-hourly.png)
 
-![Saint Petersburg vertical-vector-shear heatmap](docs/assets/examples/saint-petersburg/wind-vector-shear.png)
+This chart shows when and at what altitude optically significant cloud is expected. It helps distinguish dense low cloud from less obstructive high cloud and assess whether imaging, photometry, or an unobstructed target altitude is plausible.
+
+### 4/7 · Wind speed by pressure and height
+
+![Saint Petersburg wind-speed heatmap](docs/assets/examples/saint-petersburg/en/wind-speed.png)
+
+The vertical wind profile exposes strong-flow layers and the jet stream. These can signal degraded image stability or tracking conditions, although wind speed alone is not a direct seeing measurement.
+
+### 5/7 · Vertical vector wind shear
+
+![Saint Petersburg vertical-vector-shear heatmap](docs/assets/examples/saint-petersburg/en/wind-vector-shear.png)
+
+Vector shear measures how quickly the full wind vector changes per kilometre. Bright layers identify likely turbulence-producing boundaries and hours when fine-detail planetary or long-focal-length imaging may be less stable.
+
+### 6/7 · Wind-direction change between adjacent levels
+
+![Saint Petersburg wind-direction-delta heatmap](docs/assets/examples/saint-petersburg/en/wind-direction-delta.png)
+
+This diagnostic highlights turning between adjacent atmospheric levels. Read it together with wind speed and vector shear: a large turn in near-calm air matters much less than the same change in a strong flow.
+
+### 7/7 · Forecast Wind Seeing Index
+
+![Saint Petersburg Forecast Wind Seeing Index](docs/assets/examples/saint-petersburg/en/forecast-seeing-index.png)
+
+This compact index ranks hours using the modeled wind profile only. It is useful for comparing atmospheric stability, while the Overall Astronomy Index remains the final planning view because this chart deliberately excludes cloud and fog.
 
 Telegram supports native and textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
 
@@ -39,6 +63,28 @@ Telegram supports native and textual coordinates, up to 10 PostgreSQL-backed sav
 - [Privacy notice](PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+
+## System requirements
+
+The following profile is for one production instance with both ICON-EU and
+ICON Global enabled and the repository defaults. Development builds and the
+synthetic `render-sample` command need substantially fewer resources.
+
+| Resource | Minimum | Recommended |
+|---|---:|---:|
+| CPU | 4 x86-64 cores | 8–12 x86-64 cores |
+| RAM | 32 GiB | 48–64 GiB |
+| Free SSD space | 200 GiB | 300 GiB or more on NVMe |
+| Software | 64-bit Linux, Docker Engine, Docker Compose v2 | Current stable Docker on a supported Linux distribution |
+
+The default in-memory point-cache budget is `20 GiB` and the container uses
+`GOMEMLIMIT=24GiB`; lower-memory installations must reduce
+`app.point_cache_memory_limit`. Model synchronization refuses to start below
+the configured `sync.min_free_space` threshold, which defaults to `150 GiB`.
+The extra disk headroom is required for atomic downloads, two retained model
+runs, PostgreSQL, point/render caches, and light-pollution tiles. Outbound DNS
+and HTTPS access to DWD, Telegram, and the configured atlas sources is
+required; no inbound application port is needed for Telegram long polling.
 
 The repository contains no model runs or credentials. Runtime data and bind mounts live only below `/opt/docker/bot_astrosferum` on the production host.
 

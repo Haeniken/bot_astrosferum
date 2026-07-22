@@ -115,7 +115,7 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 			CloudTransmissionPercent: 19.7, FogRisk: 2,
 		},
 	}
-	_, inside, err := overallIndexLabels(frames, magma(96), Options{Language: "en"})
+	top, inside, err := overallIndexLabels(frames, magma(96), Options{Language: "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +125,11 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 	if got, want := inside.Labels[1], "1.0″\nτ2.0\nT20% F"; got != want {
 		t.Fatalf("strict hybrid label = %q, want %q", got, want)
 	}
-	if inside.TextStyle[0].Font.Size < 8 {
+	if inside.TextStyle[0].Font.Size < 12 {
 		t.Fatalf("overall input label is too small: %v", inside.TextStyle[0].Font.Size)
+	}
+	if top.TextStyle[0].Font.Size < 13 {
+		t.Fatalf("overall index label is too small: %v", top.TextStyle[0].Font.Size)
 	}
 }
 

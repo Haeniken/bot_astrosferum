@@ -22,8 +22,15 @@ import (
 )
 
 const (
-	WeatherWidth  = 3200
-	WeatherHeight = 1080
+	WeatherWidth          = 3200
+	WeatherHeight         = 1080
+	weatherMainBottom     = 822
+	weatherPostCloudShift = 14
+	weatherCloudHeaderY   = 195
+	weatherLowCloudY      = 214
+	weatherMidCloudY      = 234
+	weatherHighCloudY     = 254
+	weatherTransparencyY  = 276
 )
 
 var (
@@ -67,9 +74,9 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		if sky.IsDay(frame.ValidAt) {
 			shade = weatherDay
 		}
-		draw.Draw(canvas, image.Rect(x0, 48, x1, 808), &image.Uniform{C: shade}, image.Point{}, draw.Src)
+		draw.Draw(canvas, image.Rect(x0, 48, x1, weatherMainBottom), &image.Uniform{C: shade}, image.Point{}, draw.Src)
 		if index > 0 {
-			drawLine(canvas, x0, 48, x0, 808, weatherGrid)
+			drawLine(canvas, x0, 48, x0, weatherMainBottom, weatherGrid)
 		}
 	}
 
@@ -79,29 +86,29 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		center := left + int((float64(index)+0.5)*columnWidth)
 		drawCentered(canvas, fonts.normalBold, center, 79, frame.ValidAt.In(zone).Format("15"), weatherText)
 		drawWeatherIcon(canvas, center, 126, int(math.Max(12, columnWidth*0.34)), frame, sky.IsDay(frame.ValidAt))
-		drawCentered(canvas, fonts.small, center, 214, fmt.Sprintf("%.0f", frame.LowCloudCoverPercent), cloudCriticalityColor(frame.LowCloudCoverPercent))
-		drawCentered(canvas, fonts.small, center, 229, fmt.Sprintf("%.0f", frame.MidCloudCoverPercent), cloudCriticalityColor(frame.MidCloudCoverPercent))
-		drawCentered(canvas, fonts.small, center, 244, fmt.Sprintf("%.0f", frame.HighCloudCoverPercent), cloudCriticalityColor(frame.HighCloudCoverPercent))
+		drawCentered(canvas, fonts.small, center, weatherLowCloudY, fmt.Sprintf("%.0f", frame.LowCloudCoverPercent), cloudCriticalityColor(frame.LowCloudCoverPercent))
+		drawCentered(canvas, fonts.small, center, weatherMidCloudY, fmt.Sprintf("%.0f", frame.MidCloudCoverPercent), cloudCriticalityColor(frame.MidCloudCoverPercent))
+		drawCentered(canvas, fonts.small, center, weatherHighCloudY, fmt.Sprintf("%.0f", frame.HighCloudCoverPercent), cloudCriticalityColor(frame.HighCloudCoverPercent))
 		transparency := "—"
 		var transparencyShade color.Color = weatherMuted
 		if value, available := frame.TransparencyProxyPercent(); available {
 			transparency = fmt.Sprintf("%.0f", value)
 			transparencyShade = transparencyColor(value)
 		}
-		drawCentered(canvas, fonts.small, center, 261, transparency, transparencyShade)
+		drawCentered(canvas, fonts.small, center, weatherTransparencyY, transparency, transparencyShade)
 		precipitation := "·"
 		if frame.PrecipitationMM >= 0.05 {
 			precipitation = fmt.Sprintf("%.1f", frame.PrecipitationMM)
 		}
-		drawCentered(canvas, fonts.normal, center, 290, precipitation, weatherCyan)
-		drawCentered(canvas, fonts.normalBold, center, 332, fmt.Sprintf("%+.0f", frame.TemperatureC), weatherOrange)
+		drawCentered(canvas, fonts.normal, center, 290+weatherPostCloudShift, precipitation, weatherCyan)
+		drawCentered(canvas, fonts.normalBold, center, 332+weatherPostCloudShift, fmt.Sprintf("%+.0f", frame.TemperatureC), weatherOrange)
 		pressure := frame.PressureHPA * 0.750061683
-		drawCentered(canvas, fonts.normal, center, 374, fmt.Sprintf("%.0f", pressure), weatherText)
-		drawCentered(canvas, fonts.normal, center, 416, fmt.Sprintf("%.0f", frame.WindSpeedMS), weatherText)
-		drawCentered(canvas, fonts.normal, center, 458, fmt.Sprintf("%.0f", frame.WindGustMS), gustColor(frame.WindGustMS))
-		drawWindArrow(canvas, center, 494, frame.WindDirectionDegrees, weatherText)
-		drawCentered(canvas, fonts.normal, center, 542, fmt.Sprintf("%.0f", frame.RelativeHumidityPercent), weatherText)
-		drawCentered(canvas, fonts.small, center, 584, fmt.Sprintf("%.1f", frame.DewPointSpreadC()), dewColor(frame.DewPointSpreadC()))
+		drawCentered(canvas, fonts.normal, center, 374+weatherPostCloudShift, fmt.Sprintf("%.0f", pressure), weatherText)
+		drawCentered(canvas, fonts.normal, center, 416+weatherPostCloudShift, fmt.Sprintf("%.0f", frame.WindSpeedMS), weatherText)
+		drawCentered(canvas, fonts.normal, center, 458+weatherPostCloudShift, fmt.Sprintf("%.0f", frame.WindGustMS), gustColor(frame.WindGustMS))
+		drawWindArrow(canvas, center, 494+weatherPostCloudShift, frame.WindDirectionDegrees, weatherText)
+		drawCentered(canvas, fonts.normal, center, 542+weatherPostCloudShift, fmt.Sprintf("%.0f", frame.RelativeHumidityPercent), weatherText)
+		drawCentered(canvas, fonts.small, center, 584+weatherPostCloudShift, fmt.Sprintf("%.1f", frame.DewPointSpreadC()), dewColor(frame.DewPointSpreadC()))
 	}
 
 	drawAstronomyRows(canvas, fonts, sky, surface.Frames, zone, left, columnWidth, options)
@@ -138,7 +145,7 @@ func drawWeatherDayHeaders(canvas *image.RGBA, fonts weatherFonts, frames []fore
 		}
 		drawCentered(canvas, fonts.normalBold, (x0+x1)/2, 31, label, weatherText)
 		if end < len(frames) {
-			drawLine(canvas, x1, 0, x1, 808, color.RGBA{R: 103, G: 144, B: 185, A: 220})
+			drawLine(canvas, x1, 0, x1, weatherMainBottom, color.RGBA{R: 103, G: 144, B: 185, A: 220})
 		}
 		start = end
 	}
@@ -150,20 +157,20 @@ func drawWeatherLabels(canvas *image.RGBA, fonts weatherFonts, left int, options
 		y    int
 	}{
 		{localized(options, "Местное время", "Local time"), 79}, {localized(options, "Условия", "Conditions"), 126},
-		{localized(options, "Осадки, мм/ч", "Precip., mm/h"), 290}, {localized(options, "Температура, °C", "Temperature, °C"), 332}, {localized(options, "Давление, мм рт. ст.", "Pressure, mmHg"), 374},
-		{localized(options, "Ветер, м/с", "Wind, m/s"), 416}, {localized(options, "Порывы, м/с", "Gusts, m/s"), 458}, {localized(options, "Направление", "Direction"), 500},
-		{localized(options, "Влажность, %", "Humidity, %"), 542}, {"T−Td, °C", 584}, {localized(options, "Солнце", "Sun"), 626},
-		{localized(options, "Луна", "Moon"), 668}, {localized(options, "Фаза Луны", "Moon phase"), 710}, {localized(options, "Юпитер", "Jupiter"), 752}, {localized(options, "Сатурн", "Saturn"), 794},
+		{localized(options, "Осадки, мм/ч", "Precip., mm/h"), 290 + weatherPostCloudShift}, {localized(options, "Температура, °C", "Temperature, °C"), 332 + weatherPostCloudShift}, {localized(options, "Давление, мм рт. ст.", "Pressure, mmHg"), 374 + weatherPostCloudShift},
+		{localized(options, "Ветер, м/с", "Wind, m/s"), 416 + weatherPostCloudShift}, {localized(options, "Порывы, м/с", "Gusts, m/s"), 458 + weatherPostCloudShift}, {localized(options, "Направление", "Direction"), 500 + weatherPostCloudShift},
+		{localized(options, "Влажность, %", "Humidity, %"), 542 + weatherPostCloudShift}, {"T−Td, °C", 584 + weatherPostCloudShift}, {localized(options, "Солнце", "Sun"), 626 + weatherPostCloudShift},
+		{localized(options, "Луна", "Moon"), 668 + weatherPostCloudShift}, {localized(options, "Фаза Луны", "Moon phase"), 710 + weatherPostCloudShift}, {localized(options, "Юпитер", "Jupiter"), 752 + weatherPostCloudShift}, {localized(options, "Сатурн", "Saturn"), 794 + weatherPostCloudShift},
 	}
 	for _, label := range labels {
 		drawRight(canvas, fonts.normal, left-18, label.y, label.text, weatherMuted)
 	}
-	drawRight(canvas, fonts.small, left-18, 198, localized(options, "Облака по ярусам, %", "Cloud layers, %"), weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 214, localized(options, "Нижний", "Low"), weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 229, localized(options, "Средний", "Middle"), weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 244, localized(options, "Верхний", "High"), weatherMuted)
-	drawRight(canvas, fonts.small, left-18, 261, localized(options, "Прозрачность %", "Transparency %"), weatherMuted)
-	for _, y := range []int{184, 268, 310, 352, 394, 436, 478, 520, 562, 604, 646, 686, 724, 766, 808} {
+	drawRight(canvas, fonts.small, left-18, weatherCloudHeaderY, localized(options, "Облака по ярусам, %", "Cloud layers, %"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, weatherLowCloudY, localized(options, "Нижний", "Low"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, weatherMidCloudY, localized(options, "Средний", "Middle"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, weatherHighCloudY, localized(options, "Верхний", "High"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, weatherTransparencyY, localized(options, "Прозрачность %", "Transparency %"), weatherMuted)
+	for _, y := range []int{184, 282, 310 + weatherPostCloudShift, 352 + weatherPostCloudShift, 394 + weatherPostCloudShift, 436 + weatherPostCloudShift, 478 + weatherPostCloudShift, 520 + weatherPostCloudShift, 562 + weatherPostCloudShift, 604 + weatherPostCloudShift, 646 + weatherPostCloudShift, 686 + weatherPostCloudShift, 724 + weatherPostCloudShift, 766 + weatherPostCloudShift, 808 + weatherPostCloudShift} {
 		drawLine(canvas, 0, y, WeatherWidth, y, weatherGrid)
 	}
 }
@@ -188,34 +195,34 @@ func drawAstronomyRows(canvas *image.RGBA, fonts weatherFonts, sky astronomy.Ser
 			continue
 		}
 		center := left + int((float64(first+last+1)/2)*columnWidth)
-		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626, day.Sunrise, true, false, day.MoonCycle)
-		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626, day.Sunset, false, false, day.MoonCycle)
+		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626+weatherPostCloudShift, day.Sunrise, true, false, day.MoonCycle)
+		drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 626+weatherPostCloudShift, day.Sunset, false, false, day.MoonCycle)
 		phaseName := astronomy.PhaseNameRU(day.MoonPhase)
 		phaseText := fmt.Sprintf("%s · %.0f%% · %.1f д", phaseName, day.MoonIlluminationPercent, day.MoonAgeDays)
 		if options.Language != "ru" {
 			phaseText = fmt.Sprintf("%s · %.0f%% · %.1f d", englishMoonPhase(day.MoonPhase), day.MoonIlluminationPercent, day.MoonAgeDays)
 		}
 		if day.MoonAlwaysUp {
-			drawCentered(canvas, fonts.normal, center, 668, localized(options, "над горизонтом весь день", "above horizon all day"), weatherText)
+			drawCentered(canvas, fonts.normal, center, 668+weatherPostCloudShift, localized(options, "над горизонтом весь день", "above horizon all day"), weatherText)
 		} else if day.MoonAlwaysDown {
-			drawCentered(canvas, fonts.normal, center, 668, localized(options, "ниже горизонта весь день", "below horizon all day"), weatherText)
+			drawCentered(canvas, fonts.normal, center, 668+weatherPostCloudShift, localized(options, "ниже горизонта весь день", "below horizon all day"), weatherText)
 		} else {
-			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668, day.Moonrise, true, true, day.MoonCycle)
-			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668, day.Moonset, false, true, day.MoonCycle)
+			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668+weatherPostCloudShift, day.Moonrise, true, true, day.MoonCycle)
+			drawAstronomyTimelineEvent(canvas, fonts, frames, left, columnWidth, 668+weatherPostCloudShift, day.Moonset, false, true, day.MoonCycle)
 		}
 		phaseCenter := center + 10
 		phaseWidth := font.MeasureString(fonts.small, phaseText).Round()
-		drawMoonPhase(canvas, phaseCenter-phaseWidth/2-20, 704, 11, day.MoonCycle)
-		drawCentered(canvas, fonts.small, phaseCenter, 710, phaseText, weatherText)
-		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 752, day.JupiterRise, true, false)
-		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 752, day.JupiterSet, false, false)
-		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 794, day.SaturnRise, true, true)
-		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 794, day.SaturnSet, false, true)
+		drawMoonPhase(canvas, phaseCenter-phaseWidth/2-20, 704+weatherPostCloudShift, 11, day.MoonCycle)
+		drawCentered(canvas, fonts.small, phaseCenter, 710+weatherPostCloudShift, phaseText, weatherText)
+		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 752+weatherPostCloudShift, day.JupiterRise, true, false)
+		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 752+weatherPostCloudShift, day.JupiterSet, false, false)
+		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 794+weatherPostCloudShift, day.SaturnRise, true, true)
+		drawPlanetTimelineEvent(canvas, fonts, frames, left, columnWidth, 794+weatherPostCloudShift, day.SaturnSet, false, true)
 	}
 }
 
 func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) {
-	drawText(canvas, fonts.normalBold, 22, 832, localized(options, "Легенда пиктограмм", "Icon legend"), weatherText)
+	drawText(canvas, fonts.normalBold, 22, 832+weatherPostCloudShift, localized(options, "Легенда пиктограмм", "Icon legend"), weatherText)
 	items := []struct {
 		x, y                 int
 		cloud, precipitation float64
@@ -223,30 +230,29 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) 
 		day                  bool
 		label                string
 	}{
-		{140, 854, 5, 0, 8, true, localized(options, "ясно, день", "clear, day")},
-		{760, 854, 5, 0, 8, false, localized(options, "ясно, ночь", "clear, night")},
-		{1380, 854, 45, 0, 8, true, localized(options, "переменная облачность, день", "partly cloudy, day")},
-		{2180, 854, 45, 0, 8, false, localized(options, "переменная облачность, ночь", "partly cloudy, night")},
-		{140, 889, 95, 0, 8, false, localized(options, "пасмурно", "overcast")},
-		{760, 889, 90, 1, 8, false, localized(options, "дождь", "rain")},
-		{1380, 889, 90, 1, 0, false, localized(options, "снег", "snow")},
+		{140, 854 + weatherPostCloudShift, 5, 0, 8, true, localized(options, "ясно, день", "clear, day")},
+		{760, 854 + weatherPostCloudShift, 5, 0, 8, false, localized(options, "ясно, ночь", "clear, night")},
+		{1380, 854 + weatherPostCloudShift, 45, 0, 8, true, localized(options, "переменная облачность, день", "partly cloudy, day")},
+		{2180, 854 + weatherPostCloudShift, 45, 0, 8, false, localized(options, "переменная облачность, ночь", "partly cloudy, night")},
+		{140, 889 + weatherPostCloudShift, 95, 0, 8, false, localized(options, "пасмурно", "overcast")},
+		{760, 889 + weatherPostCloudShift, 90, 1, 8, false, localized(options, "дождь", "rain")},
+		{1380, 889 + weatherPostCloudShift, 90, 1, 0, false, localized(options, "снег", "snow")},
 	}
 	for _, item := range items {
 		frame := forecast.SurfaceFrame{CloudCoverPercent: item.cloud, PrecipitationMM: item.precipitation, TemperatureC: item.temperature, DewPointC: item.temperature - 6}
 		drawWeatherIcon(canvas, item.x, item.y, 13, frame, item.day)
 		drawText(canvas, fonts.small, item.x+24, item.y+6, item.label, weatherText)
 	}
-	drawDrop(canvas, 2050, 884, 8, weatherCyan)
-	drawText(canvas, fonts.small, 2072, 895, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
-	drawDrop(canvas, 2650, 884, 8, weatherOrange)
-	drawText(canvas, fonts.small, 2672, 895, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
-	drawFog(canvas, 140, 916, 13, weatherCyan)
-	drawText(canvas, fonts.small, 174, 930, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
-	drawFog(canvas, 1200, 916, 13, weatherOrange)
-	drawText(canvas, fonts.small, 1234, 930, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
-	drawText(canvas, fonts.small, 22, 958, localized(options, "Роса — подготовить обогрев/бленду; она не ухудшает seeing.", "Dew — prepare a heater/dew shield; it does not worsen seeing."), weatherMuted)
-	drawText(canvas, fonts.small, 22, 986, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
-	drawText(canvas, fonts.small, 22, 1014, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
+	drawDrop(canvas, 2050, 884+weatherPostCloudShift, 8, weatherCyan)
+	drawText(canvas, fonts.small, 2072, 895+weatherPostCloudShift, localized(options, "возможна роса: T−Td ≤3°C", "possible dew: T−Td ≤3°C"), weatherText)
+	drawDrop(canvas, 2650, 884+weatherPostCloudShift, 8, weatherOrange)
+	drawText(canvas, fonts.small, 2672, 895+weatherPostCloudShift, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
+	drawFog(canvas, 140, 916+weatherPostCloudShift, 13, weatherCyan)
+	drawText(canvas, fonts.small, 174, 930+weatherPostCloudShift, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
+	drawFog(canvas, 1200, 916+weatherPostCloudShift, 13, weatherOrange)
+	drawText(canvas, fonts.small, 1234, 930+weatherPostCloudShift, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
+	drawText(canvas, fonts.normal, 22, 958+weatherPostCloudShift, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
+	drawText(canvas, fonts.normal, 22, 986+weatherPostCloudShift, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
 }
 
 func englishMoonPhase(value string) string {
