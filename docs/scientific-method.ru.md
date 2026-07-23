@@ -144,7 +144,7 @@ Masciadri & Jabouille (2001). Применение в
 ```math
 \begin{aligned}
 h_{\mathrm{PBL}}
-&=\operatorname{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL},\\
+&=\mathrm{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL},\\
 J_{\mathrm{GL}}&=\int_{\mathrm{surface}}^{h_{\mathrm{PBL}}}C_{n,\mathrm{GL}}^2\,dz,\\
 J_{\mathrm{FA}}&=\int_{h_{\mathrm{PBL}}}^{\mathrm{model\ top}}C_{n,\mathrm{FA}}^2\,dz,\\
 J&=J_{\mathrm{GL}}+J_{\mathrm{FA}},\\[2pt]
@@ -163,7 +163,7 @@ C_\varepsilon
 Здесь `lambda=500e-9 m`. Формулы для `r0` и `0.98 lambda/r0` — (13) и (14) в
 [Cuevas et al. (2024)](https://academic.oup.com/mnras/article/529/3/2208/7617711);
 исходное определение параметра Фрида дано в
-[Fried (1965)](https://opg.optica.org/abstract.cfm?uri=josa-55-11-1427).
+[D. L. Fried, “Optical Resolution Through a Randomly Inhomogeneous Medium for Very Long and Very Short Exposures,” JOSA 56(10), 1372–1379 (1966)](https://doi.org/10.1364/JOSA.56.001372).
 Реализация непосредственно вычисляет эти два базовых определения. Поэтому
 алгебраически согласованный коэффициент равен `5.306963958…`.
 Ограничение `500..2000 m` — настраиваемое **правило проекта**, а не
@@ -308,11 +308,11 @@ q_{\mathrm{cloud}}&=\min(q_{\mathrm{cloud}},1-B_{\mathrm{guard}}).
 ```math
 \begin{aligned}
 q_{\mathrm{seeing}}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
 {\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
 q_{\tau}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
 {\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
 q_{\mathrm{coherence}}&=1-w_{\tau}(1-q_{\tau}),\\
@@ -326,11 +326,11 @@ f_{\mathrm{turbulence}}
 
 ```math
 \begin{aligned}
-t&=\operatorname{clamp}\!\left(\frac{x-a}{b-a},0,1\right),\\
-\operatorname{smoothstep}(x;a,b)&=t^2(3-2t),\\
+t&=\mathrm{clamp}\!\left(\frac{x-a}{b-a},0,1\right),\\
+\mathrm{smoothstep}(x;a,b)&=t^2(3-2t),\\
 r_{\mathrm{surface}}
-&=\max\!\left[\operatorname{smoothstep}(V_{10};8.5,15),
-\operatorname{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
+&=\max\!\left[\mathrm{smoothstep}(V_{10};8.5,15),
+\mathrm{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
 q_{\mathrm{surface}}&=1-0.20\,r_{\mathrm{surface}}.
 \end{aligned}\tag{F10}
 ```
@@ -349,7 +349,7 @@ q_{\mathrm{fog}}=
 Q&=f_{\mathrm{turbulence}}
 q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
 q_{\mathrm{surface}}q_{\mathrm{fog}},\\
-\mathrm{Overall}&=1+9\,\operatorname{clamp}(Q,0,1).
+\mathrm{Overall}&=1+9\,\mathrm{clamp}(Q,0,1).
 \end{aligned}\tag{F12}
 ```
 
@@ -434,11 +434,11 @@ J&=\int C_n^2\,dz,\\
 \tau_0&=C_\tau\lambda^{6/5}
 \left(\int C_n^2\lvert V\rvert^{5/3}\,dz\right)^{-3/5},\\[2pt]
 q_{\mathrm{seeing}}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
 {\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
 q_{\tau}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
 {\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
 q_{\mathrm{turbulence}}
@@ -449,7 +449,7 @@ f_{\mathrm{turbulence}}
 +p_{\mathrm{turbulence}}q_{\mathrm{turbulence}},\\
 Q&=f_{\mathrm{turbulence}}q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
 q_{\mathrm{surface}}q_{\mathrm{fog}},\\
-\mathrm{Overall}&=1+9\,\operatorname{clamp}(Q,0,1).
+\mathrm{Overall}&=1+9\,\mathrm{clamp}(Q,0,1).
 \end{aligned}
 ```
 
@@ -517,7 +517,7 @@ T_{\mathrm{cloud}}&=0.0006
 \begin{aligned}
 \theta&=T\left(\frac{1000}{P}\right)^{0.286},\\
 M&=-79\times10^{-6}\frac{P}{T^2}\frac{d\theta}{dz},\\
-S&=\frac{\operatorname{hypot}(du,dv)}{dz},\\
+S&=\frac{\mathrm{hypot}(du,dv)}{dz},\\
 Y&=
 \begin{cases}
 0.362+16.728S-192.347\,\dfrac{dT}{dz}, & \text{тропосфера},\\
@@ -549,7 +549,7 @@ HMNSP99 полезна для свободной атмосферы, но не �
 
 ```math
 h_{\mathrm{PBL}}
-=\operatorname{clamp}(\mathrm{MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL}.
+=\mathrm{clamp}(\mathrm{MH},500\,\mathrm{m},2000\,\mathrm{m})\ \mathrm{AGL}.
 ```
 
 Нижняя граница 500 м не даёт очень мелкому или неустойчивому `MH` снова
@@ -592,7 +592,7 @@ P^{\,2(1-2R/c_p)}
 ```math
 \begin{aligned}
 h_{\mathrm{PBL}}
-&=\operatorname{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m}),\\
+&=\mathrm{clamp}(\mathrm{ICON\_MH},500\,\mathrm{m},2000\,\mathrm{m}),\\
 J_{\mathrm{GL}}&=\int_{0}^{h_{\mathrm{PBL}}\ \mathrm{AGL}}C_n^2\,dz,\\
 J_{\mathrm{FA}}&=\int_{h_{\mathrm{PBL}}\ \mathrm{AGL}}^{\mathrm{model\ top}}C_n^2\,dz,\\
 J_{\mathrm{total}}&=J_{\mathrm{GL}}+J_{\mathrm{FA}}.
@@ -695,7 +695,7 @@ k&=\frac{2\pi}{\lambda},\\
 ```math
 \begin{aligned}
 q_{\mathrm{seeing}}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon)}
 {\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
 \varepsilon_{\mathrm{best}}&=0.5\ \mathrm{arcsec},
@@ -708,7 +708,7 @@ q_{\mathrm{seeing}}
 ```math
 \begin{aligned}
 q_{\tau}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\tau_0/\tau_{\mathrm{bad}})}
 {\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
 \tau_{\mathrm{best}}&=5.2\ \mathrm{ms},
@@ -838,8 +838,8 @@ q_{\mathrm{fog}}=
 ```math
 \begin{aligned}
 r_{\mathrm{surface}}
-&=\max\!\left[\operatorname{smoothstep}(V_{10};8.5,15),
-\operatorname{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
+&=\max\!\left[\mathrm{smoothstep}(V_{10};8.5,15),
+\mathrm{smoothstep}(V_{\mathrm{gust}};12,22)\right],\\
 q_{\mathrm{surface}}&=1-0.20r_{\mathrm{surface}}.
 \end{aligned}
 ```
@@ -854,7 +854,7 @@ Q_{\mathrm{normalized}}
 &=f_{\mathrm{turbulence}}q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
 q_{\mathrm{surface}}q_{\mathrm{fog}},\\
 \mathrm{Overall\ Astronomy\ Index}
-&=1+9\,\operatorname{clamp}(Q_{\mathrm{normalized}},0,1).
+&=1+9\,\mathrm{clamp}(Q_{\mathrm{normalized}},0,1).
 \end{aligned}
 ```
 
@@ -1108,7 +1108,7 @@ HMNSP99 даёт около `0.70…0.77″` без PBL. Поэтому теку
 
 ```math
 h_{\mathrm{PBL}}=
-\operatorname{clamp}(\mathrm{MH},500\ \mathrm{m},2000\ \mathrm{m})
+\mathrm{clamp}(\mathrm{MH},500\ \mathrm{m},2000\ \mathrm{m})
 \quad\mathrm{AGL},
 ```
 
@@ -1356,7 +1356,7 @@ Global нет ни кнопки «Горизонт», ни запускаемо�
 r_0&=R+h_0,\\
 r(s)&=\sqrt{r_0^2+s^2+2r_0s\sin e},\\
 h(s)&=r(s)-R,\\
-\alpha(s)&=\operatorname{atan2}(s\cos e,\ r_0+s\sin e),\\
+\alpha(s)&=\mathrm{atan2}(s\cos e,\ r_0+s\sin e),\\
 x(s)&=R\alpha(s).
 \end{aligned}\tag{F13}
 ```
@@ -1390,7 +1390,7 @@ s_{\mathrm{top}}
 &=\arcsin\!\left(\sin\phi_1\cos\alpha
 +\cos\phi_1\sin\alpha\cos A\right),\\
 \lambda_2
-&=\lambda_1+\operatorname{atan2}\!\left(
+&=\lambda_1+\mathrm{atan2}\!\left(
 \sin A\sin\alpha\cos\phi_1,\;
 \cos\alpha-\sin\phi_1\sin\phi_2\right).
 \end{aligned}\tag{F15}
@@ -1520,7 +1520,7 @@ s_{\mathrm{geo}}(0,10^\circ)&=2.771252681\ldots.
 {4(1000)\,r_{\mathrm{liquid}}}
 +\frac{3(2.1)\,\mathrm{CWP}_{\mathrm{ice},b}}
 {4(916.7)\,r_{\mathrm{ice}}},\\[2pt]
-C_b&=\operatorname{clamp}\!\left(\max_{j\in b}C_{\mathrm{LC},j},0,1\right),\\
+C_b&=\mathrm{clamp}\!\left(\max_{j\in b}C_{\mathrm{LC},j},0,1\right),\\
 \widehat C_b&=
 \begin{cases}
 0, & C_b<10^{-6}\ \land\ \tau_b<10^{-9},\\
@@ -1575,7 +1575,7 @@ T_H=\min(T_{\mathrm{condensate}},T_{\mathrm{guard}}).
 
 ```math
 q_{\mathrm{interp}}=
-\operatorname{clamp}\!\left(
+\mathrm{clamp}\!\left(
 \frac{\Delta z_{\mathrm{lower}}+\Delta z_{\mathrm{upper}}}
 {2\,\Delta z_{\mathrm{bracket}}},0.35,0.85\right).
 ```
@@ -1627,13 +1627,13 @@ HHL не является локальной цифровой моделью р�
 X_{\mathrm{geo}}&=\frac{s_{\mathrm{top}}(h_0,10^\circ)}{H-h_0},
 &s_{\mathrm{geo}}&=X_{\mathrm{geo}}^{3/5},\\[2pt]
 q_{\mathrm{seeing},H}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln[(\varepsilon_{\mathrm{bad}}s_{\mathrm{geo}})/\varepsilon_H]}
 {\ln[(\varepsilon_{\mathrm{bad}}s_{\mathrm{geo}})/(\varepsilon_{\mathrm{best}}s_{\mathrm{geo}})]},0,1\right),\\
 \tau_{\mathrm{best},H}&=\frac{\tau_{\mathrm{best}}}{s_{\mathrm{geo}}},
 &\tau_{\mathrm{bad},H}&=\frac{\tau_{\mathrm{bad}}}{s_{\mathrm{geo}}},\\
 q_{\tau,H}
-&=\operatorname{clamp}\!\left(
+&=\mathrm{clamp}\!\left(
 \frac{\ln(\tau_{0,H}/\tau_{\mathrm{bad},H})}
 {\ln(\tau_{\mathrm{best},H}/\tau_{\mathrm{bad},H})},0,1\right),\\
 q_{\mathrm{turbulence},H}
@@ -1644,7 +1644,7 @@ f_{\mathrm{turbulence},H}
 +p_{\mathrm{turbulence}}q_{\mathrm{turbulence},H},\\
 Q_H&=f_{\mathrm{turbulence},H}T_H^{w_{\mathrm{cloud}}}
 q_{\mathrm{surface}}q_{\mathrm{fog}},\\
-\mathrm{HorizonIndex}&=1+9\,\operatorname{clamp}(Q_H,0,1).
+\mathrm{HorizonIndex}&=1+9\,\mathrm{clamp}(Q_H,0,1).
 \end{aligned}\tag{F20}
 ```
 
@@ -1754,7 +1754,7 @@ R_{\mathrm{dir}}&=\frac{N_{\mathrm{available\ directions}}}{8},\\
 Входная оценка срока ICON задаётся проектной функцией
 
 ```math
-c_{\mathrm{ICON}}=\operatorname{max}\!\left(0.65,
+c_{\mathrm{ICON}}=\max\!\left(0.65,
 0.96-0.26\frac{h_{\mathrm{forecast}}}{72}\right).
 ```
 
