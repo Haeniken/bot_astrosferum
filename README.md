@@ -93,6 +93,17 @@ synthetic `render-sample` command need substantially fewer resources.
 | Free SSD space | 200 GiB | 300 GiB or more on NVMe |
 | Software | 64-bit Linux, Docker Engine, Docker Compose v2 | Current stable Docker on a supported Linux distribution |
 
+Building the production image requires outbound HTTPS access to GHCR, Docker
+Hub, the Ubuntu package repositories, and the Trivy vulnerability database.
+The build applies the currently available Ubuntu security updates and removes
+the unused `pebble` helper inherited from the GDAL base image. Allow at least
+`15 GiB` of additional temporary Docker space while rebuilding and scanning.
+
+Source development and the required pre-push checks use Go `1.26.5`,
+`golangci-lint 2.12.2`, and `govulncheck 1.6.0`. CI additionally builds the
+production image and rejects `CRITICAL` or `HIGH` Trivy findings; it does not
+produce a separate `MEDIUM`/`LOW` report.
+
 The default in-memory point-cache budget is `20 GiB` and the container uses
 `GOMEMLIMIT=24GiB`; lower-memory installations must reduce
 `app.point_cache_memory_limit`. Model synchronization refuses to start below

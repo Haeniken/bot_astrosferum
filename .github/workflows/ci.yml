@@ -3,6 +3,8 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
@@ -24,3 +26,27 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build -o /tmp/bot_astrosferum ./cmd/bot_astrosferum
+      - name: Vulnerability check
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: "1.26.5"
+          go-package: ./...
+          repo-checkout: false
+
+  image-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build production image
+        run: docker build --pull -t bot_astrosferum:${{ github.sha }} .
+      - name: Block Critical and High vulnerabilities
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f \
+            image \
+            --scanners vuln \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --no-progress \
+            bot_astrosferum:${{ github.sha }}
