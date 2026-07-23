@@ -13,11 +13,13 @@ ARG APP_UID=1000
 ARG APP_GID=1000
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         cdo \
         libeccodes-tools \
         tzdata \
+    && rm -f /usr/bin/pebble \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/bot_astrosferum /usr/local/bin/bot_astrosferum
