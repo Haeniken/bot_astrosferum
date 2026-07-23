@@ -1,6 +1,13 @@
 # Scientific method and Overall Astronomy Index
 
-Status: research-software method and calculation note, revised 22 July 2026.
+**Author:** Sergey Borzenkov\
+**ORCID:** [0009-0005-5804-5011](https://orcid.org/0009-0005-5804-5011)\
+**Project:** Astrosferum\
+**Document type:** Research-software methodology and calculation note\
+**Version:** 1.0\
+**Revision date:** 23 July 2026
+
+Status: research-software method and calculation note, revised 23 July 2026.
 This document is the canonical description of sources, units, formulas,
 control calculations, validation, uncertainty, and configurable engineering
 decisions in `bot_astrosferum`.
