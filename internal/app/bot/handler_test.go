@@ -68,6 +68,49 @@ type fakeMessenger struct {
 	documents []string
 }
 
+type contextCompositionProvider struct{}
+
+func (contextCompositionProvider) AtmosphericComposition(ctx context.Context, _ forecast.Location, _ []time.Time) (forecast.AtmosphericCompositionSeries, error) {
+	<-ctx.Done()
+	return forecast.AtmosphericCompositionSeries{}, ctx.Err()
+}
+
+func TestAtmosphericCompositionUsesBoundedServiceContext(t *testing.T) {
+	handler, err := NewHandler(&fakeMessenger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceContext, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+	if err := handler.EnableAtmosphericComposition(serviceContext, contextCompositionProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	handler.atmosphericCompositionTimeout = 15 * time.Millisecond
+	result := <-handler.startAtmosphericComposition(forecast.Location{}, []time.Time{time.Now()})
+	if !errors.Is(result.err, context.DeadlineExceeded) {
+		t.Fatalf("composition operation error = %v, want deadline exceeded", result.err)
+	}
+
+	handler.atmosphericCompositionTimeout = time.Second
+	resultChannel := handler.startAtmosphericComposition(forecast.Location{}, []time.Time{time.Now()})
+	cancelService()
+	result = <-resultChannel
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("composition shutdown error = %v, want canceled", result.err)
+	}
+}
+
+func TestEnableAtmosphericCompositionRejectsMissingRootContext(t *testing.T) {
+	handler, err := NewHandler(&fakeMessenger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	//nolint:staticcheck // This deliberately verifies defensive rejection of a nil service context.
+	if err := handler.EnableAtmosphericComposition(nil, contextCompositionProvider{}); err == nil {
+		t.Fatal("missing atmospheric-composition root context was accepted")
+	}
+}
+
 type fakeActionMessenger struct {
 	fakeMessenger
 	actionMessages []ActionKeyboard
@@ -173,7 +216,8 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 		"/forecast 59.9386 30.3141", "Forecast Wind Seeing Index", "1…10", "часовой зоне",
 		"по горизонтали", "сдвиг", "облачность не меняет wind-based seeing", "850 hPa ≈ 1,5 км",
 		"нижние", "средние", "верхние", "длинные выдержки", "не означает плохой сиинг",
-		"ICON (TKE до динамической MH 500–2000 м AGL + HMNSP99 выше)", "MH — почасовая", "τ₀", "f/F", "в Overall Index она не входит",
+		"сохранившаяся пригодность", "точное аддитивное разложение", "индекс 1", "неполные данные",
+		"Эталон V, зенит", "PWV/AOD/O₃/Луна/PSF-сиинг", "Нет GEOS-CF", "Overall доступен", "в Overall Index она не входит",
 	} {
 		if !strings.Contains(messenger.messages[0].text, expected) {
 			t.Fatalf("help does not contain %q", expected)
@@ -184,6 +228,41 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 	}
 	if strings.Contains(messenger.messages[0].text, "«Горизонт»") {
 		t.Fatal("disabled Horizon was advertised in /start")
+	}
+}
+
+func TestOverallChartCaptionLocalized(t *testing.T) {
+	tests := []struct {
+		name      string
+		language  userLanguage
+		expected  []string
+		forbidden string
+	}{
+		{
+			name:      "russian",
+			language:  languageRussian,
+			expected:  []string{"<b>2/7", "сохранившаяся пригодность", "точно разлагают потери", "жёсткий запрет из-за осадков", "«!» — неполные данные", "PWV/AOD/O₃/Луна/PSF-сиинг", "Без GEOS-CF"},
+			forbidden: "The lower segment",
+		},
+		{
+			name:      "english",
+			language:  languageEnglish,
+			expected:  []string{"<b>2/7", "retained suitability", "exact additive loss decomposition", "hard precipitation veto", "incomplete inputs", "PWV/AOD/O₃/Moon/PSF seeing", "If GEOS-CF is unavailable"},
+			forbidden: "Снизу",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			caption := overallChartCaption(test.language, 2, 7)
+			for _, expected := range test.expected {
+				if !strings.Contains(caption, expected) {
+					t.Fatalf("caption %q does not contain %q", caption, expected)
+				}
+			}
+			if strings.Contains(caption, test.forbidden) {
+				t.Fatalf("caption contains wrong-language text %q: %q", test.forbidden, caption)
+			}
+		})
 	}
 }
 
@@ -389,6 +468,9 @@ func TestHandlerOffersFullPeriodHorizonOnlyForICONEU(t *testing.T) {
 	}
 	if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].text, "8. «Горизонт»") {
 		t.Fatalf("enabled Horizon missing from /start: %#v", messenger.messages)
+	}
+	if len([]byte(messenger.messages[0].text)) > 4096 {
+		t.Fatalf("Russian help with Horizon is too long: %d bytes", len([]byte(messenger.messages[0].text)))
 	}
 	location := forecast.Location{Latitude: 59.9386, Longitude: 30.3141, TimeZone: "Europe/Moscow"}
 	handler.offerHorizon(context.Background(), 42, 1, "icon-global", horizonTestRunID, location, 17, languageRussian)

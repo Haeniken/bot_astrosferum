@@ -1,6 +1,6 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-07-22
+Date: 2026-07-26
 Stage: Stage 3 live ICON → Telegram and VK; optional ICON-EU Horizon analysis implemented
 Deployment target: operator-managed host
 
@@ -33,11 +33,56 @@ Deployment target: operator-managed host
 - ICON-EU and ICON Global keep the preceding complete `current` run available while every component of a newer run downloads; `current` changes through one atomic symlink operation only after complete validation;
 - an exclusive lock prevents overlapping syncs; the scheduler probes once at startup and every 15 minutes thereafter, retaining two runs; user requests never download data and only read the last complete publication;
 - point extraction reads 25 vertical profiles concurrently from the current manifest;
-- an independent surface sync publishes 79 hourly `f000…f078` bundles containing `T_2M`, `TD_2M`, `RELHUM_2M`, `CLCT/CLCL/CLCM/CLCH`, `TOT_PREC`, `U_10M`, `V_10M`, `VMAX_10M`, `PMSL`, `VIS`, `TQV`, and exact total-column `TQC/TQI`;
+- an independent surface sync publishes 79 hourly `f000…f078` bundles containing `T_2M`, `TD_2M`, `RELHUM_2M`, `CLCT/CLCL/CLCM/CLCH`, `TOT_PREC`, `U_10M`, `V_10M`, `VMAX_10M`, `PMSL`, `VIS`, `TQV`, and exact total-column `TQC/TQI`; `PMSL` is retained for the weather product only and is never passed to SPECTRL2;
 - both platforms show 72 hours; fog uses direct `VIS`, while the cloud chart shows effective obstruction by height from `CLC+QC+QI` and phase-resolved optical depth;
 - dew is only an equipment-preparation advisory and does not lower seeing or the practical score;
 - pure-Go astronomy calculates Sun, Moon, Jupiter, and Saturn events; Saint Petersburg and Moscow Sun/Moon regressions constrain the result to two minutes against reference data, while planetary events remain explicitly approximate;
-- both platforms deliver the same seven PNG files; the production `3200×960` overall index combines hybrid ICON TKE/MH + HMNSP99 seeing, `tau0`, effective `CLCT+TQC+TQI` cloud transmission, fog, and a mild surface-wind factor;
+- both platforms deliver the same seven PNG files; the enlarged `4320×1600`
+  Overall chart combines hybrid ICON TKE/MH + HMNSP99 seeing, `tau0`, effective
+  `CLCT+TQC+TQI` cloud transmission, fog, mild surface wind, and a binary
+  precipitation veto at the configurable `R_1h >=0.05 mm` detection threshold;
+- one retained piecewise-linear `Cn2` profile now supplies seeing, `tau0`,
+  `theta0`, effective turbulence height/wind, fixed-height
+  `FracGL250/500/1000`, free-atmosphere seeing above 500 m, and structural
+  vertical and `h^(5/3)`-moment coverage; dynamic-PBL compatibility fields
+  remain explicitly distinct from MASS-like fixed-height fractions. Overall rejects either coverage below
+  `90%` or a profile top below `15 km AGL`; `complete` requires `99%/99%` and
+  at least `18 km AGL`, and every other quality state marks `!`;
+- chart 2 shows the retained index below an exact five-color Shapley
+  decomposition of `10-Overall`; stacks close at 10, precipitation is an
+  explicit veto, and `!` means partial inputs rather than forecast probability;
+- during astronomical night chart 2 may overlay a separate Reference
+  Johnson-V grid-cell-mean geometric-zenith efficiency ring for the declared
+  faint-source, background-limited, seeing-limited, non-AO mode. Contract
+  `reference-v-band-zenith-efficiency-v2` and atmosphere
+  `reference-v-band-spectrl2-ks91-v3` use ICON pressure/PWV/all-sky clouds and
+  NASA GEOS-CF AOD550/ozone; KS91 supplies the Moon background and a
+  photon-weighted PSF mixture supplies the noise-equivalent area. Clouds
+  attenuate the source while clear-air natural/lunar background is held as a
+  conservative floor, so the modeled cloud response is approximately `T²`;
+  this is explicitly limited by missing cloud-scattered radiance. Opaque
+  transmission omits `ExtinctionMag` and sets `OpaqueTransmission`; missing
+  seeing/composition is partial, while high fog or precipitation makes the
+  result operationally unavailable and omits the marker. Artificial light
+  remains excluded, and the result is not multiplied into generic Overall;
+- Reference V derives actual model-surface pressure from the lowest available
+  same-hour native ICON full-level `P/T` and full/surface `HHL` using
+  `p_s=p_l exp[g_0(z_l-z_s)/(R_d T_l)]`; provenance is
+  `icon-lowest-model-level-p-hydrostatic-to-hhl-surface-v1`. Missing inputs
+  or a transfer gap over `1 km` make the result partial, with no `PMSL` or
+  standard-atmosphere fallback;
+- the bounded GEOS-CF OPeNDAP client records its independent run/freshness,
+  limits timeout/response/cache/concurrent misses, and fails open: missing or
+  stale composition removes the Reference-V result without blocking ICON;
+  its HTTP timeout is `60 s`; the service-root operation has a `65 s` deadline
+  and shutdown cancellation, while an ordinary user response joins it for at
+  most `5 s`. Identical slabs coalesce, distinct loads are gated by
+  `ASTRO_FORECAST_CONCURRENCY`, and a full gate fails open without starting a
+  new optional load;
+- target-conditioned helpers implement Kasten-Young optical air mass,
+  atmospheric FWHM scaling by `X^(3/5) lambda^(-1/5)`, and an explicitly
+  Gaussian-only delivered-IQ quadrature; no target-dependent value is silently
+  inserted into coordinate-only Overall;
 - the text block gets a point light-pollution estimate from Light Pollution Atlas 2024: bilinear LPI/SQM at approximately `30″` plus an honestly labelled approximate Bortle value; light pollution is not part of the Overall Index;
 - heat-map values are now 8 pt semibold, with slightly larger axes and bar labels;
 - the old wind-only index remains a separate diagnostic chart; direction delta becomes `0°` below `2 m/s`, while `NaN` means missing data only;
@@ -47,6 +92,12 @@ Deployment target: operator-managed host
 Freshness and bilingual rendering were deployed on 2026-07-21: the production binary generated seven non-empty PNG files for each of `ru` and `en`, temporary verification directories were removed, the main container remained `running` with `restart_count=0`, and PostgreSQL remained `healthy`.
 
 The VK adapter was deployed on 2026-07-22. Production starts Telegram and VK Group Long Poll under independent supervisors; VK settings report API `5.199`, Long Poll enabled, and `message_new=1`. The selected server was under `*.vk.ru`, the application container remained `running` with `restart_count=0`, PostgreSQL remained healthy, and the active ICON-EU/Global run symlinks were unchanged. The old platform-named 16 MiB render cache was removed after the shared bounded cache was initialized.
+
+A live GEOS-CF contract probe returned DAS metadata in about `3.7 s`; the
+first 72-hour subset exceeded `30 s`, while a repeat completed in approximately
+`30 s`. These observed cold/warm timings justify the `60 s` HTTP timeout,
+`65 s` service-root operation deadline, and `5 s` user-facing join instead of
+extending the ordinary forecast critical path.
 
 ## Horizon analysis — implemented
 
@@ -141,6 +192,9 @@ Production uses the following replacement:
   boundary, and total `J` gives model-derived seeing at 500 nm;
 - `tau0` comes from `integral(Cn²·|V|^(5/3)dz)`; there is no second direction
   penalty because vector shear already includes wind rotation;
+- every `J_V` trapezoid averages endpoint values of `Cn²·|V|^(5/3)` rather
+  than raising interval-mean speed to `5/3`, avoiding Jensen low bias across
+  wind gradients;
 - physical seeing and `tau0` map into one bounded turbulence utility
   `f=0.75+0.25*q_turbulence`; they cannot veto a clear general-purpose hour,
   while cloud transmission and fog retain their stronger obstruction role;
@@ -160,9 +214,13 @@ Production uses the following replacement:
 - point-cache schema is `point-v6-native-cloud-mass-mh`, preventing reuse of
   old entries without `MH`, `T`, or native layer thickness;
 - version markers match the new contract:
-  `seeing-hybrid-tke-mh-hmnsp99-v6`,
-  `conditions-v7-phase-structure-coherence`, `render-v15-four-solar-bands`, and
-  `shared-render-v18-phase-structure-coherence`.
+  `seeing-hybrid-tke-mh-hmnsp99-v7`,
+  `conditions-v8-precip-veto-penalty-decomposition`,
+  `render-v16-overall-penalty-decomposition`, and
+  `shared-render-v19-reference-v-band-penalty-decomposition`; Reference V is
+  independently keyed by `reference-v-band-zenith-efficiency-v2`,
+  `reference-v-band-spectrl2-ks91-v3`, and
+  `reference-v-band-benchmark-v1`.
 
 A server-side fixed-2-km calculation without fitting (`ground Cn² scale=1`)
 produced control-case seeing of `2.221″` at `f042` and `3.644″` at `f048`; the
@@ -206,5 +264,5 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 1. Accumulate observational verification data for the existing forecast methods and monitor both platform adapters in production.
 
-Production `seeing-hybrid-tke-mh-hmnsp99-v6` is not observationally calibrated until compared
+Production `seeing-hybrid-tke-mh-hmnsp99-v7` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

@@ -24,6 +24,7 @@ import (
 	"bot_astrosferum/internal/lightpollution"
 	"bot_astrosferum/internal/model"
 	"bot_astrosferum/internal/model/eccodes"
+	"bot_astrosferum/internal/model/geoscf"
 	"bot_astrosferum/internal/model/iconeu"
 	"bot_astrosferum/internal/model/iconglobal"
 	"bot_astrosferum/internal/platform/telegram"
@@ -372,6 +373,22 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
+	var composition forecast.AtmosphericCompositionSeries
+	if cfg.Providers.GEOSCF.Enabled {
+		validTimes := make([]time.Time, len(surface.Frames))
+		for index := range surface.Frames {
+			validTimes[index] = surface.Frames[index].ValidAt
+		}
+		compositionStore := model.GEOSCFCompositionStore{Client: newGEOSCFClient(cfg)}
+		composition, err = compositionStore.AtmosphericComposition(ctx, location, validTimes)
+		if err != nil {
+			writeLog(stderr, "GEOS-CF composition unavailable; Reference V-band remains partial: %v", err)
+			composition = forecast.AtmosphericCompositionSeries{}
+		}
+	}
+	if err := bot.AttachReferenceVBand(overall, surface, composition, sky); err != nil {
+		return err
+	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
 	if err := render.OverallIndex(result.OverallIndex, series, overall, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: *language}); err != nil {
 		return err
@@ -417,6 +434,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		forecastStore = model.CoverageFallback{
 			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore, Fallback: globalStore,
 		}
+	}
+	var compositionStore *model.GEOSCFCompositionStore
+	if cfg.Providers.GEOSCF.Enabled {
+		compositionStore = &model.GEOSCFCompositionStore{Client: newGEOSCFClient(cfg)}
 	}
 	forecastQueue, err := bot.NewForecastQueue(cfg.App.ForecastConcurrency)
 	if err != nil {
@@ -488,6 +509,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}
 		if err := handler.EnableWorldAtlas2015(worldAtlas); err != nil {
 			return err
+		}
+		if compositionStore != nil {
+			if err := handler.EnableAtmosphericComposition(ctx, compositionStore); err != nil {
+				return err
+			}
 		}
 		if err := handler.SetOverallIndexCalibration(overallCalibration(cfg.Algorithms)); err != nil {
 			return err
@@ -661,6 +687,20 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 	}
 	overall, err := forecast.ComputeHourlyOverallIndex(series, surface, forecast.SyntheticCloudFixture(), forecast.DefaultOverallIndexCalibration())
 	if err != nil {
+		return err
+	}
+	composition := forecast.AtmosphericCompositionSeries{
+		Location: surface.Location, Provider: "synthetic-composition", Product: "deterministic-v1",
+		RunID: "synthetic-composition-v1", BaseTime: surface.BaseTime, Grid: "fixture",
+		Frames: make([]forecast.AtmosphericCompositionFrame, len(surface.Frames)),
+	}
+	for index, frame := range surface.Frames {
+		composition.Frames[index] = forecast.AtmosphericCompositionFrame{
+			ValidAt: frame.ValidAt, AerosolOpticalDepth550: 0.10, TotalColumnOzoneDU: 300,
+			Provider: composition.Provider, RunID: composition.RunID, BaseTime: composition.BaseTime, Grid: composition.Grid,
+		}
+	}
+	if err := bot.AttachReferenceVBand(overall, surface, composition, sky); err != nil {
 		return err
 	}
 	result.OverallIndex = filepath.Join(*outputDirectory, "overall-astronomy-index-hourly.png")
@@ -853,7 +893,8 @@ func overallCalibration(config config.AlgorithmsConfig) forecast.OverallIndexCal
 		CoherenceTimeWeight:         config.OverallCoherenceTimeWeight,
 		OpticalTurbulenceMaxPenalty: config.OverallOpticalTurbulenceMaxPenalty,
 		PossibleFogFactor:           config.OverallPossibleFogFactor, HighFogFactor: config.OverallHighFogFactor,
-		GoodSeeingArcsec: config.OverallGoodSeeingArcsec, BadSeeingArcsec: config.OverallBadSeeingArcsec,
+		PrecipitationDetectMM: config.OverallPrecipitationDetectMM,
+		GoodSeeingArcsec:      config.OverallGoodSeeingArcsec, BadSeeingArcsec: config.OverallBadSeeingArcsec,
 		BestCoherenceTimeMS:          config.OverallBestCoherenceTimeMS,
 		BadCoherenceTimeMS:           config.OverallBadCoherenceTimeMS,
 		BoundaryLayerMinM:            config.OverallBoundaryLayerMinM,
@@ -868,4 +909,14 @@ func overallCalibration(config config.AlgorithmsConfig) forecast.OverallIndexCal
 		CloudLiquidRadiusMicrometers: config.CloudLiquidRadiusMicrometers,
 		CloudIceRadiusMicrometers:    config.CloudIceRadiusMicrometers,
 	}
+}
+
+func newGEOSCFClient(cfg config.Config) *geoscf.Client {
+	provider := cfg.Providers.GEOSCF
+	return geoscf.New(geoscf.Options{
+		DatasetURL: provider.DatasetURL, RequestTimeout: provider.RequestTimeout.Duration,
+		MetadataTTL: provider.MetadataCacheTTL.Duration, DataTTL: provider.DataCacheTTL.Duration,
+		MaximumRunAge: provider.MaxStaleAge.Duration, CacheEntries: provider.CacheEntries,
+		DataConcurrency: cfg.App.ForecastConcurrency,
+	})
 }

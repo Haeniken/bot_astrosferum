@@ -67,13 +67,13 @@ func TestRenderCacheKeyIncludesEveryOverallCalibrationField(t *testing.T) {
 	var sky astronomy.Series
 	options := render.Options{Width: 3200, Height: 960}
 	calibration := forecast.DefaultOverallIndexCalibration()
-	baseline := forecastRenderCacheKey(vertical, surface, cloud, sky, options, calibration)
+	baseline := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, sky, options, calibration)
 
 	// BoundaryLayerMinM was added with dynamic ICON MH. Changing it
 	// proves that the full calibration struct, rather than a stale field list,
 	// participates in the cache identity.
 	calibration.BoundaryLayerMinM++
-	changed := forecastRenderCacheKey(vertical, surface, cloud, sky, options, calibration)
+	changed := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, sky, options, calibration)
 	if baseline == changed {
 		t.Fatal("render cache key ignored BoundaryLayerMinM calibration")
 	}
@@ -84,8 +84,8 @@ func TestRenderCacheKeyIncludesLanguage(t *testing.T) {
 	surface := forecast.SyntheticSurfaceFixture()
 	cloud := forecast.SyntheticCloudFixture()
 	calibration := forecast.DefaultOverallIndexCalibration()
-	russian := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
-	english := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "en"}, calibration)
+	russian := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+	english := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "en"}, calibration)
 	if russian == english {
 		t.Fatal("render cache key ignored language")
 	}
@@ -96,7 +96,7 @@ func TestRenderCacheKeyChangesWithModelRun(t *testing.T) {
 	surface := forecast.SyntheticSurfaceFixture()
 	cloud := forecast.SyntheticCloudFixture()
 	calibration := forecast.DefaultOverallIndexCalibration()
-	baseline := forecastRenderCacheKey(vertical, surface, cloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+	baseline := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
 	checks := []struct {
 		name   string
 		mutate func(*forecast.VerticalSeries, *forecast.SurfaceSeries, *forecast.CloudSeries)
@@ -115,9 +115,61 @@ func TestRenderCacheKeyChangesWithModelRun(t *testing.T) {
 		t.Run(check.name, func(t *testing.T) {
 			changedVertical, changedSurface, changedCloud := vertical, surface, cloud
 			check.mutate(&changedVertical, &changedSurface, &changedCloud)
-			changed := forecastRenderCacheKey(changedVertical, changedSurface, changedCloud, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
+			changed := forecastRenderCacheKey(changedVertical, changedSurface, changedCloud, forecast.AtmosphericCompositionSeries{}, astronomy.Series{}, render.Options{Width: 3200, Height: 960, Language: "ru"}, calibration)
 			if baseline == changed {
 				t.Fatalf("render cache ignored %s run", check.name)
+			}
+		})
+	}
+}
+
+func TestRenderCacheKeyChangesWithIndependentCompositionIdentity(t *testing.T) {
+	vertical := forecast.SyntheticVerticalFixture()
+	surface := forecast.SyntheticSurfaceFixture()
+	cloud := forecast.SyntheticCloudFixture()
+	calibration := forecast.DefaultOverallIndexCalibration()
+	options := render.Options{Width: 3200, Height: 960, Language: "ru"}
+	composition := forecast.AtmosphericCompositionSeries{
+		Provider: "nasa-geos-cf",
+		Product:  "xgc_tavg_1hr_glo_L1440x721_slv",
+		RunID:    "20260726T000000Z",
+		BaseTime: time.Date(2026, time.July, 26, 0, 0, 0, 0, time.UTC),
+		Grid:     "0.25x0.25 degree",
+		Frames: []forecast.AtmosphericCompositionFrame{{
+			ValidAt:                   time.Date(2026, time.July, 26, 3, 0, 0, 0, time.UTC),
+			AerosolOpticalDepth550:    0.08,
+			TotalColumnOzoneDU:        320,
+			Provider:                  "nasa-geos-cf",
+			RunID:                     "20260726T000000Z",
+			BaseTime:                  time.Date(2026, time.July, 26, 0, 0, 0, 0, time.UTC),
+			Grid:                      "0.25x0.25 degree",
+			AerosolSpectralAssumption: "Angstrom alpha=1.14",
+		}},
+	}
+	baseline := forecastRenderCacheKey(vertical, surface, cloud, composition, astronomy.Series{}, options, calibration)
+
+	tests := []struct {
+		name   string
+		mutate func(*forecast.AtmosphericCompositionSeries)
+	}{
+		{name: "independent run", mutate: func(value *forecast.AtmosphericCompositionSeries) {
+			value.RunID = "20260726T010000Z"
+		}},
+		{name: "aerosol value", mutate: func(value *forecast.AtmosphericCompositionSeries) {
+			value.Frames[0].AerosolOpticalDepth550 = 0.09
+		}},
+		{name: "ozone value", mutate: func(value *forecast.AtmosphericCompositionSeries) {
+			value.Frames[0].TotalColumnOzoneDU = 321
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := composition
+			changed.Frames = append([]forecast.AtmosphericCompositionFrame(nil), composition.Frames...)
+			test.mutate(&changed)
+			key := forecastRenderCacheKey(vertical, surface, cloud, changed, astronomy.Series{}, options, calibration)
+			if key == baseline {
+				t.Fatalf("render cache key ignored changed composition %s", test.name)
 			}
 		})
 	}

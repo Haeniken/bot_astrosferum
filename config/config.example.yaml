@@ -41,6 +41,20 @@ providers:
     role: shadow
     keep_runs: 1
     max_stale_age: 18h
+  # Independent global atmospheric-composition forecast used only by the
+  # explicitly labelled Reference V-band diagnostic. Failure is fail-open:
+  # the ICON forecast and legacy Overall remain available and V-ref is partial.
+  geos_cf:
+    enabled: true
+    dataset_url: https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/v2/fcst/xgc_tavg_1hr_glo_L1440x721_slv.latest
+    # Cold OPeNDAP point subsets can take more than 30 seconds. This provider
+    # deadline does not become an equal delay for the user-facing forecast:
+    # the optional result is joined for a separately bounded short interval.
+    request_timeout: 60s
+    metadata_cache_ttl: 10m
+    data_cache_ttl: 6h
+    max_stale_age: 48h
+    cache_entries: 256
   light_pollution:
     atlas_year: 2024
 
@@ -51,9 +65,9 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v6
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v7
   dew_version: dew-v1
-  conditions_version: conditions-v7-phase-structure-coherence
+  conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
   overall_cloud_weight: 2.0
   overall_coherence_time_weight: 0.25
@@ -62,6 +76,9 @@ algorithms:
   overall_optical_turbulence_max_penalty: 0.25
   overall_possible_fog_factor: 0.75
   overall_high_fog_factor: 0.10
+  # Operational binary veto: this is a detection threshold, not a smooth
+  # rain-intensity penalty. At and above it an exposed telescope should stay closed.
+  overall_precipitation_detect_mm: 0.05
   # Kept under its historical name for compatibility; this is now the
   # best-seeing saturation threshold rather than a generic "good" threshold.
   overall_good_seeing_arcsec: 0.5
@@ -83,7 +100,7 @@ algorithms:
   cloud_ice_radius_micrometers: 25
 
 render:
-  version: render-v9-dynamic-mh
+  version: render-v16-overall-penalty-decomposition
   width: 1280
   height: 960
 

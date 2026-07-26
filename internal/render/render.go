@@ -26,7 +26,7 @@ import (
 const (
 	DefaultWidth  = 1280
 	DefaultHeight = 960
-	Version       = "render-v15-four-solar-bands"
+	Version       = "render-v16-overall-penalty-decomposition"
 )
 
 type Options struct {

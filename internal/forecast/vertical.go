@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const SeeingPrototypeVersion = "seeing-hybrid-tke-mh-hmnsp99-v6"
+const SeeingPrototypeVersion = "seeing-hybrid-tke-mh-hmnsp99-v7"
 
 // VerticalLevel contains one pressure-level wind vector in SI units.
 type VerticalLevel struct {
