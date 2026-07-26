@@ -90,6 +90,10 @@ implementation consists of:
 - one localized `3200x1400` time-by-eight-direction heatmap for all 73 terms,
   with day/twilight/night shading, unavailable cells, run period, freshness,
   and compact limiter/quality disclosure;
+- the per-cell data-quality strip follows forecast lead confidence: good at
+  `C_lead >= 0.85`, usable at `0.75 <= C_lead < 0.85`, and limited at
+  `C_lead < 0.75`; unavailable paths remain missing, while composite
+  confidence below `0.60` can only downgrade a result;
 - unit tests in the affected packages for callback normalization, queue/cache
   behavior, series identity, geometry, local-ENU wind projection,
   dateline/high-latitude cases, provider boundaries, sparse/missing profiles,

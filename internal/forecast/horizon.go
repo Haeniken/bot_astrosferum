@@ -11,7 +11,7 @@ import (
 const (
 	// HorizonAlgorithmVersion identifies both the spherical sampling geometry
 	// and the directional turbulence/cloud closure used by ComputeHorizon.
-	HorizonAlgorithmVersion = "horizon-spherical-los-tke-hmnsp99-v6"
+	HorizonAlgorithmVersion = "horizon-spherical-los-tke-hmnsp99-v7"
 
 	HorizonEarthRadiusM              = 6371008.8
 	HorizonGeometricElevationDegrees = 10.0
@@ -23,6 +23,9 @@ const (
 	HorizonDirectionCount              = 8
 	horizonMinimumCompletePathRatio    = 1 - 1e-9
 	horizonMaximumConfidence           = 0.85
+	horizonLimitedConfidence           = 0.60
+	horizonUsableLeadConfidence        = 0.75
+	horizonGoodLeadConfidence          = 0.85
 	horizonCoordinateComparisonEpsilon = 1e-8
 	horizonObserverElevationToleranceM = 1.0
 )
@@ -476,7 +479,11 @@ func computeHorizon(ctx context.Context, snapshot HorizonSnapshot, plan HorizonP
 		computation.result.LeadTimeConfidence = leadConfidence
 		computation.result.ResolvableDirectionFraction = resolvableFraction
 		computation.result.Confidence = confidence
-		computation.result.DataQuality = horizonDataQuality(computation.result.Available, confidence)
+		computation.result.DataQuality = horizonDataQuality(
+			computation.result.Available,
+			confidence,
+			leadConfidence,
+		)
 		results[index] = computation.result
 	}
 	return results, nil
@@ -1001,17 +1008,17 @@ func horizonLimitingFactors(terrainBlocked bool, seeing, coherence, cloud, fog, 
 	return factors
 }
 
-func horizonDataQuality(available bool, confidence float64) HorizonDataQuality {
+func horizonDataQuality(available bool, confidence, leadConfidence float64) HorizonDataQuality {
 	if !available {
 		return HorizonDataUnavailable
 	}
 	switch {
-	case confidence >= 0.80:
-		return HorizonDataGoodCoarse
-	case confidence >= 0.60:
-		return HorizonDataUsable
-	default:
+	case confidence < horizonLimitedConfidence || leadConfidence < horizonUsableLeadConfidence:
 		return HorizonDataLimited
+	case leadConfidence >= horizonGoodLeadConfidence:
+		return HorizonDataGoodCoarse
+	default:
+		return HorizonDataUsable
 	}
 }
 

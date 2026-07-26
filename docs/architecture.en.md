@@ -1301,7 +1301,7 @@ The key material is hashed for the path, so raw coordinates do not appear in
 filenames or logs. A cache hit is valid only for the exact immutable run and
 calculation contract.
 
-The scientific marker is `horizon-spherical-los-tke-hmnsp99-v6`; the application
+The scientific marker is `horizon-spherical-los-tke-hmnsp99-v7`; the application
 cache schema is `horizon-cache-v1`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 

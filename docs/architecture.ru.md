@@ -1302,7 +1302,7 @@ material строится hash для пути, поэтому исходные 
 имена файлов или логи. Cache hit допустим только для точно того же
 неизменяемого run и контракта.
 
-Научный маркер — `horizon-spherical-los-tke-hmnsp99-v6`, кэш приложения
+Научный маркер — `horizon-spherical-los-tke-hmnsp99-v7`, кэш приложения
 schema — `horizon-cache-v1`. Изменение формулы или serialized/rendered contract
 требует смены соответствующего marker.
 

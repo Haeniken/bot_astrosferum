@@ -1239,7 +1239,7 @@ least obstructed for an object referenced at `10 deg` geometric elevation? The
 directions and azimuths are
 `N=0`, `NE=45`, `E=90`, `SE=135`, `S=180`, `SW=225`, `W=270`, and `NW=315 deg`.
 The scientific contract is versioned as
-`horizon-spherical-los-tke-hmnsp99-v6`.
+`horizon-spherical-los-tke-hmnsp99-v7`.
 
 All eight directions use that same `f000..f072` time axis. Native hourly
 surface, cloud, TKE, MH, and visibility terms are used directly. Pressure-level
@@ -1670,12 +1670,21 @@ c_{\mathrm{ICON}}=\max\!\left(0.65,
 0.96-0.26\frac{h_{\mathrm{forecast}}}{72}\right).
 ```
 
-Available values below `0.60`
-are labelled limited, `0.60..<0.80` usable, and `>=0.80` good coarse-model data;
-unavailable paths are labelled unavailable. The hard `0.85` ceiling represents
-the lack of a local DEM/obstacle model. These numbers express deterministic
-input completeness and model resolution. They are **not** a calibrated
-probability that the observation will succeed.
+The bottom-strip category is driven primarily by the decline in
+`C_{\mathrm{lead}}` with forecast lead time. Data are labelled good for the
+coarse model when `C_{\mathrm{lead}}\ge0.85`, usable when
+`0.75\le C_{\mathrm{lead}}<0.85`, and limited when
+`C_{\mathrm{lead}}<0.75`. Composite `Confidence` is a conservative lower
+bound: a value below `0.60` always downgrades the category to limited
+regardless of lead time. An unavailable path is labelled missing. A complete
+72-hour run therefore normally progresses from good early-run data through
+usable to limited late-run data, while incomplete profile closure can only
+downgrade the category.
+
+The hard `0.85` ceiling on composite `Confidence` represents the lack of a
+local DEM/obstacle model. These numbers express deterministic input
+completeness, forecast lead time, and model resolution. They are **not** a
+calibrated probability that the observation will succeed.
 
 ### 7.7. Validation and remaining limitations
 

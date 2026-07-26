@@ -149,8 +149,8 @@ func Horizon(ctx context.Context, destination string, input HorizonInput, option
 	drawHorizonLimiterSummary(canvas, fonts, frames, options)
 	drawText(canvas, fonts.small, 34, 1270,
 		localized(options,
-			"Нижняя полоска ячейки показывает качество входных данных; это не вероятность результата.",
-			"The strip at the bottom of each cell shows input-data quality; it is not a probability."), horizonMuted)
+			"Нижняя полоска показывает качество входных данных с учётом срока прогноза; это не вероятность результата.",
+			"The bottom strip shows input-data quality with forecast lead time; it is not an outcome probability."), horizonMuted)
 	drawText(canvas, fonts.small, 34, 1300,
 		localized(options,
 			"Рельеф оценивается по грубой модельной поверхности ICON HHL.",

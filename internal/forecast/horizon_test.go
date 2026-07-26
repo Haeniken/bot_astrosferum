@@ -434,6 +434,32 @@ func TestComputeHorizonUnavailableAndCoarseTerrainCannotLookGood(t *testing.T) {
 	}
 }
 
+func TestHorizonDataQualityUsesLeadTimeWithCompletenessAsLowerBound(t *testing.T) {
+	tests := []struct {
+		name           string
+		available      bool
+		confidence     float64
+		leadConfidence float64
+		want           HorizonDataQuality
+	}{
+		{"unavailable", false, 0.85, 0.96, HorizonDataUnavailable},
+		{"weak profile remains limited", true, 0.59, 0.96, HorizonDataLimited},
+		{"early lead is good", true, 0.70, 0.96, HorizonDataGoodCoarse},
+		{"middle lead is usable", true, 0.70, 0.80, HorizonDataUsable},
+		{"late lead is limited", true, 0.70, 0.74, HorizonDataLimited},
+		{"good threshold is inclusive", true, 0.70, horizonGoodLeadConfidence, HorizonDataGoodCoarse},
+		{"usable threshold is inclusive", true, 0.70, horizonUsableLeadConfidence, HorizonDataUsable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := horizonDataQuality(test.available, test.confidence, test.leadConfidence); got != test.want {
+				t.Fatalf("horizonDataQuality(%v, %v, %v) = %q, want %q",
+					test.available, test.confidence, test.leadConfidence, got, test.want)
+			}
+		})
+	}
+}
+
 func TestComputeHorizonReturnsEightOrderedReadableDirectionsAndFactors(t *testing.T) {
 	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
 	validAt := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
