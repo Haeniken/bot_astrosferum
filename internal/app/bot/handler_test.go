@@ -362,6 +362,37 @@ func TestForecastFreshnessEnglish(t *testing.T) {
 	}
 }
 
+func TestSynScanCoordinatesText(t *testing.T) {
+	tests := []struct {
+		name                string
+		latitude, longitude float64
+		language            userLanguage
+		want                string
+	}{
+		{
+			name:      "Russian northeast",
+			latitude:  59.9879,
+			longitude: 30.2084,
+			language:  languageRussian,
+			want:      "SynScan: долгота 030°13′ E, широта 59°59′ N",
+		},
+		{
+			name:      "English southwest with minute carry",
+			latitude:  -12.9999,
+			longitude: -77.9999,
+			language:  languageEnglish,
+			want:      "SynScan: longitude 078°00′ W, latitude 13°00′ S",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := synScanCoordinatesText(test.latitude, test.longitude, test.language); got != test.want {
+				t.Fatalf("synScanCoordinatesText() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestHandlerRoutesActionBeforeMessageFlow(t *testing.T) {
 	messenger := &fakeActionMessenger{}
 	handler, err := NewHandler(messenger)

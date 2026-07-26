@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -619,45 +620,31 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	modelName := forecastModelName(series.Provider)
 	maxStaleAge := handler.forecastMaxStaleAge
-	turbulenceText := language.text(
-		"гибридная модельная оценка ICON TKE до динамической MH 500–2000 м AGL + HMNSP99 выше, сиинг и τ₀ на 500 нм.",
-		"hybrid ICON model estimate using TKE up to dynamic MH 500–2000 m AGL and HMNSP99 above, with seeing and τ₀ at 500 nm.")
 	if series.Provider == "icon-global" {
 		maxStaleAge = handler.fallbackMaxStaleAge
-		turbulenceText = language.text(
-			"гибридная оценка ICON Global TKE на нижних native model levels + HMNSP99 выше на 500 нм; DWD публикует TKE до +48 ч, поэтому Overall заканчивается там без экстраполяции.",
-			"hybrid ICON Global estimate using TKE on lower native model levels and HMNSP99 above at 500 nm; DWD publishes TKE through +48 h, so Overall ends there without extrapolation.")
 	}
 	summary := fmt.Sprintf(language.text(
-		"%s run %s UTC\n%s\nПериод: %s — %s\nСетка: %s\nОптическая турбулентность: %s; %s",
-		"%s run %s UTC\n%s\nPeriod: %s — %s\nGrid: %s\nOptical turbulence: %s; %s"),
-		modelName, series.RunID, forecastFreshnessText(series.BaseTime, time.Now(), maxStaleAge, language), series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
-		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid, series.AlgorithmVersion, turbulenceText)
+		"%s %s UTC\n%s\n%s\nПериод: %s — %s\nСетка: %s",
+		"%s %s UTC\n%s\n%s\nPeriod: %s — %s\nGrid: %s"),
+		modelName, series.RunID,
+		synScanCoordinatesText(series.Location.Latitude, series.Location.Longitude, language),
+		forecastFreshnessText(series.BaseTime, time.Now(), maxStaleAge, language),
+		series.Frames[0].ValidAt.In(locationZone).Format("02.01 15:04"),
+		validUntil.In(locationZone).Format("02.01 15:04"), series.Grid)
 	if hasCloud {
 		summary += fmt.Sprintf(language.text(
 			"\nМодельная высота поверхности: %.0f м над уровнем моря (ICON HHL).",
 			"\nModel surface elevation: %.0f m above mean sea level (ICON HHL)."),
 			cloudSeries.SurfaceElevationM)
 	}
-	if len(compositionSeries.Frames) > 0 {
-		summary += fmt.Sprintf(language.text(
-			"\nЭталон V: %s, опорное время %s UTC, актуальность %s, сетка %s; AOD₅₅₀/O₃ — независимый прогноз состава, PWV — ICON TQV.",
-			"\nReference V: %s, reference time %s UTC, freshness %s, grid %s; AOD₅₅₀/O₃ use an independent composition forecast and PWV uses ICON TQV."),
-			compositionSeries.Provider, compositionSeries.BaseTime.UTC().Format("20060102 15:04"),
-			formatForecastAge(compositionSeries.FreshnessAge, language), compositionSeries.Grid)
-	} else if handler.atmosphericComposition != nil {
-		summary += language.text(
-			"\nЭталон V: независимые AOD₅₅₀/O₃ временно недоступны; кольцо не показано, основной Overall не изменён.",
-			"\nReference V: independent AOD₅₅₀/O₃ are temporarily unavailable; the ring is omitted and the primary Overall is unchanged.")
-	}
 	if lightPollutionChannel != nil {
 		select {
 		case result := <-lightPollutionChannel:
 			if result.err != nil {
 				handler.logf("forecast request %d light-pollution lookup failed: %v", requestID, result.err)
-				summary += language.text("\n\nЗасветка: оценка временно недоступна.", "\n\nLight pollution: estimate temporarily unavailable.")
+				summary += language.text("\nЗасветка: оценка временно недоступна.", "\nLight pollution: estimate temporarily unavailable.")
 			} else {
-				summary += fmt.Sprintf(language.text("\n\nЗасветка: ориентир Бортля <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d).", "\n\nLight pollution: Bortle reference <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d)."),
+				summary += fmt.Sprintf(language.text("\nЗасветка: ориентир Бортля <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d).", "\nLight pollution: Bortle reference <b>%s</b> (LPI %.2f, SQM %.2f mag/arcsec², Light Pollution Atlas %d)."),
 					result.estimate.BortleDisplay, result.estimate.LPI, result.estimate.SQM, result.estimate.Year)
 			}
 		case <-ctx.Done():
@@ -892,6 +879,28 @@ func forecastModelName(provider string) string {
 		return "ICON Global"
 	}
 	return "ICON-EU"
+}
+
+func synScanCoordinatesText(latitude, longitude float64, language userLanguage) string {
+	return fmt.Sprintf(
+		language.text(
+			"SynScan: долгота %s, широта %s",
+			"SynScan: longitude %s, latitude %s",
+		),
+		formatSynScanAngle(longitude, 3, "E", "W"),
+		formatSynScanAngle(latitude, 2, "N", "S"),
+	)
+}
+
+func formatSynScanAngle(value float64, degreeDigits int, positiveHemisphere, negativeHemisphere string) string {
+	hemisphere := positiveHemisphere
+	if value < 0 {
+		hemisphere = negativeHemisphere
+	}
+	totalMinutes := int(math.Round(math.Abs(value) * 60))
+	degrees := totalMinutes / 60
+	minutes := totalMinutes % 60
+	return fmt.Sprintf("%0*d°%02d′ %s", degreeDigits, degrees, minutes, hemisphere)
 }
 
 func (handler *Handler) sendUserMessage(ctx context.Context, chatID int64, text string, locationButton bool, language userLanguage) error {

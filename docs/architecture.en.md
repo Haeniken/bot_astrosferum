@@ -915,15 +915,20 @@ City names and street addresses are not parsed in the MVP because an address geo
 ### 18.3. Response contract
 
 ```text
-ICON-EU run 2026072206 UTC
+ICON-EU 2026072206 UTC
+SynScan: longitude 030°19′ E, latitude 59°56′ N
 Data freshness: 7 h 59 min
 Period: 22.07 09:00 — 25.07 09:00
 Grid: ICON-EU 0.0625°
-Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v7; hybrid ICON model estimate …
-
+Model surface elevation: … m above mean sea level (ICON HHL).
 Light pollution: Bortle reference 8–9 (LPI …, SQM …, Light Pollution Atlas 2024).
 Light pollution comparison: Bortle reference 8–9 (LPI …, SQM …, World Atlas 2015).
 ```
+
+SynScan coordinates come from the exact submitted location rather than the
+selected ICON node. The hand controller asks for longitude first and latitude
+second; values are rounded to its nearest supported arcminute and explicitly
+labelled with the `E/W` and `N/S` hemispheres.
 
 Only platform adapters handle attachment-count and message-length limits. Domain text and charts remain shared.
 
