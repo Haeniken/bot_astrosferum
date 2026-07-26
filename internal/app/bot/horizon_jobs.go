@@ -81,6 +81,7 @@ type HorizonRenderFunc func(ctx context.Context, destination string, input Horiz
 
 type HorizonJobsConfig struct {
 	QueueSize              int
+	Concurrency            int
 	JobTimeout             time.Duration
 	CacheRoot              string
 	CacheTTL               time.Duration
@@ -161,7 +162,7 @@ type HorizonJobs struct {
 	mu                 sync.Mutex
 	started            bool
 	closed             bool
-	running            bool
+	running            int
 	root               context.Context
 	cancel             context.CancelFunc
 	queue              chan *horizonJob
@@ -183,6 +184,9 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 	}
 	if config.QueueSize < 1 {
 		return nil, errors.New("horizon queue size must be positive")
+	}
+	if config.Concurrency < 1 {
+		return nil, errors.New("horizon concurrency must be positive")
 	}
 	if config.JobTimeout <= 0 || config.CacheTTL <= 0 || config.EstimatedDuration <= 0 || config.MaxStaleAge <= 0 {
 		return nil, errors.New("horizon job, cache, and estimate durations must be positive")
@@ -227,7 +231,8 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 }
 
 // Start binds all queued work to the process/root lifetime rather than to a
-// short-lived webhook callback context. Exactly one worker is started.
+// short-lived webhook callback context. Its worker count is independent from
+// the ordinary-forecast calculation limit.
 func (jobs *HorizonJobs) Start(root context.Context) error {
 	if root == nil {
 		return errors.New("horizon root context is required")
@@ -242,8 +247,10 @@ func (jobs *HorizonJobs) Start(root context.Context) error {
 	}
 	jobs.root, jobs.cancel = context.WithCancel(root)
 	jobs.started = true
-	jobs.wait.Add(1 + horizonDeliveryWorkers)
-	go jobs.worker()
+	jobs.wait.Add(jobs.config.Concurrency + horizonDeliveryWorkers)
+	for range jobs.config.Concurrency {
+		go jobs.worker()
+	}
 	for range horizonDeliveryWorkers {
 		go jobs.deliveryWorker()
 	}
@@ -718,14 +725,12 @@ func (jobs *HorizonJobs) estimatedWait(position int) time.Duration {
 	jobs.mu.Lock()
 	running := jobs.running
 	jobs.mu.Unlock()
-	jobsAhead := position
-	if running {
-		jobsAhead++
+	jobsThroughCompletion := running + position
+	batches := (jobsThroughCompletion + jobs.config.Concurrency - 1) / jobs.config.Concurrency
+	if batches < 1 {
+		batches = 1
 	}
-	if jobsAhead < 1 {
-		jobsAhead = 1
-	}
-	return time.Duration(jobsAhead) * jobs.config.EstimatedDuration
+	return time.Duration(batches) * jobs.config.EstimatedDuration
 }
 
 func (jobs *HorizonJobs) worker() {
@@ -750,11 +755,11 @@ func (jobs *HorizonJobs) worker() {
 				continue
 			}
 			jobs.mu.Lock()
-			jobs.running = true
+			jobs.running++
 			jobs.mu.Unlock()
 			jobs.process(job)
 			jobs.mu.Lock()
-			jobs.running = false
+			jobs.running--
 			jobs.mu.Unlock()
 		}
 	}

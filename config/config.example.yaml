@@ -3,16 +3,18 @@ app:
   horizon: 72h
   step: 3h
   workers: 6
+  forecast_concurrency: 2
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
   request_timeout: 15m
 
-# ICON-EU-only low-altitude directional analysis. A single heavy worker is
-# fixed in code; these settings bound its subprocesses, queue, and disk cache.
+# ICON-EU-only low-altitude directional analysis. Its concurrency is
+# independent from the ordinary forecast queue.
 horizon_analysis:
   enabled: true
   queue_size: 4
+  concurrency: 1
   cdo_workers: 2
   job_timeout: 10m
   cache_ttl: 48h
@@ -45,6 +47,7 @@ providers:
 sync:
   poll_interval: 15m
   download_parallelism: 4
+  download_limit_mbit: 0
   min_free_space: 150GiB
 
 algorithms:

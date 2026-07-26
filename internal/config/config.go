@@ -32,6 +32,7 @@ type Config struct {
 type HorizonAnalysisConfig struct {
 	Enabled           bool     `yaml:"enabled"`
 	QueueSize         int      `yaml:"queue_size"`
+	Concurrency       int      `yaml:"concurrency"`
 	CDOWorkers        int      `yaml:"cdo_workers"`
 	JobTimeout        Duration `yaml:"job_timeout"`
 	CacheTTL          Duration `yaml:"cache_ttl"`
@@ -53,6 +54,7 @@ type AppConfig struct {
 	Horizon               Duration `yaml:"horizon"`
 	Step                  Duration `yaml:"step"`
 	Workers               int      `yaml:"workers"`
+	ForecastConcurrency   int      `yaml:"forecast_concurrency"`
 	ECCodesWorkers        int      `yaml:"eccodes_workers"`
 	PointCacheEntries     int      `yaml:"point_cache_entries"`
 	PointCacheMemoryLimit ByteSize `yaml:"point_cache_memory_limit"`
@@ -85,6 +87,7 @@ type ProviderConfig struct {
 type SyncConfig struct {
 	PollInterval        Duration `yaml:"poll_interval"`
 	DownloadParallelism int      `yaml:"download_parallelism"`
+	DownloadLimitMbit   float64  `yaml:"download_limit_mbit"`
 	MinFreeSpace        ByteSize `yaml:"min_free_space"`
 }
 
@@ -140,13 +143,14 @@ func Defaults() Config {
 			Horizon:               Duration{72 * time.Hour},
 			Step:                  Duration{3 * time.Hour},
 			Workers:               6,
+			ForecastConcurrency:   2,
 			ECCodesWorkers:        8,
 			PointCacheEntries:     512,
 			PointCacheMemoryLimit: ByteSize(20 << 30),
 			RequestTimeout:        Duration{15 * time.Minute},
 		},
 		HorizonAnalysis: HorizonAnalysisConfig{
-			Enabled: true, QueueSize: 4, CDOWorkers: 2,
+			Enabled: true, QueueSize: 4, Concurrency: 1, CDOWorkers: 2,
 			JobTimeout: Duration{10 * time.Minute}, CacheTTL: Duration{48 * time.Hour},
 			CacheEntries: 128, EstimatedDuration: Duration{3 * time.Minute},
 		},
@@ -216,6 +220,27 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) applyEnvironment() error {
+	if value, exists := os.LookupEnv("ASTRO_FORECAST_CONCURRENCY"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_FORECAST_CONCURRENCY: %w", err)
+		}
+		c.App.ForecastConcurrency = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_HORIZON_CONCURRENCY"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_HORIZON_CONCURRENCY: %w", err)
+		}
+		c.HorizonAnalysis.Concurrency = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_ICON_DOWNLOAD_LIMIT_MBIT"); exists && strings.TrimSpace(value) != "" {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_ICON_DOWNLOAD_LIMIT_MBIT: %w", err)
+		}
+		c.Sync.DownloadLimitMbit = parsed
+	}
 	if value, exists := os.LookupEnv("ASTRO_HORIZON_ANALYSIS_ENABLED"); exists {
 		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
@@ -324,6 +349,9 @@ func (c Config) Validate() error {
 	if c.App.Workers < 1 || c.App.Workers > 64 {
 		problems = append(problems, "app.workers must be between 1 and 64")
 	}
+	if c.App.ForecastConcurrency < 1 || c.App.ForecastConcurrency > 16 {
+		problems = append(problems, "app.forecast_concurrency must be between 1 and 16")
+	}
 	if c.App.ECCodesWorkers < 1 || c.App.ECCodesWorkers > 64 {
 		problems = append(problems, "app.eccodes_workers must be between 1 and 64")
 	}
@@ -339,6 +367,9 @@ func (c Config) Validate() error {
 	if c.HorizonAnalysis.Enabled {
 		if c.HorizonAnalysis.QueueSize < 1 || c.HorizonAnalysis.QueueSize > 32 {
 			problems = append(problems, "horizon_analysis.queue_size must be between 1 and 32")
+		}
+		if c.HorizonAnalysis.Concurrency < 1 || c.HorizonAnalysis.Concurrency > 8 {
+			problems = append(problems, "horizon_analysis.concurrency must be between 1 and 8")
 		}
 		if c.HorizonAnalysis.CDOWorkers < 1 || c.HorizonAnalysis.CDOWorkers > 4 {
 			problems = append(problems, "horizon_analysis.cdo_workers must be between 1 and 4")
@@ -364,6 +395,9 @@ func (c Config) Validate() error {
 	}
 	if c.Sync.DownloadParallelism < 1 || c.Sync.DownloadParallelism > 32 {
 		problems = append(problems, "sync.download_parallelism must be between 1 and 32")
+	}
+	if math.IsNaN(c.Sync.DownloadLimitMbit) || math.IsInf(c.Sync.DownloadLimitMbit, 0) || c.Sync.DownloadLimitMbit < 0 {
+		problems = append(problems, "sync.download_limit_mbit must be finite and non-negative")
 	}
 	if c.Sync.MinFreeSpace < 0 {
 		problems = append(problems, "sync.min_free_space cannot be negative")

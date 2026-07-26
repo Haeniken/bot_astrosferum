@@ -83,6 +83,10 @@ func (scheduler ICONEUScheduler) runOnce(ctx context.Context) {
 			current = augmented
 			scheduler.Logf("ICON-EU run %s hourly cloud published with %d steps", current.RunID, len(current.CloudSteps))
 		}
+		if err := iconeu.PublishCurrent(scheduler.DataRoot, current); err != nil {
+			scheduler.Logf("ICON-EU publish %s failed: %v", current.RunID, err)
+			return
+		}
 		age := time.Since(current.BaseTime)
 		if scheduler.MaxStaleAge > 0 && age > scheduler.MaxStaleAge {
 			scheduler.Logf("ICON-EU current run %s is stale: age=%s", current.RunID, age.Round(time.Minute))
@@ -115,6 +119,10 @@ func (scheduler ICONEUScheduler) runOnce(ctx context.Context) {
 	manifest, err = scheduler.Client.AugmentCloud(ctx, scheduler.DataRoot, manifest)
 	if err != nil {
 		scheduler.Logf("ICON-EU hourly cloud sync %s failed: %v", remote.ID, err)
+		return
+	}
+	if err := iconeu.PublishCurrent(scheduler.DataRoot, manifest); err != nil {
+		scheduler.Logf("ICON-EU publish %s failed: %v", remote.ID, err)
 		return
 	}
 	scheduler.Logf("ICON-EU run %s hourly cloud published with %d steps", manifest.RunID, len(manifest.CloudSteps))

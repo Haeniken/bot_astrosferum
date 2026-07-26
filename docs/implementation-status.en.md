@@ -17,6 +17,7 @@ Deployment target: operator-managed host
 - Telegram accepts native locations and VK accepts geo attachments; both accept `59.9386, 30.3141` and `/forecast 59.9386 30.3141`;
 - both thin platform adapters depend on the common `internal/app/bot` handler and never import each other; VK Group Long Poll is enabled at startup, messages and native geo are normalized to the common request, while texts, keyboards, PNG photos, and lossless document uploads are translated back to VK API calls;
 - Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;
+- ordinary forecasts share one cross-platform calculation limit and report a queue position after both configured slots are occupied; Horizon retains its independent bounded queue and independently configurable worker count;
 - VK photo/document uploads validate the handshake and retry at most twice with `1 s`/`2 s` backoff and a fresh upload URL; this handles transient `pu.vk.ru` `405` or incomplete upload responses without unbounded retries;
 - sequential media deliveries in each VK request have a minimum `150 ms` interval without a global lock; parallel VK requests and Telegram delivery are unchanged;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
@@ -29,7 +30,7 @@ Deployment target: operator-managed host
 - ICON Global now synchronizes the same 79-hour, 27-level `CLC/P/T/QC/QI + lower U/V/TKE + HHL` contract as ICON-EU, using height-equivalent model indices shifted by `+46`; DWD Global TKE ends at `+48 h`, so bundles are 187 messages/hour through that point and 169 thereafter, the cloud map remains complete, and hybrid Overall stops rather than extrapolating missing turbulence; direct `VIS` also remains unavailable in the DWD Global feed;
 - atomic sync streams pressure-level `U/V/FI/T`, retains no `.bz2`, and validates every bundle with ecCodes and SHA-256;
 - legacy pressure-level runs atomically download only missing `FI/T`; the scheduler independently publishes versioned hourly surface/cloud bundles, while ecCodes 2.45 `clwmr/QI` names normalize to stable internal `qc/qi`;
-- `current` changes through an atomic symlink operation only after complete validation;
+- ICON-EU and ICON Global keep the preceding complete `current` run available while every component of a newer run downloads; `current` changes through one atomic symlink operation only after complete validation;
 - an exclusive lock prevents overlapping syncs; the scheduler probes once at startup and every 15 minutes thereafter, retaining two runs; user requests never download data and only read the last complete publication;
 - point extraction reads 25 vertical profiles concurrently from the current manifest;
 - an independent surface sync publishes 79 hourly `f000…f078` bundles containing `T_2M`, `TD_2M`, `RELHUM_2M`, `CLCT/CLCL/CLCM/CLCH`, `TOT_PREC`, `U_10M`, `V_10M`, `VMAX_10M`, `PMSL`, `VIS`, `TQV`, and exact total-column `TQC/TQI`;
@@ -61,7 +62,7 @@ implementation consists of:
   callback events; platform adapters contain no Horizon formula; the
   composition root now constructs one shared Horizon service and attaches its
   button/action handlers to both enabled platforms;
-- one shared bounded heavy-job queue and worker, per-user admission,
+- one shared bounded heavy-job queue with independently configurable workers, per-user admission,
   identical-key fan-out, timeout/cancellation, signed compact actions, and a
   separate bounded two-worker delivery path with bounded cache-hit admission;
 - an atomic bounded disk cache with startup, periodic, and post-publication

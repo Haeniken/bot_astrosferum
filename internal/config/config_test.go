@@ -20,10 +20,10 @@ func TestLoadExample(t *testing.T) {
 	if cfg.App.RequestTimeout.Duration != 15*time.Minute {
 		t.Fatalf("unexpected request timeout: %s", cfg.App.RequestTimeout.Duration)
 	}
-	if cfg.App.ECCodesWorkers != 8 || cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
+	if cfg.App.ForecastConcurrency != 2 || cfg.App.ECCodesWorkers != 8 || cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
 		t.Fatalf("unexpected performance configuration: %+v", cfg.App)
 	}
-	if !cfg.HorizonAnalysis.Enabled || cfg.HorizonAnalysis.QueueSize != 4 || cfg.HorizonAnalysis.CDOWorkers != 2 ||
+	if !cfg.HorizonAnalysis.Enabled || cfg.HorizonAnalysis.QueueSize != 4 || cfg.HorizonAnalysis.Concurrency != 1 || cfg.HorizonAnalysis.CDOWorkers != 2 ||
 		cfg.HorizonAnalysis.JobTimeout.Duration != 10*time.Minute || cfg.HorizonAnalysis.EstimatedDuration.Duration != 3*time.Minute {
 		t.Fatalf("unexpected horizon-analysis configuration: %+v", cfg.HorizonAnalysis)
 	}
@@ -38,6 +38,7 @@ func TestLoadExample(t *testing.T) {
 func TestHorizonAnalysisLimitsValidation(t *testing.T) {
 	tests := []func(*Config){
 		func(cfg *Config) { cfg.HorizonAnalysis.QueueSize = 0 },
+		func(cfg *Config) { cfg.HorizonAnalysis.Concurrency = 0 },
 		func(cfg *Config) { cfg.HorizonAnalysis.CDOWorkers = 5 },
 		func(cfg *Config) { cfg.HorizonAnalysis.JobTimeout = Duration{30 * time.Second} },
 		func(cfg *Config) { cfg.HorizonAnalysis.CacheTTL = Duration{30 * time.Minute} },
@@ -71,6 +72,25 @@ func TestHorizonAnalysisEnvironmentToggle(t *testing.T) {
 	t.Setenv("ASTRO_HORIZON_ANALYSIS_ENABLED", "not-a-boolean")
 	if _, err := Load(filepath.Join("..", "..", "config", "config.example.yaml")); err == nil || !strings.Contains(err.Error(), "ASTRO_HORIZON_ANALYSIS_ENABLED") {
 		t.Fatalf("invalid toggle error = %v", err)
+	}
+}
+
+func TestForecastConcurrencyEnvironmentOverride(t *testing.T) {
+	t.Setenv("ASTRO_FORECAST_CONCURRENCY", "3")
+	t.Setenv("ASTRO_HORIZON_CONCURRENCY", "2")
+	t.Setenv("ASTRO_ICON_DOWNLOAD_LIMIT_MBIT", "75.5")
+	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App.ForecastConcurrency != 3 {
+		t.Fatalf("forecast concurrency = %d, want 3", cfg.App.ForecastConcurrency)
+	}
+	if cfg.HorizonAnalysis.Concurrency != 2 {
+		t.Fatalf("horizon concurrency = %d, want 2", cfg.HorizonAnalysis.Concurrency)
+	}
+	if cfg.Sync.DownloadLimitMbit != 75.5 {
+		t.Fatalf("ICON download limit = %g, want 75.5", cfg.Sync.DownloadLimitMbit)
 	}
 }
 

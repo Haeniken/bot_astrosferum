@@ -41,7 +41,7 @@ func (scheduler ICONGlobalScheduler) Run(ctx context.Context) {
 }
 
 func (scheduler ICONGlobalScheduler) runOnce(ctx context.Context) {
-	if err := iconglobal.EnsureGrid(ctx, scheduler.DataRoot, scheduler.Logf); err != nil {
+	if err := iconglobal.EnsureGrid(ctx, scheduler.DataRoot, scheduler.Logf, scheduler.Client.HTTPClient); err != nil {
 		scheduler.Logf("ICON Global static grid unavailable: %v", err)
 		return
 	}

@@ -189,10 +189,15 @@ func runSyncICONGlobal(ctx context.Context, args []string, stdout, stderr io.Wri
 		return err
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
-	if err := iconglobal.EnsureGrid(ctx, cfg.Paths.Data, logf); err != nil {
+	client := iconglobal.NewClient()
+	downloadLimiter, err := model.NewDownloadLimiter(cfg.Sync.DownloadLimitMbit)
+	if err != nil {
 		return err
 	}
-	client := iconglobal.NewClient()
+	client.HTTPClient = downloadLimiter.WrapHTTPClient(client.HTTPClient)
+	if err := iconglobal.EnsureGrid(ctx, cfg.Paths.Data, logf, client.HTTPClient); err != nil {
+		return err
+	}
 	client.Workers = cfg.Sync.DownloadParallelism
 	client.Progress = logf
 	var remote model.RemoteRun
@@ -241,6 +246,11 @@ func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 	client := iconeu.NewClient()
+	downloadLimiter, err := model.NewDownloadLimiter(cfg.Sync.DownloadLimitMbit)
+	if err != nil {
+		return err
+	}
+	client.HTTPClient = downloadLimiter.WrapHTTPClient(client.HTTPClient)
 	client.Workers = cfg.Sync.DownloadParallelism
 	client.Progress = func(format string, values ...any) { writeLog(stderr, format, values...) }
 	var remote model.RemoteRun
@@ -273,6 +283,9 @@ func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	manifest, err = client.AugmentCloud(ctx, cfg.Paths.Data, manifest)
 	if err != nil {
+		return err
+	}
+	if err := iconeu.PublishCurrent(cfg.Paths.Data, manifest); err != nil {
 		return err
 	}
 	return writeJSON(stdout, manifest.Manifest)
@@ -390,6 +403,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return errors.New("at least one messaging platform must be enabled")
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
+	downloadLimiter, err := model.NewDownloadLimiter(cfg.Sync.DownloadLimitMbit)
+	if err != nil {
+		return err
+	}
 	iconEUStore := iconeu.NewCachedStore(
 		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
 		int64(cfg.App.PointCacheMemoryLimit), logf,
@@ -401,6 +418,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			PrimaryCoverage: iconeu.Coverage(), Primary: iconEUStore, Fallback: globalStore,
 		}
 	}
+	forecastQueue, err := bot.NewForecastQueue(cfg.App.ForecastConcurrency)
+	if err != nil {
+		return err
+	}
 	var horizonJobs *bot.HorizonJobs
 	if cfg.HorizonAnalysis.Enabled {
 		horizonSource := iconeu.NewHorizonStore(
@@ -408,9 +429,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			cfg.HorizonAnalysis.CDOWorkers, logf,
 		)
 		horizonJobs, err = bot.NewHorizonJobs(bot.HorizonJobsConfig{
-			QueueSize: cfg.HorizonAnalysis.QueueSize, JobTimeout: cfg.HorizonAnalysis.JobTimeout.Duration,
-			CacheRoot: filepath.Join(cfg.Paths.Data, "cache", "horizon"),
-			CacheTTL:  cfg.HorizonAnalysis.CacheTTL.Duration, CacheEntries: cfg.HorizonAnalysis.CacheEntries,
+			QueueSize: cfg.HorizonAnalysis.QueueSize, Concurrency: cfg.HorizonAnalysis.Concurrency,
+			JobTimeout: cfg.HorizonAnalysis.JobTimeout.Duration,
+			CacheRoot:  filepath.Join(cfg.Paths.Data, "cache", "horizon"),
+			CacheTTL:   cfg.HorizonAnalysis.CacheTTL.Duration, CacheEntries: cfg.HorizonAnalysis.CacheEntries,
 			EstimatedDuration:      cfg.HorizonAnalysis.EstimatedDuration.Duration,
 			MaxStaleAge:            cfg.Providers.ICONEU.MaxStaleAge.Duration,
 			RenderAlgorithmVersion: render.HorizonRenderVersion,
@@ -471,6 +493,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		if err := handler.EnableForecast(forecastStore, filepath.Join(cfg.Paths.Temp, renderDirectory), render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height}); err != nil {
+			return err
+		}
+		if err := handler.EnableForecastQueue(forecastQueue); err != nil {
 			return err
 		}
 		if err := handler.SetForecastMaxStaleAge(cfg.Providers.ICONEU.MaxStaleAge.Duration); err != nil {
@@ -543,6 +568,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}})
 	}
 	syncClient := iconeu.NewClient()
+	syncClient.HTTPClient = downloadLimiter.WrapHTTPClient(syncClient.HTTPClient)
 	syncClient.Workers = cfg.Sync.DownloadParallelism
 	syncClient.Progress = func(format string, values ...any) {
 		writeLog(stderr, format, values...)
@@ -556,6 +582,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	go scheduler.Run(ctx)
 	if cfg.Providers.ICONGlobal.Enabled {
 		globalClient := iconglobal.NewClient()
+		globalClient.HTTPClient = downloadLimiter.WrapHTTPClient(globalClient.HTTPClient)
 		globalClient.Workers = cfg.Sync.DownloadParallelism
 		globalClient.Progress = func(format string, values ...any) { writeLog(stderr, format, values...) }
 		globalScheduler := app.ICONGlobalScheduler{

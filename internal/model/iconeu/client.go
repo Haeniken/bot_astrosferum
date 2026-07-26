@@ -140,9 +140,6 @@ func (client *Client) Sync(ctx context.Context, run model.RemoteRun, dataRoot st
 	providerRoot := filepath.Join(dataRoot, "models", "icon-eu")
 	finalDirectory := filepath.Join(providerRoot, "runs", run.ID)
 	if current, err := LoadManifest(filepath.Join(finalDirectory, "manifest.json")); err == nil {
-		if err := publishCurrent(providerRoot, run.ID); err != nil {
-			return LoadedManifest{}, err
-		}
 		return current, nil
 	}
 	incomingDirectory := filepath.Join(providerRoot, "incoming", fmt.Sprintf("%s-%d", run.ID, time.Now().UnixNano()))
@@ -233,9 +230,6 @@ func (client *Client) Sync(ctx context.Context, run model.RemoteRun, dataRoot st
 		return LoadedManifest{}, fmt.Errorf("publish ICON-EU run: %w", err)
 	}
 	published = true
-	if err := publishCurrent(providerRoot, run.ID); err != nil {
-		return LoadedManifest{}, err
-	}
 	return LoadedManifest{Manifest: manifest, Directory: finalDirectory}, nil
 }
 
@@ -442,4 +436,14 @@ func publishCurrent(providerRoot, runID string) error {
 		return fmt.Errorf("publish current ICON-EU link: %w", err)
 	}
 	return nil
+}
+
+// PublishCurrent exposes an ICON-EU run only after every dataset required by
+// the seven-chart forecast has been published. While a new run is downloading,
+// readers therefore continue using the previous complete run.
+func PublishCurrent(dataRoot string, loaded LoadedManifest) error {
+	if !loaded.HasWindThermodynamics() || !loaded.HasHourlySurface() || !loaded.HasHourlyCloud() {
+		return errors.New("refuse to publish incomplete ICON-EU run")
+	}
+	return publishCurrent(filepath.Join(dataRoot, "models", "icon-eu"), loaded.RunID)
 }

@@ -378,7 +378,7 @@ Fallback никогда не происходит молча: provider, сетк
 6. Сообщения ICON Global сохраняются на полной native-сетке и группируются по сроку. При извлечении точки CDO применяет официальную статическую геометрию DWD и выбирает ближайший native-узел; ICON-EU этот шаг пропускает.
 7. Записывает `manifest.json`, затем делает `fsync` критичных файлов.
 8. Переименовывает каталог `incoming/<run-id>` в `runs/<run-id>`.
-9. Атомарно заменяет `current.json` через `current.json.tmp -> current.json`.
+9. Только после готовности pressure, thermodynamics, почасовых surface и native-level cloud данных атомарно переключает symlink `current` на новый run.
 10. После публикации удаляет старые прогоны и недействительные кэши.
 
 Неполный run никогда не становится current.
@@ -409,9 +409,9 @@ heatmap остаётся почасовой на всём горизонте, а
 заканчивается на последнем native-TKE сроке без экстраполяции турбулентности.
 Pressure-level wind/seeing диагностика продолжается.
 
-В следующих циклах Global symlink `current` не переключается после меньшего
-pressure/surface этапа. Он остаётся на предыдущем полном run до готовности
-model-level расширения, затем один раз заменяется атомарно.
+В следующих циклах EU и Global symlink `current` не переключается после
+промежуточного этапа. Он остаётся на предыдущем полном run до готовности всех
+нужных пользовательскому прогнозу наборов, затем один раз заменяется атомарно.
 
 ### 12.2. Состояния run
 
@@ -834,6 +834,8 @@ ICON-EU run 2026072206 UTC
 - одинаковые одновременные point-запросы объединяются через per-key flight;
 - каждая включённая платформа имеет шесть шардированных по peer workers: разные peer обрабатываются параллельно, порядок одного peer сохраняется;
 - очередь каждого adapter ограничена и при заполнении создаёт backpressure только своему poller;
+- одна общая очередь обычных прогнозов ограничивает активные расчёты Telegram и VK значением `ASTRO_FORECAST_CONCURRENCY` и сообщает ожидающим место;
+- у Horizon остаются отдельные ограниченная очередь и лимит `ASTRO_HORIZON_CONCURRENCY`;
 - ecCodes ограничен общим семафором на восемь процессов;
 - публикация нового run не ломает текущий запрос: запрос держит неизменяемые ссылки на manifests выбранного bundle;
 - кэш записывается `temp + fsync + rename`.
@@ -877,6 +879,7 @@ app:
   horizon: 72h
   step: 3h
   workers: 6
+  forecast_concurrency: 2
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
@@ -885,6 +888,7 @@ app:
 horizon_analysis:
   enabled: true
   queue_size: 4
+  concurrency: 1
   cdo_workers: 2
   job_timeout: 10m
   cache_ttl: 48h
@@ -916,6 +920,7 @@ providers:
 sync:
   poll_interval: 15m
   download_parallelism: 4
+  download_limit_mbit: 0
   min_free_space: 150GiB
 
 algorithms:
@@ -1256,7 +1261,8 @@ Run identity проверяется до любого cache reuse или тяж�
 Horizon не должен занимать workers обычного точечного прогноза. Текущий код
 реализует следующую границу внутри одного процесса:
 
-- один общий background worker и одна bounded queue для Telegram и VK;
+- одна общая bounded queue для Telegram и VK с независимо настраиваемым числом
+  workers `ASTRO_HORIZON_CONCURRENCY`;
 - отдельный Horizon-семафор CDO под управлением
   `horizon_analysis.cdo_workers`, по умолчанию не более двух subprocesses;
 - два delivery workers и отдельная bounded delivery queue с ограниченным

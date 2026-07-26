@@ -96,8 +96,8 @@ func (cache *horizonCache) publish(key string, now time.Time, render func(string
 	if err := os.WriteFile(filepath.Join(staging, horizonCacheManifest), manifestBytes, 0o640); err != nil {
 		return "", err
 	}
-	// Rendering intentionally happens outside the cache lock. While the sole
-	// heavy worker renders, another callback can still inspect the cache and
+	// Rendering intentionally happens outside the cache lock. While a heavy
+	// worker renders, another callback can still inspect the cache and
 	// join the in-memory singleflight instead of blocking for minutes.
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

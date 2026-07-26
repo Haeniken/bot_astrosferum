@@ -370,7 +370,7 @@ Fallback is never silent: provider, grid, and run are shown in text and in each 
 6. ICON Global messages are retained on the full native grid and grouped by forecast step. At point extraction CDO applies the official static DWD grid geometry and performs nearest-native-node remapping; ICON-EU skips this step.
 7. `manifest.json` is written and critical files are synced.
 8. `incoming/<run-id>` is renamed to `runs/<run-id>`.
-9. `current.json.tmp` atomically replaces `current.json`.
+9. Only after the pressure, thermodynamics, hourly surface, and native-level cloud datasets are all ready does an atomic `current` symlink switch expose the run.
 10. Old runs and invalidated caches are pruned after publication.
 
 An incomplete run can never become current.
@@ -401,9 +401,10 @@ heatmap therefore remains hourly for the full horizon, while the hybrid
 TKE/HMNSP99 Overall series ends at the last native-TKE time instead of
 extrapolating turbulence. Pressure-level wind/seeing diagnostics continue.
 
-For subsequent cycles, the Global `current` symlink is not switched after the
-smaller pressure/surface stage. It remains on the preceding complete run until
-the model-level extension is also complete, then switches once atomically.
+For subsequent EU and Global cycles, the `current` symlink is not switched
+after a smaller intermediate stage. It remains on the preceding complete run
+until every dataset required by the user forecast is ready, then switches once
+atomically.
 
 ### 12.2. Run states
 
@@ -828,6 +829,8 @@ Only platform adapters handle attachment-count and message-length limits. Domain
 - identical concurrent point misses collapse through a per-key flight;
 - each enabled platform has six peer-affine workers, so different peers run concurrently while each peer stays ordered;
 - each adapter queue is bounded and applies backpressure to its own poller when full;
+- one shared ordinary-forecast queue limits active calculations across Telegram and VK to `ASTRO_FORECAST_CONCURRENCY` and reports a position to waiting users;
+- Horizon uses the independent `ASTRO_HORIZON_CONCURRENCY` limit and its existing bounded queue;
 - ecCodes has a shared eight-process semaphore;
 - publishing a new run cannot alter an in-flight immutable manifest reference;
 - every cache write uses `temp + fsync + rename`.
@@ -871,6 +874,7 @@ app:
   horizon: 72h
   step: 3h
   workers: 6
+  forecast_concurrency: 2
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
@@ -879,6 +883,7 @@ app:
 horizon_analysis:
   enabled: true
   queue_size: 4
+  concurrency: 1
   cdo_workers: 2
   job_timeout: 10m
   cache_ttl: 48h
@@ -910,6 +915,7 @@ providers:
 sync:
   poll_interval: 15m
   download_parallelism: 4
+  download_limit_mbit: 0
   min_free_space: 150GiB
 
 algorithms:
@@ -1253,7 +1259,8 @@ results report freshness by the same rule.
 Horizon work must not consume the ordinary point-forecast workers. The current
 source implements this single-process boundary:
 
-- one shared background worker and one bounded queue for both Telegram and VK;
+- one shared bounded queue for both Telegram and VK, with the independently
+  configurable `ASTRO_HORIZON_CONCURRENCY` worker count;
 - a separate Horizon CDO semaphore controlled by
   `horizon_analysis.cdo_workers`, at most two subprocesses by default;
 - two delivery workers and a separate bounded delivery queue, with bounded
