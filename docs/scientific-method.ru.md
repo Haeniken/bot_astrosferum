@@ -507,20 +507,21 @@ q_{\mathrm{fog}}=
 ```
 
 ```math
-\begin{aligned}
-q_{\mathrm{precip}}
-&=
-\begin{cases}
-0, & R_{1\mathrm{h}}\ge R_{\mathrm{detect}},\\
-1, & R_{1\mathrm{h}}<R_{\mathrm{detect}},
-\end{cases}
-&R_{\mathrm{detect}}&=0.05\ \mathrm{mm},\\
-Q&=f_{\mathrm{turbulence}}
-q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
-q_{\mathrm{surface}}q_{\mathrm{fog}}q_{\mathrm{precip}},\\
-\mathrm{Overall}&=1+9\,\mathrm{clamp}(Q,0,1).
-\end{aligned}\tag{F12}
+q_{\mathrm{precip}}=[R_{1\mathrm{h}}<R_{\mathrm{detect}}],
+\qquad R_{\mathrm{detect}}=0.05\ \mathrm{mm}.
 ```
+
+```math
+Q=f_{\mathrm{turbulence}}q_{\mathrm{cloud}}^{w_{\mathrm{cloud}}}
+q_{\mathrm{surface}}q_{\mathrm{fog}}q_{\mathrm{precip}}.
+```
+
+```math
+\mathrm{Overall}=1+9\,\mathrm{clamp}(Q,0,1).\tag{F12}
+```
+
+Здесь `[A]` — скобка Айверсона: она равна `1`, когда условие `A` выполнено,
+и `0` в противном случае.
 
 Стандартные параметры: `epsilon_best=0.5 arcsec`, `epsilon_bad=2.0 arcsec`,
 `tau_best=5.2 ms`, `tau_bad=1.6 ms`, `w_tau=0.25`, `w_seeing=1`,
