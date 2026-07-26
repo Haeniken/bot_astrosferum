@@ -22,6 +22,38 @@ Platform tokens deliberately do not belong in `.env`: keep them in
 | `ASTRO_LIGHT_POLLUTION_ATLAS_YEAR` | No | `2024` | Pins the operator-verified annual Light Pollution Atlas dataset; it is not advanced automatically. Change only after verifying and provisioning a supported dataset. |
 | `ASTRO_FORECAST_CONCURRENCY` | No | `2` | Shared maximum number of ordinary forecast calculations running at once across Telegram and VK. Further requests wait and receive their queue position. |
 | `ASTRO_ICON_DOWNLOAD_LIMIT_MBIT` | No | Unset | Aggregate decimal-Mbit/s limit shared by simultaneous ICON-EU and ICON Global downloads. Unset, empty, or `0` means unlimited. |
+| `ASTRO_GEOS_CF_ENABLED` | No | `true` | Enables the independent NASA GEOS-CF AOD550/ozone enrichment used only by the night-time Reference V-band diagnostic. A disabled, stale, slow, or unavailable source removes the ring but never fails or changes the primary ICON Overall forecast. |
+
+The related provider settings are in YAML because they describe one external
+data source rather than user calibration:
+
+```yaml
+providers:
+  geos_cf:
+    enabled: true
+    dataset_url: https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/v2/fcst/xgc_tavg_1hr_glo_L1440x721_slv.latest
+    request_timeout: 60s
+    metadata_cache_ttl: 10m
+    data_cache_ttl: 6h
+    max_stale_age: 48h
+    cache_entries: 256
+```
+
+The HTTP timeout lets a cold OPeNDAP request finish and populate the bounded
+RAM cache. The application waits only five additional seconds after the ICON
+inputs are ready; on timeout it renders without the Reference-V ring while a
+service-owned operation may continue for at most 65 seconds. That operation is
+cancelled during bot shutdown. Unique point-slab downloads are fail-fast
+limited to `ASTRO_FORECAST_CONCURRENCY`; identical requests share one flight,
+so a slow public source cannot create an unbounded background backlog. Metadata
+refresh detects a new composition reference time, and the render-cache identity
+includes the algorithm/passband versions and every interpolated AOD/ozone
+value, so newer data or formulas cannot reuse an older image.
+
+Bundled Compose always supplies `ASTRO_GEOS_CF_ENABLED`, defaulting it to
+`true`; therefore set `ASTRO_GEOS_CF_ENABLED=false` in `.env` to disable the
+provider under Compose. YAML-only `enabled: false` applies to direct execution
+when the environment variable is absent.
 
 ## Optional ICON-EU horizon analysis
 
@@ -86,6 +118,7 @@ inconsistent values stop the application during configuration validation.
 | `ASTRO_OVERALL_COHERENCE_TIME_WEIGHT` | `0.25` | Bounded weight of wind-sensitive coherence time `tau0`; `0` disables this guard and `1` applies it fully. |
 | `ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY` | `0.25` | Maximum combined loss from the seeing/`tau0` utility term. It preserves at least a `0.75` factor and does not clip the physical diagnostics. |
 | `ASTRO_OVERALL_POSSIBLE_FOG_FACTOR` / `ASTRO_OVERALL_HIGH_FOG_FACTOR` | `0.75` / `0.10` | Multipliers for possible/high fog. Smaller factors impose a stronger penalty. |
+| `ASTRO_OVERALL_PRECIPITATION_DETECT_MM` | `0.05` | Detection threshold for deterministic hourly precipitation. At or above it, ordinary Overall applies a binary operational veto and returns index 1; intensity is deliberately not converted into a smooth penalty. This field is retained in the shared calibration identity but the current directional Horizon calculation does not ingest precipitation. |
 | `ASTRO_OVERALL_GOOD_SEEING_ARCSEC` / `ASTRO_OVERALL_BAD_SEEING_ARCSEC` | `0.5` / `2.0` | Best and poor reference limits for logarithmically mapping modeled seeing to quality. |
 | `ASTRO_OVERALL_BEST_COHERENCE_TIME_MS` / `ASTRO_OVERALL_BAD_COHERENCE_TIME_MS` | `5.2` / `1.6` | Best and poor reference limits for mapping `tau0` to its guard factor. |
 | `ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M` / `ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M` | `500` / `2000` | Lower/upper clamps for the ICON mixed-layer depth used by the hybrid TKE + HMNSP99 turbulence integration. |

@@ -488,7 +488,10 @@ Before calculations:
   pressure-level profile only to those valid times;
 - carry source and confidence metadata forward.
 
-If one optional field is unavailable, its metric becomes `unavailable`; the complete response should not fail because a nonessential layer is missing.
+If one optional field is unavailable, its metric becomes `unavailable` or
+`partial`; the complete response should not fail because a nonessential layer
+is missing. Missing optional data must never be represented as favourable
+conditions.
 
 ## 15. Calculations
 
@@ -555,6 +558,13 @@ which a roughly 7 km HHL cell does not have. HHL is neither a local DEM nor an
 optical skyline model and does not resolve local terrain or obstructions. Horizon
 analysis reuses the same HHL field only for a coarse directional ray/terrain
 intersection.
+
+The TKE boundary layer and HMNSP99 free atmosphere are retained as one ordered
+piecewise-linear `Cn2` profile. Seeing, `tau0`, `theta0`, effective turbulence
+height/wind, fixed-height `FracGL250/500/1000`, free-atmosphere seeing above
+500 m, and structural coverage all derive from that same profile. The dynamic
+PBL fraction remains distinct from fixed-height MASS-like `FracGL`; the latter
+is a model diagnostic, not a MASS measurement.
 
 Model-level data are interpolated to this scale only within the actual source range. No vertical extrapolation is allowed; cells beyond available data remain missing.
 
@@ -638,7 +648,11 @@ Dew risk is an operational advisory only: it helps the observer prepare a heater
 
 This is neither another physical “seeing” scale nor a universal scientific
 `1…10` scale. It is an auditable mapping of hourly suitability for visual
-astronomy and astrophotography. Dew does not enter the index.
+astronomy and astrophotography. Dew does not enter the index. Interval
+precipitation `R_1h` at or above the configurable `0.05 mm per hourly frame`
+detection boundary is a
+binary operational veto: it sets the hour to `1.0` rather than inventing a
+smooth intensity penalty from one deterministic model member.
 
 Optical turbulence uses a hybrid calculation. Each hour takes its PBL boundary
 from single-level `ICON MH` and applies
@@ -651,7 +665,16 @@ uses pressure-level `T/U/V/FI`. `J_total=J_ground+J_free` becomes zenith long-ex
 `500 nm` through the standard integral. Wind enters
 `tau0=[2.910·(2π/lambda)²·integral(Cn²·|V|^(5/3)dz)]^(−3/5)`. HMNSP99 vector
 shear already includes direction changes, so no separate `direction delta`
-multiplier is added.
+multiplier is added. Each interval trapezoid averages endpoint values of
+`Cn²·|V|^(5/3)`; it never raises an interval-mean speed to `5/3`, which would
+bias the convex wind moment low by Jensen's inequality.
+
+The scalar Overall hour is rejected if vertical profile coverage or geometric
+`h^(5/3)`-moment coverage is below `90%`, or if the model/profile top is below
+`15 km AGL`. The stricter `complete` state requires both coverages at least
+`99%` and a top at or above `18 km AGL`. Consequently a valid `15…18 km`
+profile can be used only as partial, and every `ProfileQuality != complete`
+sets the chart's `!` marker.
 
 Seeing and `tau0` map logarithmically between `.env` boundaries
 `0.5…2.0 arcsec` and `5.2…1.6 ms`; `tau0` contributes inside the turbulence
@@ -693,9 +716,14 @@ With defaults `w_seeing=1` and `w_cloud=2`:
 q_turbulence = q_seeing^w_seeing * [1−0.25·(1−q_tau)]
 f_turbulence = 0.75 + 0.25·q_turbulence
 normalized = f_turbulence * q_cloud^w_cloud
-             * q_surface_wind * q_fog
+             * q_surface_wind * q_fog * q_precip
 index = 1 + 9 * clamp(normalized, 0, 1)
 ```
+
+The renderer allocates the exact loss `1-normalized` among turbulence, cloud,
+surface wind, fog, and precipitation with the order-independent Shapley value.
+The retained index is the lower bar and the five colored loss segments close
+every column exactly at 10. A `!` marks partial inputs; it is not a probability.
 
 All thresholds and multipliers enter the cache/version hash. An anonymized
 historical control case demonstrates the old bias: pressure-level
@@ -708,7 +736,76 @@ or observing logs in the target regions, and the UI continues to label the
 result model-derived. Full derivation and sources are in the
 [scientific method and calculation note](scientific-method.en.md).
 
-### 15.7. Point light pollution
+### 15.7. Reference Johnson-V zenith efficiency
+
+Chart 2 overlays a separate ring only in astronomical night when a complete
+and operationally usable reference can be formed. Contract
+`reference-v-band-zenith-efficiency-v2` with atmosphere
+`reference-v-band-spectrl2-ks91-v3` models a declared faint-point-source,
+background-limited, long-exposure, seeing-limited, non-AO observation along
+the **grid-cell-mean geometric zenith** column in SVO Generic/Johnson.V. It is
+not an instantaneous point-column measurement or a tracked target direction:
+
+```text
+G = source_photon_rate² / (sky_photon_radiance * PSF_noise_equivalent_area)
+reference_index = 1 + 9 * clamp(G / G_benchmark, 0, 1)
+```
+
+ICON supplies the lowest available native full-level `P/T`, its height derived
+from adjacent `HHL` boundaries, the model-surface `HHL`, PWV (`TQV`), cloud
+transmission, and the retained 500-nm seeing. Reference V reconstructs actual
+model-surface pressure by a dry hydrostatic continuation through the lowest
+model gap:
+
+```math
+p_s=p_l\exp\!\left[\frac{g_0(z_l-z_s)}{R_dT_l}\right].
+```
+
+The provenance marker is
+`icon-lowest-model-level-p-hydrostatic-to-hhl-surface-v1`. `PMSL` remains a
+mean-sea-level-reduced weather field and is never used by SPECTRL2. Missing or
+invalid same-hour `p_l/T_l/z_l/z_s` makes Reference V partial; there is no
+`PMSL` or standard-atmosphere fallback, and the allowed transfer gap is bounded
+at `1 km`. The dry, constant-`T_l` approximation
+across this short gap does not resolve moisture, sub-grid terrain, or
+temperature curvature. A bounded independent NASA GEOS-CF provider supplies
+hourly `AOD550` and total-column ozone with its own run/freshness/provenance.
+SPECTRL2 integrates Rayleigh, aerosol, water, ozone, and mixed-gas direct
+transmission through the Johnson-V response; the photon-weighted Gaussian PSF
+mixture supplies its exact noise-equivalent area, and KS91 supplies a declared
+zenith Moon-background fallback. Artificial light is excluded and remains a
+separate atlas line.
+
+ICON all-sky cloud transmission attenuates the source only:
+`S=S_clear*T_cloud`. Because cloud-scattered sky radiance is unavailable, the
+clear-air natural/lunar background is held as a conservative floor. With a
+fixed PSF this gives `G_cloud=T_cloud²*G_clear`. The quadratic response is an
+explicit limitation, not cloud radiative transfer. At zero atmospheric
+transmission `ExtinctionMag` is omitted/`null` and
+`OpaqueTransmission=true`, because the logarithmic magnitude is not finite.
+
+GEOS-CF is fail-open: a timeout, stale composition frame, or missing component
+removes/marks the reference ring and never blocks the ICON forecast. Reference
+V is not multiplied into generic Overall; the two products have different
+observing contracts. Likewise `theta0`, `FracGL`, PWV, and scintillation do not
+receive universal penalties without an explicit target/passband/telescope
+mode. Target-conditioned atmospheric FWHM is available separately through the
+Kasten-Young air mass and `X^(3/5) lambda^(-1/5)` scaling.
+
+Missing seeing, station-pressure reconstruction, or composition is explicitly
+partial and cannot produce the ring. A high-fog-risk or precipitation-veto
+hour is operationally unavailable, so its Reference-V marker is omitted even
+if its underlying diagnostics were calculated.
+
+The GEOS-CF HTTP timeout is `60 s`; the optional operation lives on the
+service-root context for at most `65 s` and is cancelled at shutdown, not by a
+single user disconnect. A user forecast joins it for at most `5 s`. On a cold
+miss the seven ICON charts continue without waiting for the full composition
+subset, while a successful operation may warm RAM. Identical slabs coalesce;
+distinct loads share a gate capped by `ASTRO_FORECAST_CONCURRENCY`, and a new
+optional load fails open without starting when the gate is full.
+
+### 15.8. Point light pollution
 
 Light pollution is a static site property rather than an hourly meteorological variable. It is shown in the text block and **does not enter the Overall Astronomy Index**.
 
@@ -738,7 +835,17 @@ The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / 
 The MVP renders seven images:
 
 1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Jupiter, and Saturn rows contain only event icons and times; Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
-2. **Overall Astronomy Index** — hourly `1…10` bars; the top label is the result, the in-bar label is `ε/T%` (hybrid seeing and effective cloud transmission), and `F` marks high fog risk. The formula also contains `tau0`, possible fog, and the mild surface-wind factor. Background bands and the axis legend use the same four solar-altitude classes as chart 1/7, with sub-hour crossing positions; they do not change the score.
+2. **Overall Astronomy Index** — enlarged hourly `1…10` stacked bars. The
+   lower segment is retained suitability; colored segments above it are the
+   exact Shapley allocation of loss from optical turbulence, effective cloud
+   obstruction, surface wind, fog, and precipitation. Every complete stack
+   closes at 10. The label includes the result and `epsilon/T%`; precipitation
+   vetoes at `R_1h >=0.05 mm`, and `!` means partial inputs. A ring overlays the
+   separate complete and operationally usable Reference Johnson-V
+   grid-cell-mean geometric-zenith efficiency during astronomical night only;
+   it is not folded into Overall. Background bands
+   and the axis legend use the same four solar-altitude classes as chart 1/7,
+   with sub-hour crossing positions; they do not change the score.
 3. **Effective ICON cloud obstruction vs height/time** — hourly blocked-sky fraction across 27 model levels: sparse in the free atmosphere and consecutive `58…74` below. Each cell uses direct `CLC`, `T`, liquid `QC`, ice `QI`, and native thickness `|HHL[k]−HHL[k+1]|`; air mass is `P/(Rd·T)·dz`. Base obstruction `C·(1−exp(−τ_layer/C))` receives tier-aware low/middle/high guards of `45%/24.75%/8.1%` of `C`, while stronger physical `QC/QI` obstruction always remains. These percentages express engineering uncertainty, not opacity. Overall uses total-column fields and random overlap of the three aggregated tiers, so its `T%` need not equal a heatmap cell. Color and label show effective obstruction `0…100%`, not cover or volumetric density.
 4. **Wind speed vs pressure/time** — wind-speed heatmap in m/s.
 5. **Vertical vector wind shear** — `hypot(Δu,Δv)/|Δz|` in m/s/km.
@@ -747,7 +854,7 @@ The MVP renders seven images:
 
 PNG contract:
 
-- `3200×1080` weather, `3200×960` overall index, `3200×1100` cloud, and `1280×960` remaining charts;
+- `3200×1080` weather, `4320×1600` Overall index, `3200×1100` cloud, and `1280×960` remaining charts;
 - labels readable on a phone;
 - pressure axis with `50 hPa` at top and `1000 hPa` at bottom;
 - hourly weather axis and three-hour upper-air axes;
@@ -777,7 +884,7 @@ shared-render-v1/<sha256-bundle-key>/<chart>.png
 ```
 
 The SHA-256 identity currently includes the internal marker
-`shared-render-v18-phase-structure-coherence`; changing it invalidates derived
+`shared-render-v19-reference-v-band-penalty-decomposition`; changing it invalidates derived
 images without renaming or duplicating the bounded cache root.
 
 ## 18. User flow
@@ -812,7 +919,7 @@ ICON-EU run 2026072206 UTC
 Data freshness: 7 h 59 min
 Period: 22.07 09:00 — 25.07 09:00
 Grid: ICON-EU 0.0625°
-Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v6; hybrid ICON model estimate …
+Optical turbulence: seeing-hybrid-tke-mh-hmnsp99-v7; hybrid ICON model estimate …
 
 Light pollution: Bortle reference 8–9 (LPI …, SQM …, Light Pollution Atlas 2024).
 Light pollution comparison: Bortle reference 8–9 (LPI …, SQM …, World Atlas 2015).
@@ -846,6 +953,7 @@ Redis provides no useful benefit for one process.
 | Provider unreachable | Keep using the last complete run and visibly warn when its age exceeds `max_stale_age` |
 | Point outside ICON-EU coverage | Use ICON Global and disclose the selected model |
 | ICON-Ru research source unavailable | Production unaffected; no production adapter depends on it |
+| GEOS-CF unavailable or stale | Reference-V ring becomes partial/unavailable; generic ICON forecast and Overall continue unchanged |
 | Some upper levels missing | Missing cells and lower confidence |
 | One chart cannot render or upload | Send the summary and every successful chart; report failures after attempting all attachments |
 | Telegram unavailable | VK continues, and vice versa |
@@ -911,6 +1019,11 @@ providers:
     mode: wis
     keep_runs: 1
     max_stale_age: 18h
+  geos_cf:
+    enabled: true
+    request_timeout: 60s
+    data_cache_ttl: 6h
+    max_stale_age: 48h
 
 sync:
   poll_interval: 15m
@@ -919,15 +1032,16 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v6
+  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v7
   dew_version: dew-v1
-  conditions_version: conditions-v7-phase-structure-coherence
+  conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
   overall_cloud_weight: 2.0
   overall_coherence_time_weight: 0.25
   overall_optical_turbulence_max_penalty: 0.25
   overall_possible_fog_factor: 0.75
   overall_high_fog_factor: 0.10
+  overall_precipitation_detect_mm: 0.05
   overall_good_seeing_arcsec: 0.5 # compatibility name: best threshold
   overall_bad_seeing_arcsec: 2.0
   overall_best_coherence_time_ms: 5.2
@@ -945,7 +1059,7 @@ algorithms:
   cloud_ice_radius_micrometers: 25
 
 render:
-  version: render-v9-dynamic-mh
+  version: render-v16-overall-penalty-decomposition
   width: 1280
   height: 960
 
@@ -1109,7 +1223,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - ICON-Ru WIS source study; a shadow adapter remains planned;
 - domain-based routing and single-provider bundles;
 - point/render cache;
-- weather/dew/seeing/conditions-v7-phase-structure-coherence;
+- weather/dew/seeing/conditions-v8-precip-veto-penalty-decomposition;
 - observational verification storage and scoring remain planned.
 
 ### Stage 3 — platform adapters
@@ -1136,7 +1250,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - ICON-Ru WIS cannot affect production because its shadow adapter is not yet implemented;
 - provider, grid, run, and freshness are visible;
 - weather, dew, and fog information is visible in the first chart;
-- one readable `3200×1080` weather PNG, one `3840×1200` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
+- one readable `3200×1080` weather PNG, one `4320×1600` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
 - seeing is called a forecast index and includes confidence;
 - incomplete runs never publish;
 - current model manifests survive restart; platform cursors are reacquired from the APIs;
