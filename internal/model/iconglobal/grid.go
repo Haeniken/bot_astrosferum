@@ -18,7 +18,7 @@ func GridPath(dataRoot string) string {
 	return filepath.Join(dataRoot, "models", "icon-global", "static", "icon_grid_0026_R03B07_G.nc")
 }
 
-func EnsureGrid(ctx context.Context, dataRoot string, logf func(string, ...any)) error {
+func EnsureGrid(ctx context.Context, dataRoot string, logf func(string, ...any), httpClient *http.Client) error {
 	path := GridPath(dataRoot)
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() > 100<<20 {
 		return nil
@@ -35,7 +35,7 @@ func EnsureGrid(ctx context.Context, dataRoot string, logf func(string, ...any))
 		if errors.Is(err, os.ErrExist) {
 			if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 2*time.Hour {
 				if removeErr := os.Remove(lockPath); removeErr == nil {
-					return EnsureGrid(ctx, dataRoot, logf)
+					return EnsureGrid(ctx, dataRoot, logf, httpClient)
 				}
 			}
 			return errors.New("ICON Global grid download is already running")
@@ -50,7 +50,14 @@ func EnsureGrid(ctx context.Context, dataRoot string, logf func(string, ...any))
 	if err != nil {
 		return err
 	}
-	response, err := (&http.Client{Timeout: 30 * time.Minute}).Do(request)
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Minute}
+	} else if httpClient.Timeout > 0 && httpClient.Timeout < 30*time.Minute {
+		copy := *httpClient
+		copy.Timeout = 30 * time.Minute
+		httpClient = &copy
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("download ICON Global grid: %w", err)
 	}

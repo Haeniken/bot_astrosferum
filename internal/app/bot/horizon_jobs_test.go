@@ -447,6 +447,41 @@ func TestHorizonJobsQueueIsBoundedAndWorkerIsSerial(t *testing.T) {
 	}
 }
 
+func TestHorizonJobsUsesConfiguredConcurrency(t *testing.T) {
+	release := make(chan struct{})
+	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
+	source.seriesFun = func(ctx context.Context) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	jobs := newHorizonTestJobs(t, t.TempDir(), source, HorizonJobsConfig{QueueSize: 2, Concurrency: 2})
+	startHorizonTestJobs(t, jobs)
+	firstMessenger := newHorizonFakeMessenger()
+	secondMessenger := newHorizonFakeMessenger()
+	firstHandler := mustHorizonActionHandler(t, jobs, "telegram", firstMessenger)
+	secondHandler := mustHorizonActionHandler(t, jobs, "vk", secondMessenger)
+	firstRequest := horizonTestButtonRequest()
+	secondRequest := horizonTestButtonRequest()
+	secondRequest.Location.Longitude += 0.02
+
+	invokeHorizonAction(t, firstHandler, horizonTestPayload(t, jobs, firstRequest), 101, "en")
+	invokeHorizonAction(t, secondHandler, horizonTestPayload(t, jobs, secondRequest), 202, "en")
+	waitHorizonTest(t, 2*time.Second, func() bool {
+		calls, maximum := source.counts()
+		return calls == 2 && maximum == 2
+	})
+	close(release)
+	waitHorizonTest(t, 2*time.Second, func() bool {
+		_, firstPhotos, _ := firstMessenger.snapshot()
+		_, secondPhotos, _ := secondMessenger.snapshot()
+		return len(firstPhotos) == 1 && len(secondPhotos) == 1
+	})
+}
+
 func TestHorizonJobsTimesOutAndDoesNotPublishPartialResult(t *testing.T) {
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
 	source.seriesFun = func(ctx context.Context) error {
@@ -851,13 +886,16 @@ func TestValidateHorizonSeriesRequiresCompleteHourlyRunPeriod(t *testing.T) {
 func newHorizonTestJobs(t *testing.T, root string, source *horizonFakeSource, override HorizonJobsConfig) *HorizonJobs {
 	t.Helper()
 	config := HorizonJobsConfig{
-		QueueSize: 2, JobTimeout: 2 * time.Second, CacheRoot: root,
+		QueueSize: 2, Concurrency: 1, JobTimeout: 2 * time.Second, CacheRoot: root,
 		CacheTTL: time.Hour, CacheEntries: 8, EstimatedDuration: time.Minute,
 		MaxStaleAge:            12 * time.Hour,
 		RenderAlgorithmVersion: "horizon-test-render-v1",
 	}
 	if override.QueueSize > 0 {
 		config.QueueSize = override.QueueSize
+	}
+	if override.Concurrency > 0 {
+		config.Concurrency = override.Concurrency
 	}
 	if override.JobTimeout > 0 {
 		config.JobTimeout = override.JobTimeout

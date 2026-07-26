@@ -111,6 +111,7 @@ type Handler struct {
 	admins              map[int64]struct{}
 	actions             ActionRouter
 	horizon             *HorizonJobs
+	forecastQueue       *ForecastQueue
 	sessionMu           sync.Mutex
 	sessions            map[int64]saveSession
 	logf                func(string, ...any)
@@ -131,6 +132,14 @@ func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot str
 		return fmt.Errorf("create render root: %w", err)
 	}
 	pruneRenderCache(renderRoot, time.Hour, 0)
+	return nil
+}
+
+func (handler *Handler) EnableForecastQueue(queue *ForecastQueue) error {
+	if queue == nil {
+		return errors.New("forecast queue is required")
+	}
+	handler.forecastQueue = queue
 	return nil
 }
 
@@ -393,6 +402,17 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	if handler.provider == nil {
 		text := fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\n\n%s", "Location accepted: %.4f, %.4f\nTime zone: %s\n\n%s"), latitude, longitude, label, language.text(NotReadyText, NotReadyTextEN))
 		return handler.sendUserMessage(ctx, chatID, text, true, language)
+	}
+	if handler.forecastQueue != nil {
+		release, queueError := handler.forecastQueue.Wait(ctx, func(position int) error {
+			return handler.sendUserMessage(ctx, chatID, fmt.Sprintf(language.text(
+				"Прогноз поставлен в очередь: ваше место — %d.",
+				"Forecast queued: your position is %d."), position), true, language)
+		})
+		if queueError != nil {
+			return queueError
+		}
+		defer release()
 	}
 	if err := handler.sendUserMessage(ctx, chatID,
 		fmt.Sprintf(language.text("Точка принята: %.4f, %.4f\nЧасовая зона: %s\nРассчитываю прогноз по свежим доступным данным…", "Location accepted: %.4f, %.4f\nTime zone: %s\nCalculating the forecast from the freshest available data…"), latitude, longitude, label), true, language); err != nil {

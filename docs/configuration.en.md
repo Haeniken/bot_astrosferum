@@ -20,17 +20,19 @@ Platform tokens deliberately do not belong in `.env`: keep them in
 | `ASTRO_TELEGRAM_ADMIN_IDS` | No | Comma-separated numeric IDs, or empty | Grants the Telegram `/admin` and statistics UI. It does not filter statistics: every configured admin sees the combined Telegram + VK totals. |
 | `ASTRO_VK_ADMIN_IDS` | No | Comma-separated numeric VK user IDs, or empty | Grants the VK admin/statistics UI. Use numeric user IDs, not screen names; the report is the same combined Telegram + VK report. |
 | `ASTRO_LIGHT_POLLUTION_ATLAS_YEAR` | No | `2024` | Pins the operator-verified annual Light Pollution Atlas dataset; it is not advanced automatically. Change only after verifying and provisioning a supported dataset. |
+| `ASTRO_FORECAST_CONCURRENCY` | No | `2` | Shared maximum number of ordinary forecast calculations running at once across Telegram and VK. Further requests wait and receive their queue position. |
+| `ASTRO_ICON_DOWNLOAD_LIMIT_MBIT` | No | Unset | Aggregate decimal-Mbit/s limit shared by simultaneous ICON-EU and ICON Global downloads. Unset, empty, or `0` means unlimited. |
 
 ## Optional ICON-EU horizon analysis
 
 This heavier analysis is available only when the selected forecast provider is
 ICON-EU. A forecast served by ICON Global never contains its action button.
-The source is still at the predeployment stage; these settings describe the
-current code contract, not a completed production rollout.
+This production feature has its own queue and calculation limit.
 
 | Variable | Required | Recommended value | Effect |
 |---|---|---|---|
 | `ASTRO_HORIZON_ANALYSIS_ENABLED` | No | `true` | Overrides `horizon_analysis.enabled`. When `false`, the application does not start the horizon-analysis queue or its data source and does not show the action button. The ordinary seven-chart forecast is unaffected. |
+| `ASTRO_HORIZON_CONCURRENCY` | No | `1` | Maximum number of Horizon calculations running at once. It is independent from `ASTRO_FORECAST_CONCURRENCY`. |
 
 The bundled Compose file always sets this variable, using `true` when it is
 absent from `.env`. Consequently its environment value always wins over YAML
@@ -44,6 +46,7 @@ The operational limits live in `config/config.yaml`:
 horizon_analysis:
   enabled: true
   queue_size: 4
+  concurrency: 1
   cdo_workers: 2
   job_timeout: 10m
   cache_ttl: 48h
@@ -55,6 +58,7 @@ horizon_analysis:
 |---|---:|---|
 | `enabled` | `true` | Enables the ICON-EU-only feature when no environment override is present. `false` prevents the queue and source from starting and removes the action button. Under bundled Compose, use the environment switch described above. |
 | `queue_size` | `4` | Bounds the number of heavy jobs waiting for the dedicated worker. A full queue rejects new work instead of slowing ordinary forecasts through unbounded backlog. |
+| `concurrency` | `1` | Number of Horizon jobs executed concurrently; Compose overrides it through `ASTRO_HORIZON_CONCURRENCY`. |
 | `cdo_workers` | `2` | Limits concurrent CDO subprocesses used by the Horizon source. The conservative default reserves capacity for ordinary forecast requests. |
 | `job_timeout` | `10m` | Maximum execution time of one horizon-analysis job before it is cancelled. |
 | `cache_ttl` | `48h` | Maximum age of a completed cached result before it becomes ineligible for reuse. Expired entries are removed at startup, periodically while the worker runs, and during cache publication. |
