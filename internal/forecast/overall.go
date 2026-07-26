@@ -7,6 +7,57 @@ import (
 	"time"
 )
 
+// DefaultOverallPrecipitationDetectMM is the minimum precipitation amount in
+// an hourly surface frame that makes that hour operationally unsuitable. The
+// threshold is deliberately a detection threshold, not a continuous penalty:
+// precipitation can wet exposed optics regardless of its intensity.
+const DefaultOverallPrecipitationDetectMM = 0.05
+
+const (
+	minimumOverallTurbulenceProfileCoverage = 0.90
+	minimumOverallTurbulenceProfileTopAGLM  = 15000.0
+
+	// ModelSurfacePressureProvenance identifies the pressure column used by the
+	// Reference-V radiative calculation. PMSL is intentionally excluded: the
+	// lowest native ICON full-level pressure is hydrostatically transferred over
+	// the short HHL height offset to the ICON model surface.
+	ModelSurfacePressureProvenance = "icon-lowest-model-level-p-hydrostatic-to-hhl-surface-v1"
+)
+
+// OverallDataCompleteness describes whether every input used by the Overall
+// index was available. A partial frame remains usable, but consumers must not
+// present the absence of an optional diagnostic as evidence of good weather.
+type OverallDataCompleteness string
+
+const (
+	OverallDataComplete OverallDataCompleteness = "complete"
+	OverallDataPartial  OverallDataCompleteness = "partial"
+)
+
+// Stable penalty keys let renderers assign colors without coupling the
+// forecast package to presentation details.
+const (
+	OverallPenaltyOpticalTurbulence = "optical_turbulence"
+	OverallPenaltyCloudObstruction  = "cloud_obstruction"
+	OverallPenaltySurfaceWind       = "surface_wind"
+	OverallPenaltyFog               = "fog"
+	OverallPenaltyPrecipitation     = "precipitation"
+)
+
+// OverallPenaltyFactor is one bounded utility factor in a multiplicative
+// score. One means no loss and zero means a complete veto.
+type OverallPenaltyFactor struct {
+	Key    string
+	Factor float64
+}
+
+// OverallPenaltyContribution is a Shapley allocation of the total
+// multiplicative loss. LossFraction is expressed on 0..1, not in percent.
+type OverallPenaltyContribution struct {
+	Key          string  `json:"key"`
+	LossFraction float64 `json:"loss_fraction"`
+}
+
 // OverallIndexCalibration maps model seeing and direct observing obstructions
 // to a 1..10 astronomy-suitability index. Seeing/cloud weights are exponents;
 // optical turbulence, coherence, and surface wind are bounded utility terms.
@@ -21,13 +72,17 @@ type OverallIndexCalibration struct {
 	OpticalTurbulenceMaxPenalty float64
 	PossibleFogFactor           float64
 	HighFogFactor               float64
-	GoodSeeingArcsec            float64
-	BadSeeingArcsec             float64
-	BestCoherenceTimeMS         float64
-	BadCoherenceTimeMS          float64
-	BoundaryLayerMinM           float64
-	BoundaryLayerTopM           float64
-	GroundCn2Scale              float64
+	// PrecipitationDetectMM is the operational-veto threshold for one hourly
+	// frame. Zero selects DefaultOverallPrecipitationDetectMM so older callers
+	// that construct the calibration explicitly remain safe.
+	PrecipitationDetectMM float64
+	GoodSeeingArcsec      float64
+	BadSeeingArcsec       float64
+	BestCoherenceTimeMS   float64
+	BadCoherenceTimeMS    float64
+	BoundaryLayerMinM     float64
+	BoundaryLayerTopM     float64
+	GroundCn2Scale        float64
 	// UnresolvedCloudObstruction is the maximum low-cloud obstruction used
 	// only when diagnostic CLC is not represented by grid-scale QC/QI. Middle
 	// and high cloud use smaller fractions of this configurable guard.
@@ -46,7 +101,8 @@ func DefaultOverallIndexCalibration() OverallIndexCalibration {
 		SeeingWeight: 1, CloudWeight: 2, CoherenceTimeWeight: 0.25,
 		OpticalTurbulenceMaxPenalty: 0.25,
 		PossibleFogFactor:           0.75, HighFogFactor: 0.10,
-		GoodSeeingArcsec: 0.5, BadSeeingArcsec: 2.0,
+		PrecipitationDetectMM: DefaultOverallPrecipitationDetectMM,
+		GoodSeeingArcsec:      0.5, BadSeeingArcsec: 2.0,
 		BestCoherenceTimeMS: 5.2, BadCoherenceTimeMS: 1.6,
 		BoundaryLayerMinM: 500, BoundaryLayerTopM: 2000, GroundCn2Scale: 1,
 		UnresolvedCloudObstruction: 0.45,
@@ -61,7 +117,7 @@ func (calibration OverallIndexCalibration) Validate() error {
 	values := []float64{
 		calibration.SeeingWeight, calibration.CloudWeight, calibration.CoherenceTimeWeight,
 		calibration.OpticalTurbulenceMaxPenalty,
-		calibration.PossibleFogFactor, calibration.HighFogFactor,
+		calibration.PossibleFogFactor, calibration.HighFogFactor, calibration.PrecipitationDetectMM,
 		calibration.GoodSeeingArcsec, calibration.BadSeeingArcsec,
 		calibration.BestCoherenceTimeMS, calibration.BadCoherenceTimeMS,
 		calibration.BoundaryLayerMinM, calibration.BoundaryLayerTopM, calibration.GroundCn2Scale,
@@ -92,6 +148,9 @@ func (calibration OverallIndexCalibration) Validate() error {
 	}
 	if calibration.HighFogFactor < 0 || calibration.HighFogFactor > 1 {
 		return fmt.Errorf("overall high-fog factor must be between 0 and 1")
+	}
+	if calibration.PrecipitationDetectMM < 0 || calibration.PrecipitationDetectMM > 10 {
+		return fmt.Errorf("overall hourly precipitation detection threshold must be between 0 and 10 mm")
 	}
 	if calibration.GoodSeeingArcsec <= 0 || calibration.BadSeeingArcsec <= calibration.GoodSeeingArcsec {
 		return fmt.Errorf("overall seeing thresholds must be positive and ordered best < bad")
@@ -125,36 +184,58 @@ func (calibration OverallIndexCalibration) Validate() error {
 }
 
 type OverallIndexFrame struct {
-	ValidAt                        time.Time `json:"valid_at"`
-	Index                          float64   `json:"index"`
-	WindIndex                      float64   `json:"wind_index"` // legacy wind-only diagnostic, retained for comparison
-	SeeingArcsec                   float64   `json:"seeing_arcsec"`
-	CoherenceTimeMS                float64   `json:"coherence_time_ms"`
-	PhysicalSeeing                 bool      `json:"physical_seeing"`
-	PhysicalCoherence              bool      `json:"physical_coherence"`
-	GroundLayerPhysics             bool      `json:"ground_layer_physics"`
-	BoundaryLayerDepthM            float64   `json:"boundary_layer_depth_m"`
-	GroundLayerFraction            float64   `json:"ground_layer_fraction"`
-	SeeingQualityPercent           float64   `json:"seeing_quality_percent"`
-	CoherenceQualityPercent        float64   `json:"coherence_quality_percent"`
-	OpticalTurbulenceFactorPercent float64   `json:"optical_turbulence_factor_percent"`
-	ClearSkyPercent                float64   `json:"clear_sky_percent"`
-	CloudCoverPercent              float64   `json:"cloud_cover_percent"`
-	CloudTransmissionPercent       float64   `json:"cloud_transmission_percent"`
-	CloudOpticalDepth              float64   `json:"cloud_optical_depth"`
-	CloudCondensatePhysics         bool      `json:"cloud_condensate_physics"`
-	CloudUnresolvedGuard           bool      `json:"cloud_unresolved_guard"`
-	SurfaceWindFactorPercent       float64   `json:"surface_wind_factor_percent"`
-	FogRisk                        int       `json:"fog_risk"`
-	HighFog                        bool      `json:"high_fog"`
-	Confidence                     float64   `json:"confidence"`
+	ValidAt                         time.Time                       `json:"valid_at"`
+	Index                           float64                         `json:"index"`
+	WindIndex                       float64                         `json:"wind_index"` // legacy wind-only diagnostic, retained for comparison
+	SeeingArcsec                    float64                         `json:"seeing_arcsec"`
+	CoherenceTimeMS                 float64                         `json:"coherence_time_ms"`
+	PhysicalSeeing                  bool                            `json:"physical_seeing"`
+	PhysicalCoherence               bool                            `json:"physical_coherence"`
+	GroundLayerPhysics              bool                            `json:"ground_layer_physics"`
+	BoundaryLayerDepthM             float64                         `json:"boundary_layer_depth_m"`
+	GroundLayerFraction             float64                         `json:"ground_layer_fraction"`
+	BoundaryLayerTurbulenceFraction float64                         `json:"boundary_layer_turbulence_fraction"`
+	IsoplanaticAngleArcsec          float64                         `json:"isoplanatic_angle_arcsec"`
+	EffectiveTurbulenceHeightM      float64                         `json:"effective_turbulence_height_m"`
+	EffectiveTurbulenceWindMS       float64                         `json:"effective_turbulence_wind_m_s"`
+	FracGL250                       float64                         `json:"frac_gl_250"`
+	FracGL500                       float64                         `json:"frac_gl_500"`
+	FracGL1000                      float64                         `json:"frac_gl_1000"`
+	FreeAtmosphereSeeing500MArcsec  float64                         `json:"free_atmosphere_seeing_above_500m_arcsec"`
+	TurbulenceProfileQuality        OpticalTurbulenceProfileQuality `json:"turbulence_profile_quality"`
+	TurbulenceProfileTopAGLM        float64                         `json:"turbulence_profile_top_agl_m"`
+	TurbulenceProfileCoverage       float64                         `json:"turbulence_profile_coverage"`
+	TurbulenceHeightMomentCoverage  float64                         `json:"turbulence_height_moment_coverage"`
+	SurfacePressureHPA              float64                         `json:"surface_pressure_hpa,omitempty"`
+	SurfacePressureProvenance       string                          `json:"surface_pressure_provenance,omitempty"`
+	SeeingQualityPercent            float64                         `json:"seeing_quality_percent"`
+	CoherenceQualityPercent         float64                         `json:"coherence_quality_percent"`
+	OpticalTurbulenceFactorPercent  float64                         `json:"optical_turbulence_factor_percent"`
+	ClearSkyPercent                 float64                         `json:"clear_sky_percent"`
+	CloudCoverPercent               float64                         `json:"cloud_cover_percent"`
+	CloudTransmissionPercent        float64                         `json:"cloud_transmission_percent"`
+	CloudOpticalDepth               float64                         `json:"cloud_optical_depth"`
+	CloudCondensatePhysics          bool                            `json:"cloud_condensate_physics"`
+	CloudUnresolvedGuard            bool                            `json:"cloud_unresolved_guard"`
+	SurfaceWindFactorPercent        float64                         `json:"surface_wind_factor_percent"`
+	PrecipitationMM                 float64                         `json:"precipitation_mm"`
+	PrecipitationVeto               bool                            `json:"precipitation_veto"`
+	FogRisk                         int                             `json:"fog_risk"`
+	HighFog                         bool                            `json:"high_fog"`
+	FogAssessmentAvailable          bool                            `json:"fog_assessment_available"`
+	DataCompleteness                OverallDataCompleteness         `json:"data_completeness"`
+	PenaltyLossFraction             float64                         `json:"penalty_loss_fraction"`
+	PenaltyContributions            []OverallPenaltyContribution    `json:"penalty_contributions"`
+	ReferenceVBand                  *ReferenceVBandDiagnostic       `json:"reference_v_band,omitempty"`
+	Confidence                      float64                         `json:"confidence"`
 }
 
 // ComputeHourlyOverallIndex combines a single physical turbulence integral
 // (native ICON TKE up to the hourly ICON mixed-layer depth, bounded by the
 // configured AGL minimum/maximum, plus HMNSP99 aloft), tau0 from
-// that same Cn2/wind profile, effective cloud obstruction, fog, and a deliberately
-// mild operational surface-wind factor. Dew risk never enters the formula.
+// that same Cn2/wind profile, effective cloud obstruction, fog, a deliberately
+// mild operational surface-wind factor, and a binary precipitation veto. Dew
+// risk never enters the formula.
 func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, cloud CloudSeries, calibration OverallIndexCalibration) ([]OverallIndexFrame, error) {
 	if err := calibration.Validate(); err != nil {
 		return nil, err
@@ -167,6 +248,10 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		return nil, fmt.Errorf("surface series needs at least two frames")
 	}
 	result := make([]OverallIndexFrame, 0, len(surface.Frames))
+	precipitationDetectMM := calibration.PrecipitationDetectMM
+	if precipitationDetectMM == 0 {
+		precipitationDetectMM = DefaultOverallPrecipitationDetectMM
+	}
 	for index, frame := range surface.Frames {
 		if index > 0 && !frame.ValidAt.After(surface.Frames[index-1].ValidAt) {
 			return nil, fmt.Errorf("surface frame times must be strictly increasing")
@@ -174,6 +259,9 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		windIndex, _, confidence, available := interpolateUpperAirDiagnostics(diagnostics, frame.ValidAt)
 		if !available {
 			continue
+		}
+		if err := validateOverallSurfaceFrame(frame); err != nil {
+			return nil, fmt.Errorf("invalid surface inputs at %s: %w", frame.ValidAt.Format(time.RFC3339), err)
 		}
 		profile, profileAvailable := interpolateVerticalProfile(vertical, frame.ValidAt)
 		if !profileAvailable {
@@ -197,6 +285,14 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 			}
 			return nil, fmt.Errorf("native ICON ground-layer turbulence is incomplete at %s", frame.ValidAt.Format(time.RFC3339))
 		}
+		surfacePressureHPA, surfacePressureAvailable := modelSurfacePressureHPA(cloudFrame.Levels, cloud.SurfaceElevationM)
+		if metrics.ProfileVerticalCoverage < minimumOverallTurbulenceProfileCoverage ||
+			metrics.ProfileHeightMomentCoverage < minimumOverallTurbulenceProfileCoverage ||
+			metrics.ProfileTopAGLM < minimumOverallTurbulenceProfileTopAGLM {
+			return nil, fmt.Errorf("hybrid optical-turbulence profile support is insufficient at %s: vertical %.1f%%, height moment %.1f%%, top %.0f m AGL",
+				frame.ValidAt.Format(time.RFC3339), 100*metrics.ProfileVerticalCoverage,
+				100*metrics.ProfileHeightMomentCoverage, metrics.ProfileTopAGLM)
+		}
 		seeingArcsec := metrics.SeeingArcsec
 		cloudCover := frame.CloudCoverPercent
 		cloudFactor, opticalDepth, condensatePhysics, unresolvedGuard := cloudTransmission(frame, calibration)
@@ -215,16 +311,42 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		// detail, but unlike opaque cloud it does not remove the target.
 		opticalTurbulenceFactor := boundedOpticalTurbulenceFactor(seeingFraction, coherenceFraction, calibration)
 		surfaceWindFactor := surfaceWindFactor(frame, calibration)
-		normalized := opticalTurbulenceFactor *
-			math.Pow(cloudFactor, calibration.CloudWeight) * surfaceWindFactor
-		fogRisk := frame.FogRisk()
+		cloudObstructionFactor := math.Pow(cloudFactor, calibration.CloudWeight)
+		fogAssessmentAvailable := frame.TransparencyAvailable
+		fogRisk := 0
+		if fogAssessmentAvailable {
+			fogRisk = frame.FogRisk()
+		}
+		fogFactor := 1.0
 		switch fogRisk {
 		case 1:
-			normalized *= calibration.PossibleFogFactor
+			fogFactor = calibration.PossibleFogFactor
 		case 2:
-			normalized *= calibration.HighFogFactor
+			fogFactor = calibration.HighFogFactor
 		}
 		highFog := fogRisk == 2
+		precipitationVeto := frame.PrecipitationMM >= precipitationDetectMM
+		precipitationFactor := 1.0
+		if precipitationVeto {
+			// This is an operational veto only. It does not alter the physical
+			// seeing or cloud diagnostics retained in the frame.
+			precipitationFactor = 0
+		}
+		penaltyContributions, penaltyLoss, err := ShapleyMultiplicativeLoss([]OverallPenaltyFactor{
+			{Key: OverallPenaltyOpticalTurbulence, Factor: opticalTurbulenceFactor},
+			{Key: OverallPenaltyCloudObstruction, Factor: cloudObstructionFactor},
+			{Key: OverallPenaltySurfaceWind, Factor: surfaceWindFactor},
+			{Key: OverallPenaltyFog, Factor: fogFactor},
+			{Key: OverallPenaltyPrecipitation, Factor: precipitationFactor},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("decompose Overall penalty at %s: %w", frame.ValidAt.Format(time.RFC3339), err)
+		}
+		normalized := 1 - penaltyLoss
+		dataCompleteness := OverallDataComplete
+		if !fogAssessmentAvailable || !condensatePhysics || !physicalCoherence || metrics.ProfileQuality != OpticalTurbulenceProfileComplete {
+			dataCompleteness = OverallDataPartial
+		}
 		result = append(result, OverallIndexFrame{
 			ValidAt: frame.ValidAt, Index: 1 + 9*clampSurfaceValue(normalized, 0, 1),
 			WindIndex: windIndex, ClearSkyPercent: cloudFactor * 100,
@@ -234,17 +356,189 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 			SeeingArcsec: seeingArcsec, CoherenceTimeMS: metrics.CoherenceTimeMS,
 			PhysicalSeeing: physicalSeeing, PhysicalCoherence: physicalCoherence,
 			GroundLayerPhysics: groundLayerPhysics, BoundaryLayerDepthM: boundaryLayerDepthM,
-			GroundLayerFraction:  metrics.GroundLayerFraction,
-			SeeingQualityPercent: seeingFraction * 100, CoherenceQualityPercent: coherenceFraction * 100,
+			GroundLayerFraction:             metrics.GroundLayerFraction,
+			BoundaryLayerTurbulenceFraction: metrics.BoundaryLayerFraction,
+			IsoplanaticAngleArcsec:          metrics.IsoplanaticAngleArcsec,
+			EffectiveTurbulenceHeightM:      metrics.EffectiveTurbulenceHeightM,
+			EffectiveTurbulenceWindMS:       metrics.EffectiveWindSpeedMS,
+			FracGL250:                       metrics.FracGL250,
+			FracGL500:                       metrics.FracGL500,
+			FracGL1000:                      metrics.FracGL1000,
+			FreeAtmosphereSeeing500MArcsec:  metrics.FreeAtmosphereSeeing500MArcsec,
+			TurbulenceProfileQuality:        metrics.ProfileQuality,
+			TurbulenceProfileTopAGLM:        metrics.ProfileTopAGLM,
+			TurbulenceProfileCoverage:       metrics.ProfileVerticalCoverage,
+			TurbulenceHeightMomentCoverage:  metrics.ProfileHeightMomentCoverage,
+			SurfacePressureHPA:              surfacePressureHPA,
+			SeeingQualityPercent:            seeingFraction * 100, CoherenceQualityPercent: coherenceFraction * 100,
 			OpticalTurbulenceFactorPercent: opticalTurbulenceFactor * 100,
 			SurfaceWindFactorPercent:       surfaceWindFactor * 100,
-			FogRisk:                        fogRisk, HighFog: highFog, Confidence: confidence,
+			PrecipitationMM:                frame.PrecipitationMM,
+			PrecipitationVeto:              precipitationVeto,
+			FogRisk:                        fogRisk, HighFog: highFog,
+			FogAssessmentAvailable: fogAssessmentAvailable, DataCompleteness: dataCompleteness,
+			PenaltyLossFraction: penaltyLoss, PenaltyContributions: penaltyContributions,
+			Confidence: confidence,
 		})
+		if surfacePressureAvailable {
+			result[len(result)-1].SurfacePressureProvenance = ModelSurfacePressureProvenance
+		}
 	}
 	if len(result) < 2 {
 		return nil, fmt.Errorf("surface and upper-air forecast periods do not overlap")
 	}
 	return result, nil
+}
+
+// modelSurfacePressureHPA derives the pressure at the ICON model surface from
+// the lowest valid native full-level P/T/HHL sample. That full level is only a
+// short distance above the surface; integrating the dry hydrostatic equation
+// over that offset avoids incorrectly using sea-level-reduced PMSL in optical
+// depth while introducing no second external field or standard-atmosphere
+// assumption. The dry-temperature approximation is deliberately restricted to
+// a 1 km offset; actual ICON geometry is normally tens of metres.
+func modelSurfacePressureHPA(levels []CloudLevel, surfaceElevationM float64) (float64, bool) {
+	if !finite(surfaceElevationM) {
+		return 0, false
+	}
+	const (
+		standardGravityMS2 = 9.80665
+		dryAirGasConstant  = 287.05
+		maximumOffsetM     = 1000.0
+	)
+	lowest := CloudLevel{}
+	lowestHeight := math.Inf(1)
+	found := false
+	for _, level := range levels {
+		if !finite(level.PressureHPA) || level.PressureHPA <= 0 || level.PressureHPA > 1200 ||
+			!finite(level.HeightM) || !finite(level.TemperatureK) || level.TemperatureK < 150 || level.TemperatureK > 350 {
+			continue
+		}
+		if level.HeightM < lowestHeight {
+			lowest, lowestHeight, found = level, level.HeightM, true
+		}
+	}
+	if !found || math.Abs(lowest.HeightM-surfaceElevationM) > maximumOffsetM {
+		return 0, false
+	}
+	heightOffsetM := lowest.HeightM - surfaceElevationM
+	pressure := lowest.PressureHPA * math.Exp(standardGravityMS2*heightOffsetM/(dryAirGasConstant*lowest.TemperatureK))
+	if !finite(pressure) || pressure <= 0 || pressure > 1200 {
+		return 0, false
+	}
+	return pressure, true
+}
+
+// ShapleyMultiplicativeLoss allocates 1-product(f_i) among the supplied
+// factors. For a factor i, its Shapley value is the mean marginal loss over all
+// possible insertion orders:
+//
+//	phi_i = (1-f_i) * sum_{S subset N\\{i}} |S|!(n-|S|-1)!/n! * product_{j in S} f_j
+//
+// The implementation groups subsets by cardinality using elementary
+// symmetric sums. It is O(n^3), symmetric, order-independent, and avoids an
+// exponential permutation/subset enumeration. The returned contributions sum
+// to totalLoss (within floating-point roundoff).
+func ShapleyMultiplicativeLoss(factors []OverallPenaltyFactor) (contributions []OverallPenaltyContribution, totalLoss float64, err error) {
+	if len(factors) == 0 {
+		return []OverallPenaltyContribution{}, 0, nil
+	}
+	seen := make(map[string]struct{}, len(factors))
+	product := 1.0
+	for _, factor := range factors {
+		if factor.Key == "" {
+			return nil, 0, fmt.Errorf("penalty factor key must not be empty")
+		}
+		if _, exists := seen[factor.Key]; exists {
+			return nil, 0, fmt.Errorf("penalty factor key %q is duplicated", factor.Key)
+		}
+		seen[factor.Key] = struct{}{}
+		if !finite(factor.Factor) || factor.Factor < 0 || factor.Factor > 1 {
+			return nil, 0, fmt.Errorf("penalty factor %q must be finite and between 0 and 1", factor.Key)
+		}
+		product *= factor.Factor
+	}
+	totalLoss = 1 - product
+	contributions = make([]OverallPenaltyContribution, len(factors))
+	n := len(factors)
+	for index, factor := range factors {
+		// sums[k] is the sum of all k-factor products excluding factor i.
+		sums := make([]float64, n)
+		sums[0] = 1
+		included := 0
+		for otherIndex, other := range factors {
+			if otherIndex == index {
+				continue
+			}
+			included++
+			for cardinality := included; cardinality >= 1; cardinality-- {
+				sums[cardinality] += sums[cardinality-1] * other.Factor
+			}
+		}
+		meanPrecedingProduct := 0.0
+		binomial := 1.0 // C(n-1, 0)
+		for cardinality := 0; cardinality < n; cardinality++ {
+			meanPrecedingProduct += sums[cardinality] / (float64(n) * binomial)
+			if cardinality < n-1 {
+				binomial *= float64(n-1-cardinality) / float64(cardinality+1)
+			}
+		}
+		contributions[index] = OverallPenaltyContribution{
+			Key: factor.Key, LossFraction: (1 - factor.Factor) * meanPrecedingProduct,
+		}
+	}
+	return contributions, totalLoss, nil
+}
+
+// validateOverallSurfaceFrame rejects corrupt values for inputs that directly
+// participate in the score. Missing optional visibility and condensate
+// diagnostics remain valid and are reported as partial data instead.
+func validateOverallSurfaceFrame(frame SurfaceFrame) error {
+	percentages := []struct {
+		name  string
+		value float64
+	}{
+		{"total cloud cover", frame.CloudCoverPercent},
+		{"low cloud cover", frame.LowCloudCoverPercent},
+		{"middle cloud cover", frame.MidCloudCoverPercent},
+		{"high cloud cover", frame.HighCloudCoverPercent},
+	}
+	for _, item := range percentages {
+		if !finite(item.value) || item.value < 0 || item.value > 100 {
+			return fmt.Errorf("%s must be finite and between 0 and 100 percent", item.name)
+		}
+	}
+	nonnegative := []struct {
+		name  string
+		value float64
+	}{
+		{"hourly precipitation", frame.PrecipitationMM},
+		{"surface wind speed", frame.WindSpeedMS},
+		{"surface wind gust", frame.WindGustMS},
+	}
+	for _, item := range nonnegative {
+		if !finite(item.value) || item.value < 0 {
+			return fmt.Errorf("%s must be finite and non-negative", item.name)
+		}
+	}
+	if frame.CloudCondensateAvailable {
+		if !finite(frame.CloudLiquidPathKgM2) || frame.CloudLiquidPathKgM2 < 0 ||
+			!finite(frame.CloudIcePathKgM2) || frame.CloudIcePathKgM2 < 0 {
+			return fmt.Errorf("available cloud condensate paths must be finite and non-negative")
+		}
+	}
+	if frame.TransparencyAvailable {
+		if !finite(frame.TemperatureC) || !finite(frame.DewPointC) {
+			return fmt.Errorf("temperature and dew point must be finite when fog assessment is available")
+		}
+		if !finite(frame.RelativeHumidityPercent) || frame.RelativeHumidityPercent < 0 || frame.RelativeHumidityPercent > 100 {
+			return fmt.Errorf("relative humidity must be finite and between 0 and 100 percent when fog assessment is available")
+		}
+		if !finite(frame.VisibilityKM) || frame.VisibilityKM < 0 {
+			return fmt.Errorf("visibility must be finite and non-negative when fog assessment is available")
+		}
+	}
+	return nil
 }
 
 // boundedOpticalTurbulenceFactor is a convex mixture of target visibility and

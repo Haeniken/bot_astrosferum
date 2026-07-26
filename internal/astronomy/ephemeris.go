@@ -32,7 +32,7 @@ type horizonEvents struct {
 }
 
 type illumination struct {
-	phase, fraction float64
+	phase, fraction, phaseAngle float64
 }
 
 func eventsForLocalDay(date time.Time, latitude, longitude float64) (horizonEvents, horizonEvents) {
@@ -149,8 +149,9 @@ func moonCoordinates(at time.Time) equatorial {
 func moonIllumination(at time.Time) illumination {
 	sun := sunCoordinates(at)
 	moon := moonCoordinates(at)
-	separation := math.Acos(math.Sin(sun.dec)*math.Sin(moon.dec) +
-		math.Cos(sun.dec)*math.Cos(moon.dec)*math.Cos(sun.ra-moon.ra))
+	cosSeparation := math.Sin(sun.dec)*math.Sin(moon.dec) +
+		math.Cos(sun.dec)*math.Cos(moon.dec)*math.Cos(sun.ra-moon.ra)
+	separation := math.Acos(math.Max(-1, math.Min(1, cosSeparation)))
 	incidence := math.Atan2(sunDistance*math.Sin(separation), moon.distance-sunDistance*math.Cos(separation))
 	brightLimb := math.Atan2(math.Cos(sun.dec)*math.Sin(sun.ra-moon.ra),
 		math.Sin(sun.dec)*math.Cos(moon.dec)-math.Cos(sun.dec)*math.Sin(moon.dec)*math.Cos(sun.ra-moon.ra))
@@ -159,8 +160,9 @@ func moonIllumination(at time.Time) illumination {
 		phaseSign = -1
 	}
 	return illumination{
-		fraction: (1 + math.Cos(incidence)) / 2,
-		phase:    0.5 + 0.5*incidence*phaseSign/math.Pi,
+		fraction:   (1 + math.Cos(incidence)) / 2,
+		phase:      0.5 + 0.5*incidence*phaseSign/math.Pi,
+		phaseAngle: incidence,
 	}
 }
 

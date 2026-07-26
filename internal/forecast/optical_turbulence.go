@@ -14,19 +14,64 @@ const (
 	// Keeping the base form avoids another rounding step through the commonly
 	// printed expanded shorthand 0.058.
 	coherencePhaseStructureCoefficient = 2.910
-	radiansToArcsec                    = 206264.80624709636
-	dryAirPoisson                      = 287.05 / 1004.0
+	// isoplanaticPhaseStructureCoefficient is the published coefficient in
+	// sigma_aniso^2=2.914*k^2*theta^(5/3)*integral(Cn2*h^(5/3)dh).
+	// It is deliberately distinct from the source-published 2.910 temporal
+	// coefficient above.
+	isoplanaticPhaseStructureCoefficient = 2.914
+	radiansToArcsec                      = 206264.80624709636
+	dryAirPoisson                        = 287.05 / 1004.0
+	// Height-sensitive theta0 diagnostics require the retained profile to
+	// reach the lower stratosphere. ProfileTopAGLM remains exposed so callers
+	// can impose a stricter, instrument-specific gate.
+	minimumCompleteTurbulenceProfileTopAGLM = 18000.0
 )
 
-// OpticalTurbulenceMetrics keeps the two standard integrals needed by an
-// observer. Seeing describes the long-exposure blur, while coherence time
-// describes how quickly the turbulent wavefront changes. Both are evaluated
-// at 500 nm and at zenith.
+// OpticalTurbulenceProfileQuality reports structural suitability of the
+// retained vertical profile for height-sensitive diagnostics such as theta0.
+type OpticalTurbulenceProfileQuality string
+
+const (
+	// OpticalTurbulenceProfileUnavailable means no valid integrated profile is
+	// available.
+	OpticalTurbulenceProfileUnavailable OpticalTurbulenceProfileQuality = "unavailable"
+	// OpticalTurbulenceProfileLimited retains physical diagnostics but signals
+	// incomplete sampling or an insufficient model top.
+	OpticalTurbulenceProfileLimited OpticalTurbulenceProfileQuality = "limited"
+	// OpticalTurbulenceProfileComplete has at least 99% structural coverage and
+	// reaches the configured lower-stratosphere completeness boundary.
+	OpticalTurbulenceProfileComplete OpticalTurbulenceProfileQuality = "complete"
+)
+
+// OpticalTurbulenceMetrics keeps the standard moments and derived parameters
+// of one provider-neutral Cn2 profile. Wavelength-dependent values are
+// evaluated at 500 nm and at zenith.
 type OpticalTurbulenceMetrics struct {
-	SeeingArcsec        float64
-	CoherenceTimeMS     float64
-	IntegratedCn2       float64 // J = integral(Cn^2 dz), m^(1/3)
-	WindWeightedCn2     float64 // integral(Cn^2 |V|^(5/3) dz)
+	SeeingArcsec                   float64
+	CoherenceTimeMS                float64
+	IsoplanaticAngleArcsec         float64
+	IntegratedCn2                  float64 // J = integral(Cn^2 dz), m^(1/3)
+	WindWeightedCn2                float64 // JV = integral(Cn^2 |V|^(5/3) dz), m^2 s^(-5/3)
+	HeightWeightedCn2              float64 // Jh = integral(Cn^2 h_AGL^(5/3) dz), m^2
+	EffectiveTurbulenceHeightM     float64
+	EffectiveWindSpeedMS           float64
+	BoundaryLayerCn2               float64
+	BoundaryLayerFraction          float64
+	FracGL250                      float64
+	FracGL500                      float64
+	FracGL1000                     float64
+	FreeAtmosphereSeeing500MArcsec float64
+	// Coverage fields describe structural sampling of the reported vertical
+	// span, not probabilistic forecast confidence. HeightMomentCoverage uses
+	// the geometric h^(5/3) weighting that makes theta0 sensitive to gaps aloft.
+	ProfileVerticalCoverage     float64
+	ProfileHeightMomentCoverage float64
+	ProfileTopAGLM              float64
+	ProfileQuality              OpticalTurbulenceProfileQuality
+
+	// GroundLayerCn2 and GroundLayerFraction are compatibility aliases for the
+	// current dynamic ICON mixed-layer/PBL split. They are not MASS FracGL;
+	// consumers requiring a fixed cutoff must use FracGL250/500/1000.
 	GroundLayerCn2      float64
 	GroundLayerFraction float64
 	ValidLayerFraction  float64
@@ -67,23 +112,27 @@ func HybridOpticalTurbulenceMetrics(pressureLevels []VerticalLevel, modelLevels 
 		return invalidOpticalTurbulenceMetrics(), false
 	}
 	topM := surfaceElevationM + boundaryLayerTopAGLM
-	groundCn2, groundWindWeightedCn2, coveredM := integrateTurbulenceNodes(nodes, surfaceElevationM, topM)
-	if coveredM/boundaryLayerTopAGLM < 0.99 || groundCn2 < 0 || groundWindWeightedCn2 < 0 {
+	boundaryLayers, coveredM, ok := turbulenceLayersFromNodes(nodes, surfaceElevationM, topM)
+	if !ok || coveredM/boundaryLayerTopAGLM < 0.99 {
 		return invalidOpticalTurbulenceMetrics(), false
 	}
-	free := hmnsp99MetricsAbove(pressureLevels, topM)
-	if !finite(free.IntegratedCn2) || !finite(free.WindWeightedCn2) {
+	freeLayers, validLayerFraction, expectedTopM, ok := hmnsp99TurbulenceLayersAbove(pressureLevels, topM)
+	if !ok || expectedTopM <= topM {
 		return invalidOpticalTurbulenceMetrics(), false
 	}
-	totalCn2 := groundCn2 + free.IntegratedCn2
-	totalWindWeightedCn2 := groundWindWeightedCn2 + free.WindWeightedCn2
-	metrics := opticalTurbulenceMetricsFromMoments(totalCn2, totalWindWeightedCn2, free.ValidLayerFraction)
+	layers := make([]opticalTurbulenceLayer, 0, len(boundaryLayers)+len(freeLayers))
+	layers = append(layers, boundaryLayers...)
+	layers = append(layers, freeLayers...)
+	profile := opticalTurbulenceProfile{
+		layers:             layers,
+		surfaceElevationM:  surfaceElevationM,
+		boundaryLayerTopM:  topM,
+		expectedTopM:       expectedTopM,
+		validLayerFraction: validLayerFraction,
+	}
+	metrics := opticalTurbulenceMetricsFromProfile(profile)
 	if !finite(metrics.SeeingArcsec) {
 		return invalidOpticalTurbulenceMetrics(), false
-	}
-	metrics.GroundLayerCn2 = groundCn2
-	if totalCn2 > 0 {
-		metrics.GroundLayerFraction = groundCn2 / totalCn2
 	}
 	return metrics, true
 }
@@ -156,44 +205,6 @@ func masciadriTurbulenceNodes(modelLevels []CloudLevel, surfaceElevationM, bound
 	return nodes, true
 }
 
-func integrateTurbulenceNodes(nodes []turbulenceNode, bottomM, topM float64) (integratedCn2, integratedWindCn2, coveredM float64) {
-	if len(nodes) == 0 || topM <= bottomM || nodes[0].heightM > topM {
-		return 0, 0, 0
-	}
-	// ICON's first full level is roughly 10 m AGL. Extend that value through
-	// the thin unresolved slab down to the model surface.
-	firstTop := math.Min(nodes[0].heightM, topM)
-	if firstTop > bottomM {
-		dz := firstTop - bottomM
-		integratedCn2 += nodes[0].cn2 * dz
-		integratedWindCn2 += nodes[0].windWeightedCn2 * dz
-		coveredM += dz
-	}
-	for index := 0; index+1 < len(nodes); index++ {
-		lower, upper := nodes[index], nodes[index+1]
-		segmentBottom := math.Max(bottomM, lower.heightM)
-		segmentTop := math.Min(topM, upper.heightM)
-		if segmentTop <= segmentBottom || upper.heightM <= lower.heightM {
-			continue
-		}
-		span := upper.heightM - lower.heightM
-		bottomFraction := (segmentBottom - lower.heightM) / span
-		topFraction := (segmentTop - lower.heightM) / span
-		bottomCn2 := lower.cn2 + bottomFraction*(upper.cn2-lower.cn2)
-		topCn2 := lower.cn2 + topFraction*(upper.cn2-lower.cn2)
-		bottomWind := lower.windWeightedCn2 + bottomFraction*(upper.windWeightedCn2-lower.windWeightedCn2)
-		topWind := lower.windWeightedCn2 + topFraction*(upper.windWeightedCn2-lower.windWeightedCn2)
-		dz := segmentTop - segmentBottom
-		integratedCn2 += (bottomCn2 + topCn2) * 0.5 * dz
-		integratedWindCn2 += (bottomWind + topWind) * 0.5 * dz
-		coveredM += dz
-		if segmentTop >= topM {
-			break
-		}
-	}
-	return integratedCn2, integratedWindCn2, coveredM
-}
-
 // HMNSP99Metrics evaluates the free-atmosphere parametrization over the whole
 // supplied pressure-level profile. The wind-weighted integral is used for the
 // atmospheric coherence time tau0; it is not an independent empirical wind
@@ -206,45 +217,69 @@ func HMNSP99Metrics(levels []VerticalLevel) OpticalTurbulenceMetrics {
 // geometric height. This lets the hybrid estimator use native ICON TKE in the
 // boundary layer and HMNSP99 aloft without counting the overlap twice.
 func hmnsp99MetricsAbove(levels []VerticalLevel, minimumHeightM float64) OpticalTurbulenceMetrics {
-	if finite(minimumHeightM) {
-		levels = clipVerticalProfileAbove(levels, minimumHeightM)
-		minimumHeightM = math.Inf(-1)
-	}
-	if len(levels) < 2 {
+	layers, validLayerFraction, expectedTopM, ok := hmnsp99TurbulenceLayersAbove(levels, minimumHeightM)
+	if !ok {
 		return invalidOpticalTurbulenceMetrics()
 	}
-	var integratedCn2 float64
-	var windWeightedCn2 float64
+	referenceHeightM := layers[0].bottomM
+	profile := opticalTurbulenceProfile{
+		layers:             layers,
+		surfaceElevationM:  referenceHeightM,
+		boundaryLayerTopM:  referenceHeightM,
+		expectedTopM:       expectedTopM,
+		validLayerFraction: validLayerFraction,
+	}
+	return opticalTurbulenceMetricsFromProfile(profile)
+}
+
+// hmnsp99TurbulenceLayersAbove preserves the HMNSP99 constant-layer kernel in
+// an ordered provider-neutral profile. Invalid source layers remain gaps in
+// the profile, so structural coverage can gate height-sensitive diagnostics.
+func hmnsp99TurbulenceLayersAbove(levels []VerticalLevel, minimumHeightM float64) ([]opticalTurbulenceLayer, float64, float64, bool) {
+	if finite(minimumHeightM) {
+		levels = clipVerticalProfileAbove(levels, minimumHeightM)
+	}
+	if len(levels) < 2 {
+		return nil, 0, 0, false
+	}
 	validLayers := 0
 	candidateLayers := 0
+	layers := make([]opticalTurbulenceLayer, 0, len(levels)-1)
 	tropopauseM := thermalTropopauseHeight(levels)
 	for index := 0; index+1 < len(levels); index++ {
 		lower, upper := levels[index], levels[index+1]
-		if upper.HeightM <= minimumHeightM {
-			continue
-		}
 		candidateLayers++
 		cn2, ok := hmnsp99LayerCn2(lower, upper, tropopauseM)
 		if !ok {
 			continue
 		}
-		includedDZ := upper.HeightM - math.Max(lower.HeightM, minimumHeightM)
-		if includedDZ <= 0 {
+		if upper.HeightM <= lower.HeightM {
 			continue
 		}
-		layerWindMS := (math.Hypot(lower.UMS, lower.VMS) + math.Hypot(upper.UMS, upper.VMS)) / 2
-		integratedCn2 += cn2 * includedDZ
-		windWeightedCn2 += cn2 * math.Pow(math.Max(0, layerWindMS), 5.0/3.0) * includedDZ
+		// Integrate the nonlinear |V|^(5/3) moment at the native endpoints.
+		// Applying the exponent only after averaging the speeds would
+		// systematically underestimate JV by Jensen's inequality.
+		lowerWindCn2 := cn2 * math.Pow(math.Hypot(lower.UMS, lower.VMS), 5.0/3.0)
+		upperWindCn2 := cn2 * math.Pow(math.Hypot(upper.UMS, upper.VMS), 5.0/3.0)
+		layers = append(layers, opticalTurbulenceLayer{
+			bottomM: lower.HeightM, topM: upper.HeightM,
+			bottomCn2: cn2, topCn2: cn2,
+			bottomWindCn2: lowerWindCn2, topWindCn2: upperWindCn2,
+		})
 		validLayers++
 	}
-	if candidateLayers == 0 || validLayers*2 < candidateLayers || integratedCn2 <= 0 {
-		return invalidOpticalTurbulenceMetrics()
+	if candidateLayers == 0 || validLayers*2 < candidateLayers || len(layers) == 0 {
+		return nil, 0, 0, false
 	}
-	return opticalTurbulenceMetricsFromMoments(
-		integratedCn2,
-		windWeightedCn2,
-		float64(validLayers)/float64(candidateLayers),
-	)
+	profile := opticalTurbulenceProfile{
+		layers: layers, surfaceElevationM: levels[0].HeightM,
+		expectedTopM: levels[len(levels)-1].HeightM,
+	}
+	moments, ok := profileMomentsBetween(profile, levels[0].HeightM, levels[len(levels)-1].HeightM)
+	if !ok || moments.integratedCn2 <= 0 {
+		return nil, 0, 0, false
+	}
+	return layers, float64(validLayers) / float64(candidateLayers), levels[len(levels)-1].HeightM, true
 }
 
 // hmnsp99LayerCn2 evaluates the constant layer value used by HMNSP99. Both
@@ -312,6 +347,96 @@ func clipVerticalProfileAbove(levels []VerticalLevel, minimumHeightM float64) []
 	return append(result, levels[index:]...)
 }
 
+func opticalTurbulenceMetricsFromProfile(profile opticalTurbulenceProfile) OpticalTurbulenceMetrics {
+	if len(profile.layers) == 0 || !finite(profile.surfaceElevationM) || !finite(profile.expectedTopM) ||
+		profile.expectedTopM <= profile.surfaceElevationM {
+		return invalidOpticalTurbulenceMetrics()
+	}
+	moments, ok := profileMomentsBetween(profile, profile.surfaceElevationM, profile.expectedTopM)
+	if !ok || moments.integratedCn2 <= 0 {
+		return invalidOpticalTurbulenceMetrics()
+	}
+	metrics := opticalTurbulenceMetricsFromMoments(
+		moments.integratedCn2,
+		moments.windWeightedCn2,
+		profile.validLayerFraction,
+	)
+	if !finite(metrics.SeeingArcsec) {
+		return invalidOpticalTurbulenceMetrics()
+	}
+	metrics.HeightWeightedCn2 = moments.heightWeightedCn2
+	if moments.heightWeightedCn2 > 0 {
+		metrics.EffectiveTurbulenceHeightM = math.Pow(moments.heightWeightedCn2/moments.integratedCn2, 3.0/5.0)
+		wavenumber := 2 * math.Pi / seeingWavelengthM
+		metrics.IsoplanaticAngleArcsec = math.Pow(
+			isoplanaticPhaseStructureCoefficient*wavenumber*wavenumber*moments.heightWeightedCn2,
+			-3.0/5.0,
+		) * radiansToArcsec
+	} else {
+		// A synthetic profile entirely at the aperture has no angular
+		// anisoplanatism. Keep diagnostics finite for downstream JSON.
+		metrics.EffectiveTurbulenceHeightM = 0
+		metrics.IsoplanaticAngleArcsec = 1e6
+	}
+	metrics.EffectiveWindSpeedMS = math.Pow(moments.windWeightedCn2/moments.integratedCn2, 3.0/5.0)
+
+	boundaryTopM := clamp(profile.boundaryLayerTopM, profile.surfaceElevationM, profile.expectedTopM)
+	boundaryMoments := opticalTurbulenceMoments{}
+	if boundaryTopM > profile.surfaceElevationM {
+		boundaryMoments, ok = profileMomentsBetween(profile, profile.surfaceElevationM, boundaryTopM)
+		if !ok {
+			return invalidOpticalTurbulenceMetrics()
+		}
+	}
+	metrics.BoundaryLayerCn2 = boundaryMoments.integratedCn2
+	metrics.BoundaryLayerFraction = clamp(boundaryMoments.integratedCn2/moments.integratedCn2, 0, 1)
+	metrics.GroundLayerCn2 = metrics.BoundaryLayerCn2
+	metrics.GroundLayerFraction = metrics.BoundaryLayerFraction
+	metrics.FracGL250 = fixedGroundLayerFraction(profile, moments.integratedCn2, 250)
+	metrics.FracGL500 = fixedGroundLayerFraction(profile, moments.integratedCn2, 500)
+	metrics.FracGL1000 = fixedGroundLayerFraction(profile, moments.integratedCn2, 1000)
+	free500, freeOK := profileMomentsBetween(
+		profile,
+		math.Min(profile.surfaceElevationM+500, profile.expectedTopM),
+		profile.expectedTopM,
+	)
+	if freeOK {
+		metrics.FreeAtmosphereSeeing500MArcsec = seeingArcsecFromIntegratedCn2(free500.integratedCn2)
+	}
+	metrics.ProfileVerticalCoverage, metrics.ProfileHeightMomentCoverage = profileStructuralCoverage(profile, moments)
+	metrics.ProfileTopAGLM = profile.expectedTopM - profile.surfaceElevationM
+	metrics.ProfileQuality = OpticalTurbulenceProfileLimited
+	if metrics.ProfileVerticalCoverage >= 0.99 && metrics.ProfileHeightMomentCoverage >= 0.99 &&
+		metrics.ProfileTopAGLM >= minimumCompleteTurbulenceProfileTopAGLM {
+		metrics.ProfileQuality = OpticalTurbulenceProfileComplete
+	}
+	return metrics
+}
+
+func fixedGroundLayerFraction(profile opticalTurbulenceProfile, totalCn2, topAGLM float64) float64 {
+	if totalCn2 <= 0 {
+		return math.NaN()
+	}
+	topM := math.Min(profile.surfaceElevationM+topAGLM, profile.expectedTopM)
+	moments, ok := profileMomentsBetween(profile, profile.surfaceElevationM, topM)
+	if !ok {
+		return math.NaN()
+	}
+	return clamp(moments.integratedCn2/totalCn2, 0, 1)
+}
+
+func seeingArcsecFromIntegratedCn2(integratedCn2 float64) float64 {
+	if !finite(integratedCn2) || integratedCn2 < 0 {
+		return math.NaN()
+	}
+	if integratedCn2 == 0 {
+		return 0
+	}
+	wavenumber := 2 * math.Pi / seeingWavelengthM
+	r0M := math.Pow(friedR0Coefficient*wavenumber*wavenumber*integratedCn2, -3.0/5.0)
+	return friedSeeingCoefficient * seeingWavelengthM / r0M * radiansToArcsec
+}
+
 func opticalTurbulenceMetricsFromMoments(integratedCn2, windWeightedCn2, validLayerFraction float64) OpticalTurbulenceMetrics {
 	if !finite(integratedCn2) || integratedCn2 <= 0 || !finite(windWeightedCn2) || windWeightedCn2 < 0 {
 		return invalidOpticalTurbulenceMetrics()
@@ -330,25 +455,53 @@ func opticalTurbulenceMetricsFromMoments(integratedCn2, windWeightedCn2, validLa
 		)
 	}
 	return OpticalTurbulenceMetrics{
-		SeeingArcsec:        seeingRadians * radiansToArcsec,
-		CoherenceTimeMS:     coherenceTimeMS,
-		IntegratedCn2:       integratedCn2,
-		WindWeightedCn2:     windWeightedCn2,
-		GroundLayerCn2:      0,
-		GroundLayerFraction: 0,
-		ValidLayerFraction:  clamp(validLayerFraction, 0, 1),
+		SeeingArcsec:                   seeingRadians * radiansToArcsec,
+		CoherenceTimeMS:                coherenceTimeMS,
+		IsoplanaticAngleArcsec:         math.NaN(),
+		IntegratedCn2:                  integratedCn2,
+		WindWeightedCn2:                windWeightedCn2,
+		HeightWeightedCn2:              math.NaN(),
+		EffectiveTurbulenceHeightM:     math.NaN(),
+		EffectiveWindSpeedMS:           math.Pow(windWeightedCn2/integratedCn2, 3.0/5.0),
+		BoundaryLayerCn2:               math.NaN(),
+		BoundaryLayerFraction:          math.NaN(),
+		FracGL250:                      math.NaN(),
+		FracGL500:                      math.NaN(),
+		FracGL1000:                     math.NaN(),
+		FreeAtmosphereSeeing500MArcsec: math.NaN(),
+		ProfileVerticalCoverage:        0,
+		ProfileHeightMomentCoverage:    0,
+		ProfileTopAGLM:                 math.NaN(),
+		ProfileQuality:                 OpticalTurbulenceProfileUnavailable,
+		GroundLayerCn2:                 0,
+		GroundLayerFraction:            0,
+		ValidLayerFraction:             clamp(validLayerFraction, 0, 1),
 	}
 }
 
 func invalidOpticalTurbulenceMetrics() OpticalTurbulenceMetrics {
 	return OpticalTurbulenceMetrics{
-		SeeingArcsec:        math.NaN(),
-		CoherenceTimeMS:     math.NaN(),
-		IntegratedCn2:       math.NaN(),
-		WindWeightedCn2:     math.NaN(),
-		GroundLayerCn2:      math.NaN(),
-		GroundLayerFraction: math.NaN(),
-		ValidLayerFraction:  0,
+		SeeingArcsec:                   math.NaN(),
+		CoherenceTimeMS:                math.NaN(),
+		IsoplanaticAngleArcsec:         math.NaN(),
+		IntegratedCn2:                  math.NaN(),
+		WindWeightedCn2:                math.NaN(),
+		HeightWeightedCn2:              math.NaN(),
+		EffectiveTurbulenceHeightM:     math.NaN(),
+		EffectiveWindSpeedMS:           math.NaN(),
+		BoundaryLayerCn2:               math.NaN(),
+		BoundaryLayerFraction:          math.NaN(),
+		FracGL250:                      math.NaN(),
+		FracGL500:                      math.NaN(),
+		FracGL1000:                     math.NaN(),
+		FreeAtmosphereSeeing500MArcsec: math.NaN(),
+		ProfileVerticalCoverage:        0,
+		ProfileHeightMomentCoverage:    0,
+		ProfileTopAGLM:                 math.NaN(),
+		ProfileQuality:                 OpticalTurbulenceProfileUnavailable,
+		GroundLayerCn2:                 math.NaN(),
+		GroundLayerFraction:            math.NaN(),
+		ValidLayerFraction:             0,
 	}
 }
 

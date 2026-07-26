@@ -30,8 +30,52 @@ func TestLoadExample(t *testing.T) {
 	if cfg.Sync.MinFreeSpace != ByteSize(150<<30) {
 		t.Fatalf("unexpected minimum free space: %d", cfg.Sync.MinFreeSpace)
 	}
+	if !cfg.Providers.GEOSCF.Enabled || cfg.Providers.GEOSCF.RequestTimeout.Duration != time.Minute ||
+		cfg.Providers.GEOSCF.CacheEntries != 256 {
+		t.Fatalf("unexpected GEOS-CF configuration: %+v", cfg.Providers.GEOSCF)
+	}
 	if !cfg.Platforms.Telegram.Enabled || cfg.Platforms.VK.Enabled {
 		t.Fatalf("unexpected platform configuration")
+	}
+}
+
+func TestGEOSCFEnvironmentToggleAndDisabledValidation(t *testing.T) {
+	t.Setenv("ASTRO_GEOS_CF_ENABLED", "false")
+	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers.GEOSCF.Enabled {
+		t.Fatal("environment did not disable GEOS-CF")
+	}
+	cfg.Providers.GEOSCF.DatasetURL = ""
+	cfg.Providers.GEOSCF.RequestTimeout = Duration{}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled optional GEOS-CF provider rejected: %v", err)
+	}
+
+	t.Setenv("ASTRO_GEOS_CF_ENABLED", "not-a-boolean")
+	if _, err := Load(filepath.Join("..", "..", "config", "config.example.yaml")); err == nil ||
+		!strings.Contains(err.Error(), "ASTRO_GEOS_CF_ENABLED") {
+		t.Fatalf("invalid GEOS-CF toggle error = %v", err)
+	}
+}
+
+func TestEnabledGEOSCFConfigurationValidation(t *testing.T) {
+	tests := []func(*GEOSCFConfig){
+		func(value *GEOSCFConfig) { value.DatasetURL = "" },
+		func(value *GEOSCFConfig) { value.RequestTimeout = Duration{} },
+		func(value *GEOSCFConfig) { value.MetadataCacheTTL = Duration{25 * time.Hour} },
+		func(value *GEOSCFConfig) { value.DataCacheTTL = Duration{49 * time.Hour} },
+		func(value *GEOSCFConfig) { value.MaxStaleAge = Duration{8 * 24 * time.Hour} },
+		func(value *GEOSCFConfig) { value.CacheEntries = 0 },
+	}
+	for index, mutate := range tests {
+		cfg := Defaults()
+		mutate(&cfg.Providers.GEOSCF)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "providers.geos_cf") {
+			t.Fatalf("case %d validation error = %v", index, err)
+		}
 	}
 }
 
@@ -114,6 +158,7 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 	t.Setenv("ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY", "0.2")
 	t.Setenv("ASTRO_OVERALL_POSSIBLE_FOG_FACTOR", "0.7")
 	t.Setenv("ASTRO_OVERALL_HIGH_FOG_FACTOR", "0.05")
+	t.Setenv("ASTRO_OVERALL_PRECIPITATION_DETECT_MM", "0.08")
 	t.Setenv("ASTRO_OVERALL_GOOD_SEEING_ARCSEC", "0.6")
 	t.Setenv("ASTRO_OVERALL_BAD_SEEING_ARCSEC", "3.0")
 	t.Setenv("ASTRO_OVERALL_BEST_COHERENCE_TIME_MS", "6.0")
@@ -134,7 +179,8 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 	if cfg.Algorithms.OverallSeeingWeight != 1.25 || cfg.Algorithms.OverallCloudWeight != 2.75 ||
 		cfg.Algorithms.OverallCoherenceTimeWeight != 0.3 || cfg.Algorithms.OverallOpticalTurbulenceMaxPenalty != 0.2 ||
 		cfg.Algorithms.OverallPossibleFogFactor != 0.7 ||
-		cfg.Algorithms.OverallHighFogFactor != 0.05 || cfg.Algorithms.OverallGoodSeeingArcsec != 0.6 ||
+		cfg.Algorithms.OverallHighFogFactor != 0.05 || cfg.Algorithms.OverallPrecipitationDetectMM != 0.08 ||
+		cfg.Algorithms.OverallGoodSeeingArcsec != 0.6 ||
 		cfg.Algorithms.OverallBadSeeingArcsec != 3.0 || cfg.Algorithms.OverallBestCoherenceTimeMS != 6.0 ||
 		cfg.Algorithms.OverallBadCoherenceTimeMS != 1.5 || cfg.Algorithms.OverallBoundaryLayerMinM != 700 ||
 		cfg.Algorithms.OverallBoundaryLayerTopM != 1800 ||
@@ -149,14 +195,15 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 	cfg := Defaults()
 	algorithms := cfg.Algorithms
-	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v6" ||
-		algorithms.ConditionsVersion != "conditions-v7-phase-structure-coherence" ||
-		cfg.Render.Version != "render-v9-dynamic-mh" {
+	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v7" ||
+		algorithms.ConditionsVersion != "conditions-v8-precip-veto-penalty-decomposition" ||
+		cfg.Render.Version != "render-v16-overall-penalty-decomposition" {
 		t.Fatalf("unexpected algorithm/render versions: %+v %+v", algorithms, cfg.Render)
 	}
 	if algorithms.OverallGoodSeeingArcsec != 0.5 || algorithms.OverallBadSeeingArcsec != 2.0 ||
 		algorithms.OverallCoherenceTimeWeight != 0.25 || algorithms.OverallOpticalTurbulenceMaxPenalty != 0.25 ||
 		algorithms.OverallPossibleFogFactor != 0.75 ||
+		algorithms.OverallPrecipitationDetectMM != 0.05 ||
 		algorithms.OverallBestCoherenceTimeMS != 5.2 || algorithms.OverallBadCoherenceTimeMS != 1.6 ||
 		algorithms.OverallBoundaryLayerMinM != 500 || algorithms.OverallBoundaryLayerTopM != 2000 ||
 		algorithms.OverallGroundCn2Scale != 1 ||

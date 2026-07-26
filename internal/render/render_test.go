@@ -231,6 +231,50 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 	}
 }
 
+func TestOverallPenaltyStackClosesAtTenAndExposesPrecipitationVeto(t *testing.T) {
+	frames, err := forecast.ComputeHourlyOverallIndex(
+		forecast.SyntheticVerticalFixture(),
+		forecast.SyntheticSurfaceFixture(),
+		forecast.SyntheticCloudFixture(),
+		forecast.DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames[0].Index = 1
+	frames[0].PrecipitationVeto = true
+	frames[0].PenaltyContributions = []forecast.OverallPenaltyContribution{
+		{Key: forecast.OverallPenaltyOpticalTurbulence, LossFraction: 0},
+		{Key: forecast.OverallPenaltyCloudObstruction, LossFraction: 0},
+		{Key: forecast.OverallPenaltySurfaceWind, LossFraction: 0},
+		{Key: forecast.OverallPenaltyFog, LossFraction: 0},
+		{Key: forecast.OverallPenaltyPrecipitation, LossFraction: 1},
+	}
+	base, penalties, err := overallStackValues(frames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base[0] != 1 || penalties[forecast.OverallPenaltyPrecipitation][0] != 9 {
+		t.Fatalf("precipitation veto stack = base %.3f, precipitation %.3f", base[0], penalties[forecast.OverallPenaltyPrecipitation][0])
+	}
+	top, _, err := overallIndexLabels(frames[:1], magma(96), Options{Language: "ru"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if top.Labels[0] != "1.0P" {
+		t.Fatalf("precipitation veto marker = %q, want stable ASCII marker 1.0P", top.Labels[0])
+	}
+	for index := range frames {
+		total := base[index]
+		for _, key := range overallPenaltyOrder {
+			total += penalties[key][index]
+		}
+		if math.Abs(total-10) > 1e-7 {
+			t.Fatalf("stack %d closes at %.12f", index, total)
+		}
+	}
+}
+
 func TestAllProducesFour1280x960PNGs(t *testing.T) {
 	output := t.TempDir()
 	result, err := All(output, forecast.SyntheticVerticalFixture(), Options{})

@@ -11,6 +11,11 @@ func TestHMNSP99SeeingProducesPlausibleStandardProfile(t *testing.T) {
 	if !finite(seeing) || seeing < 0.3 || seeing > 3.0 {
 		t.Fatalf("standard-profile seeing = %v arcsec, want a plausible model range", seeing)
 	}
+	metrics := HMNSP99Metrics(levels)
+	assertRelativeClose(t, "HMNSP99 J regression", metrics.IntegratedCn2, 5.067859304649387e-13, 1e-12)
+	assertRelativeClose(t, "HMNSP99 JV regression", metrics.WindWeightedCn2, 7.641543670218297e-11, 1e-12)
+	assertRelativeClose(t, "HMNSP99 seeing regression", metrics.SeeingArcsec, 0.8363190705161425, 1e-12)
+	assertRelativeClose(t, "HMNSP99 tau0 regression", metrics.CoherenceTimeMS, 1.8737157619744427, 1e-12)
 }
 
 func TestSeeingUsesAlgebraicallyConsistentFriedCoefficient(t *testing.T) {
@@ -88,6 +93,20 @@ func TestHybridOpticalTurbulenceAddsResolvedGroundLayer(t *testing.T) {
 	}
 	if metrics.GroundLayerCn2 <= 0 || metrics.GroundLayerFraction <= 0 || metrics.GroundLayerFraction > 1 {
 		t.Fatalf("invalid ground-layer contribution: %+v", metrics)
+	}
+	// Height-weighted diagnostics preserve J and seeing. JV and tau0 use the
+	// trapezoidal endpoint integral of the nonlinear |V|^(5/3) moment instead
+	// of exponentiating an already averaged speed.
+	assertRelativeClose(t, "hybrid J regression", metrics.IntegratedCn2, 6.086198914674668e-12, 1e-12)
+	assertRelativeClose(t, "hybrid JV regression", metrics.WindWeightedCn2, 1.7590583810709743e-10, 1e-12)
+	assertRelativeClose(t, "hybrid seeing regression", metrics.SeeingArcsec, 3.7160791518027287, 1e-12)
+	assertRelativeClose(t, "hybrid tau0 regression", metrics.CoherenceTimeMS, 1.1361723544313702, 1e-12)
+	assertRelativeClose(t, "hybrid dynamic PBL J regression", metrics.GroundLayerCn2, 5.677780786938006e-12, 1e-12)
+	if metrics.ProfileQuality != OpticalTurbulenceProfileComplete {
+		t.Fatalf("complete hybrid profile quality = %q", metrics.ProfileQuality)
+	}
+	if !(metrics.FracGL250 <= metrics.FracGL500 && metrics.FracGL500 <= metrics.FracGL1000) {
+		t.Fatalf("fixed ground-layer fractions are not monotonic: %+v", metrics)
 	}
 	free := hmnsp99MetricsAbove(pressure, 2000)
 	if !(metrics.IntegratedCn2 > free.IntegratedCn2) {

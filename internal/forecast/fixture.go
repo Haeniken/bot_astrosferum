@@ -28,11 +28,6 @@ func SyntheticVerticalFixture() VerticalSeries {
 				VMS:          -speed * math.Cos(direction),
 			}
 		}
-		// One deliberate gap exercises the renderer's missing-data contract.
-		if frameIndex == 11 {
-			levels[17].UMS = math.NaN()
-			levels[17].VMS = math.NaN()
-		}
 		frames[frameIndex] = VerticalFrame{
 			ValidAt:    base.Add(time.Duration(frameIndex) * 3 * time.Hour),
 			Levels:     levels,

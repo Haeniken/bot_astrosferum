@@ -70,7 +70,18 @@ type ProvidersConfig struct {
 	ICONEU         ProviderConfig       `yaml:"icon_eu"`
 	ICONGlobal     ProviderConfig       `yaml:"icon_global"`
 	ICONRu         ProviderConfig       `yaml:"icon_ru"`
+	GEOSCF         GEOSCFConfig         `yaml:"geos_cf"`
 	LightPollution LightPollutionConfig `yaml:"light_pollution"`
+}
+
+type GEOSCFConfig struct {
+	Enabled          bool     `yaml:"enabled"`
+	DatasetURL       string   `yaml:"dataset_url"`
+	RequestTimeout   Duration `yaml:"request_timeout"`
+	MetadataCacheTTL Duration `yaml:"metadata_cache_ttl"`
+	DataCacheTTL     Duration `yaml:"data_cache_ttl"`
+	MaxStaleAge      Duration `yaml:"max_stale_age"`
+	CacheEntries     int      `yaml:"cache_entries"`
 }
 
 type LightPollutionConfig struct {
@@ -101,6 +112,7 @@ type AlgorithmsConfig struct {
 	OverallOpticalTurbulenceMaxPenalty float64 `yaml:"overall_optical_turbulence_max_penalty"`
 	OverallPossibleFogFactor           float64 `yaml:"overall_possible_fog_factor"`
 	OverallHighFogFactor               float64 `yaml:"overall_high_fog_factor"`
+	OverallPrecipitationDetectMM       float64 `yaml:"overall_precipitation_detect_mm"`
 	OverallGoodSeeingArcsec            float64 `yaml:"overall_good_seeing_arcsec"`
 	OverallBadSeeingArcsec             float64 `yaml:"overall_bad_seeing_arcsec"`
 	OverallBestCoherenceTimeMS         float64 `yaml:"overall_best_coherence_time_ms"`
@@ -156,6 +168,12 @@ func Defaults() Config {
 		},
 		Paths: PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
 		Providers: ProvidersConfig{
+			GEOSCF: GEOSCFConfig{
+				Enabled:        true,
+				DatasetURL:     "https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/v2/fcst/xgc_tavg_1hr_glo_L1440x721_slv.latest",
+				RequestTimeout: Duration{60 * time.Second}, MetadataCacheTTL: Duration{10 * time.Minute},
+				DataCacheTTL: Duration{6 * time.Hour}, MaxStaleAge: Duration{48 * time.Hour}, CacheEntries: 256,
+			},
 			LightPollution: LightPollutionConfig{AtlasYear: 2024},
 		},
 		Sync: SyncConfig{
@@ -164,15 +182,16 @@ func Defaults() Config {
 			MinFreeSpace:        ByteSize(150 << 30),
 		},
 		Algorithms: AlgorithmsConfig{
-			SeeingVersion:                      "seeing-hybrid-tke-mh-hmnsp99-v6",
+			SeeingVersion:                      "seeing-hybrid-tke-mh-hmnsp99-v7",
 			DewVersion:                         "dew-v1",
-			ConditionsVersion:                  "conditions-v7-phase-structure-coherence",
+			ConditionsVersion:                  "conditions-v8-precip-veto-penalty-decomposition",
 			OverallSeeingWeight:                1,
 			OverallCloudWeight:                 2,
 			OverallCoherenceTimeWeight:         0.25,
 			OverallOpticalTurbulenceMaxPenalty: 0.25,
 			OverallPossibleFogFactor:           0.75,
 			OverallHighFogFactor:               0.10,
+			OverallPrecipitationDetectMM:       0.05,
 			OverallGoodSeeingArcsec:            0.5,
 			OverallBadSeeingArcsec:             2.0,
 			OverallBestCoherenceTimeMS:         5.2,
@@ -189,7 +208,7 @@ func Defaults() Config {
 			CloudLiquidRadiusMicrometers:       10,
 			CloudIceRadiusMicrometers:          25,
 		},
-		Render:   RenderConfig{Version: "render-v9-dynamic-mh", Width: 1280, Height: 960},
+		Render:   RenderConfig{Version: "render-v16-overall-penalty-decomposition", Width: 1280, Height: 960},
 		Database: DatabaseConfig{Host: "postgres", Port: 5432, Name: "bot_astrosferum", User: "bot_astrosferum", MaxConns: 10},
 	}
 }
@@ -248,6 +267,13 @@ func (c *Config) applyEnvironment() error {
 		}
 		c.HorizonAnalysis.Enabled = parsed
 	}
+	if value, exists := os.LookupEnv("ASTRO_GEOS_CF_ENABLED"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_GEOS_CF_ENABLED: %w", err)
+		}
+		c.Providers.GEOSCF.Enabled = parsed
+	}
 	overrides := []struct {
 		name   string
 		target *float64
@@ -258,6 +284,7 @@ func (c *Config) applyEnvironment() error {
 		{name: "ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY", target: &c.Algorithms.OverallOpticalTurbulenceMaxPenalty},
 		{name: "ASTRO_OVERALL_POSSIBLE_FOG_FACTOR", target: &c.Algorithms.OverallPossibleFogFactor},
 		{name: "ASTRO_OVERALL_HIGH_FOG_FACTOR", target: &c.Algorithms.OverallHighFogFactor},
+		{name: "ASTRO_OVERALL_PRECIPITATION_DETECT_MM", target: &c.Algorithms.OverallPrecipitationDetectMM},
 		{name: "ASTRO_OVERALL_GOOD_SEEING_ARCSEC", target: &c.Algorithms.OverallGoodSeeingArcsec},
 		{name: "ASTRO_OVERALL_BAD_SEEING_ARCSEC", target: &c.Algorithms.OverallBadSeeingArcsec},
 		{name: "ASTRO_OVERALL_BEST_COHERENCE_TIME_MS", target: &c.Algorithms.OverallBestCoherenceTimeMS},
@@ -402,6 +429,26 @@ func (c Config) Validate() error {
 	if c.Sync.MinFreeSpace < 0 {
 		problems = append(problems, "sync.min_free_space cannot be negative")
 	}
+	if c.Providers.GEOSCF.Enabled {
+		if strings.TrimSpace(c.Providers.GEOSCF.DatasetURL) == "" {
+			problems = append(problems, "providers.geos_cf.dataset_url is required when enabled")
+		}
+		if c.Providers.GEOSCF.RequestTimeout.Duration <= 0 || c.Providers.GEOSCF.RequestTimeout.Duration > 5*time.Minute {
+			problems = append(problems, "providers.geos_cf.request_timeout must be between 0 and 5m")
+		}
+		if c.Providers.GEOSCF.MetadataCacheTTL.Duration <= 0 || c.Providers.GEOSCF.MetadataCacheTTL.Duration > 24*time.Hour {
+			problems = append(problems, "providers.geos_cf.metadata_cache_ttl must be between 0 and 24h")
+		}
+		if c.Providers.GEOSCF.DataCacheTTL.Duration <= 0 || c.Providers.GEOSCF.DataCacheTTL.Duration > 48*time.Hour {
+			problems = append(problems, "providers.geos_cf.data_cache_ttl must be between 0 and 48h")
+		}
+		if c.Providers.GEOSCF.MaxStaleAge.Duration <= 0 || c.Providers.GEOSCF.MaxStaleAge.Duration > 7*24*time.Hour {
+			problems = append(problems, "providers.geos_cf.max_stale_age must be between 0 and 168h")
+		}
+		if c.Providers.GEOSCF.CacheEntries < 1 || c.Providers.GEOSCF.CacheEntries > 4096 {
+			problems = append(problems, "providers.geos_cf.cache_entries must be between 1 and 4096")
+		}
+	}
 	if c.Render.Width < 320 || c.Render.Height < 240 {
 		problems = append(problems, "render dimensions are too small")
 	}
@@ -422,6 +469,10 @@ func (c Config) Validate() error {
 	}
 	if c.Algorithms.OverallHighFogFactor < 0 || c.Algorithms.OverallHighFogFactor > 1 {
 		problems = append(problems, "algorithms.overall_high_fog_factor must be between 0 and 1")
+	}
+	if math.IsNaN(c.Algorithms.OverallPrecipitationDetectMM) || math.IsInf(c.Algorithms.OverallPrecipitationDetectMM, 0) ||
+		c.Algorithms.OverallPrecipitationDetectMM <= 0 || c.Algorithms.OverallPrecipitationDetectMM > 10 {
+		problems = append(problems, "algorithms.overall_precipitation_detect_mm must be greater than 0 and no greater than 10 mm")
 	}
 	if c.Algorithms.OverallGoodSeeingArcsec <= 0 || c.Algorithms.OverallBadSeeingArcsec <= c.Algorithms.OverallGoodSeeingArcsec {
 		problems = append(problems, "algorithms overall seeing thresholds must be positive and ordered good < bad")

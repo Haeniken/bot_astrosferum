@@ -36,7 +36,9 @@ const StartHelp = `Привет! Я строю астрономический п
 
 Облака: нижние закрывают объект и отражают засветку; средние гасят сигнал и контраст; верхние повышают фон и портят длинные выдержки/фотометрию. Цифры покрытия: белые <10%, синие 10–49%, оранжевые ≥50%; это не оптическая толщина; облачность не меняет wind-based seeing.
 
-2. Overall Astronomy Index, 1…10: гибридный сиинг ICON (TKE до динамической MH 500–2000 м AGL + HMNSP99 выше), τ₀, облачная преграда и туман. Приземный ветер штрафует слабо, роса не влияет. HHL задаёт AGL-высоты; MH — почасовая высота перемешанного слоя. В ячейке: сиинг / τ₀ мс / T% пропускания; f/F — риск тумана; фон — день/сумерки/ночь.
+2. Overall Astronomy Index, 1…10: снизу — сохранившаяся пригодность; цветные сегменты — точное аддитивное разложение потерь: сиинг/облака/ветер/туман/осадки; сумма до 10. Осадки выше порога — красный запрет (индекс 1); «!» — неполные данные.
+
+Кольцо «Эталон V, зенит» — только при Солнце <−18°: PWV/AOD/O₃/Луна/PSF-сиинг, без засветки. Нет GEOS-CF — нет кольца; Overall доступен.
 
 3. Эффективная облачная преграда ICON — CLC+QC/QI и толщина: 0% почти ясно, 100% непрозрачно; тонкие верхние облака слабее плотных нижних.
 
@@ -54,7 +56,14 @@ const StartHelp = `Привет! Я строю астрономический п
 
 const NotReadyText = `Координаты распознаны, но выдача рабочего ICON-прогноза ещё разворачивается. Синтетические данные я пользователям не отправляю.`
 
-const defaultForecastMaxStaleAge = 12 * time.Hour
+const (
+	defaultForecastMaxStaleAge = 12 * time.Hour
+	// GEOS-CF is an independent, optional enrichment. A cold public OPeNDAP
+	// request may continue in the background and warm its bounded RAM cache,
+	// but it must not add an unbounded delay to the primary ICON forecast.
+	atmosphericCompositionJoinTimeout      = 5 * time.Second
+	atmosphericCompositionOperationTimeout = 65 * time.Second
+)
 
 type Messenger interface {
 	SendMessage(ctx context.Context, chatID int64, text string, locationButton bool) error
@@ -95,27 +104,40 @@ type LightPollutionProvider interface {
 	At(ctx context.Context, latitude, longitude float64) (lightpollution.Estimate, error)
 }
 
+type AtmosphericCompositionProvider interface {
+	AtmosphericComposition(ctx context.Context, location forecast.Location, validTimes []time.Time) (forecast.AtmosphericCompositionSeries, error)
+}
+
+type compositionResult struct {
+	series forecast.AtmosphericCompositionSeries
+	err    error
+}
+
 type Handler struct {
-	messenger           Messenger
-	resolver            *forecast.TimeZoneResolver
-	provider            ForecastProvider
-	renderRoot          string
-	renderCacheRoot     string
-	renderOptions       render.Options
-	overallCalibration  forecast.OverallIndexCalibration
-	forecastMaxStaleAge time.Duration
-	fallbackMaxStaleAge time.Duration
-	lightPollution      LightPollutionProvider
-	worldAtlas2015      LightPollutionProvider
-	persistence         Persistence
-	admins              map[int64]struct{}
-	actions             ActionRouter
-	horizon             *HorizonJobs
-	forecastQueue       *ForecastQueue
-	sessionMu           sync.Mutex
-	sessions            map[int64]saveSession
-	logf                func(string, ...any)
-	requestSequence     atomic.Uint64
+	messenger                     Messenger
+	resolver                      *forecast.TimeZoneResolver
+	provider                      ForecastProvider
+	renderRoot                    string
+	renderCacheRoot               string
+	renderOptions                 render.Options
+	overallCalibration            forecast.OverallIndexCalibration
+	forecastMaxStaleAge           time.Duration
+	fallbackMaxStaleAge           time.Duration
+	lightPollution                LightPollutionProvider
+	worldAtlas2015                LightPollutionProvider
+	atmosphericComposition        AtmosphericCompositionProvider
+	atmosphericCompositionContext context.Context
+	atmosphericCompositionJoin    time.Duration
+	atmosphericCompositionTimeout time.Duration
+	persistence                   Persistence
+	admins                        map[int64]struct{}
+	actions                       ActionRouter
+	horizon                       *HorizonJobs
+	forecastQueue                 *ForecastQueue
+	sessionMu                     sync.Mutex
+	sessions                      map[int64]saveSession
+	logf                          func(string, ...any)
+	requestSequence               atomic.Uint64
 }
 
 func (handler *Handler) EnableForecast(provider ForecastProvider, renderRoot string, options render.Options) error {
@@ -167,7 +189,14 @@ func NewHandler(messenger Messenger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{messenger: messenger, resolver: resolver, overallCalibration: forecast.DefaultOverallIndexCalibration(), forecastMaxStaleAge: defaultForecastMaxStaleAge, fallbackMaxStaleAge: 18 * time.Hour, logf: func(string, ...any) {}, admins: map[int64]struct{}{}, actions: ActionRouter{}, sessions: map[int64]saveSession{}}, nil
+	return &Handler{
+		messenger: messenger, resolver: resolver,
+		overallCalibration:  forecast.DefaultOverallIndexCalibration(),
+		forecastMaxStaleAge: defaultForecastMaxStaleAge, fallbackMaxStaleAge: 18 * time.Hour,
+		atmosphericCompositionJoin:    atmosphericCompositionJoinTimeout,
+		atmosphericCompositionTimeout: atmosphericCompositionOperationTimeout,
+		logf:                          func(string, ...any) {}, admins: map[int64]struct{}{}, actions: ActionRouter{}, sessions: map[int64]saveSession{},
+	}, nil
 }
 
 func (handler *Handler) EnableActions(actions ActionRouter) error {
@@ -256,6 +285,18 @@ func (handler *Handler) EnableLightPollution(provider LightPollutionProvider) er
 		return fmt.Errorf("light-pollution provider is required")
 	}
 	handler.lightPollution = provider
+	return nil
+}
+
+func (handler *Handler) EnableAtmosphericComposition(rootContext context.Context, provider AtmosphericCompositionProvider) error {
+	if rootContext == nil {
+		return fmt.Errorf("atmospheric-composition root context is required")
+	}
+	if provider == nil {
+		return fmt.Errorf("atmospheric-composition provider is required")
+	}
+	handler.atmosphericComposition = provider
+	handler.atmosphericCompositionContext = rootContext
 	return nil
 }
 
@@ -445,6 +486,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	var surfaceSeries forecast.SurfaceSeries
 	var sky astronomy.Series
+	var compositionChannel chan compositionResult
 	hasWeather := false
 	hasOverall := false
 	var cloudSeries forecast.CloudSeries
@@ -462,6 +504,13 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 				handler.logf("forecast request %d astronomy calculation failed: %v", requestID, astronomyError)
 			} else {
 				hasWeather = true
+				if handler.atmosphericComposition != nil {
+					validTimes := make([]time.Time, len(surface.Frames))
+					for index := range surface.Frames {
+						validTimes[index] = surface.Frames[index].ValidAt
+					}
+					compositionChannel = handler.startAtmosphericComposition(location, validTimes)
+				}
 			}
 		}
 	}
@@ -481,6 +530,21 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			"A new model run appeared while the data were being read. Repeat the request to use the fresh run."),
 			true, language)
 	}
+	var compositionSeries forecast.AtmosphericCompositionSeries
+	if compositionChannel != nil {
+		select {
+		case composition := <-compositionChannel:
+			if composition.err != nil {
+				handler.logf("forecast request %d GEOS-CF composition unavailable; Reference V-band remains partial: %v", requestID, composition.err)
+			} else {
+				compositionSeries = composition.series
+			}
+		case <-time.After(handler.atmosphericCompositionJoin):
+			handler.logf("forecast request %d GEOS-CF composition did not finish within the %s join budget; ICON rendering continues while the bounded service operation may warm the shared RAM cache", requestID, handler.atmosphericCompositionJoin)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	dataDuration := time.Since(dataStarted)
 	renderStarted := time.Now()
 	requestRenderOptions := handler.renderOptions
@@ -489,7 +553,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	cacheKey := ""
 	var charts render.Result
 	if handler.renderCacheRoot != "" && hasWeather && hasCloud {
-		cacheKey = forecastRenderCacheKey(series, surfaceSeries, cloudSeries, sky, requestRenderOptions, handler.overallCalibration)
+		cacheKey = forecastRenderCacheKey(series, surfaceSeries, cloudSeries, compositionSeries, sky, requestRenderOptions, handler.overallCalibration)
 		charts, renderCacheHit = loadRenderCache(handler.renderCacheRoot, cacheKey)
 		hasOverall = renderCacheHit
 	}
@@ -521,6 +585,9 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			if overallError != nil {
 				handler.logf("forecast request %d overall index calculation failed: %v", requestID, overallError)
 			} else {
+				if referenceError := AttachReferenceVBand(overallFrames, surfaceSeries, compositionSeries, sky); referenceError != nil {
+					handler.logf("forecast request %d Reference V-band calculation failed: %v", requestID, referenceError)
+				}
 				charts.OverallIndex = filepath.Join(requestDirectory, "overall-astronomy-index-hourly.png")
 				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: language.renderCode()}); renderError == nil {
 					hasOverall = true
@@ -571,6 +638,17 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			"\nМодельная высота поверхности: %.0f м над уровнем моря (ICON HHL).",
 			"\nModel surface elevation: %.0f m above mean sea level (ICON HHL)."),
 			cloudSeries.SurfaceElevationM)
+	}
+	if len(compositionSeries.Frames) > 0 {
+		summary += fmt.Sprintf(language.text(
+			"\nЭталон V: %s, опорное время %s UTC, актуальность %s, сетка %s; AOD₅₅₀/O₃ — независимый прогноз состава, PWV — ICON TQV.",
+			"\nReference V: %s, reference time %s UTC, freshness %s, grid %s; AOD₅₅₀/O₃ use an independent composition forecast and PWV uses ICON TQV."),
+			compositionSeries.Provider, compositionSeries.BaseTime.UTC().Format("20060102 15:04"),
+			formatForecastAge(compositionSeries.FreshnessAge, language), compositionSeries.Grid)
+	} else if handler.atmosphericComposition != nil {
+		summary += language.text(
+			"\nЭталон V: независимые AOD₅₅₀/O₃ временно недоступны; кольцо не показано, основной Overall не изменён.",
+			"\nReference V: independent AOD₅₅₀/O₃ are temporarily unavailable; the ring is omitted and the primary Overall is unchanged.")
 	}
 	if lightPollutionChannel != nil {
 		select {
@@ -623,7 +701,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 		number++
 	}
 	if hasOverall {
-		deliveries = append(deliveries, chartDelivery{charts.OverallIndex, fmt.Sprintf(language.text("<b>%d/%d · Общий астрономический индекс.</b>\n<i>Сводная почасовая оценка помогает быстро выбрать наиболее перспективные окна. Это ориентир для планирования, а не измерение: перед выездом стоит проверить остальные диагностические графики.</i>", "<b>%d/%d · Overall Astronomy Index.</b>\n<i>This combined hourly estimate helps shortlist the most promising windows. It is a planning aid rather than a measurement, so inspect the remaining diagnostic charts before committing to a session.</i>"), number, total), true})
+		deliveries = append(deliveries, chartDelivery{charts.OverallIndex, overallChartCaption(language, number, total), true})
 		number++
 	}
 	if hasCloud {
@@ -665,6 +743,13 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	return nil
 }
 
+func overallChartCaption(language userLanguage, number, total int) string {
+	return fmt.Sprintf(language.text(
+		"<b>%d/%d · Общий астрономический индекс (Overall Astronomy Index).</b>\n<i>Снизу — сохранившаяся пригодность; цветные сегменты точно разлагают потери и вместе заполняют столбец до 10. Красный сегмент — жёсткий запрет из-за осадков (индекс 1), «!» — неполные данные. Кольцо — эталон V в зените только астрономической ночью: PWV/AOD/O₃/Луна/PSF-сиинг. Без GEOS-CF кольцо пропускается, но Overall остаётся доступен.</i>",
+		"<b>%d/%d · Overall Astronomy Index.</b>\n<i>The lower segment is retained suitability; the colored segments are an exact additive loss decomposition that closes each column at 10. Red is a hard precipitation veto (index 1), while “!” marks incomplete inputs. The ring is the zenith Reference V-band value shown only during astronomical night: PWV/AOD/O₃/Moon/PSF seeing. If GEOS-CF is unavailable, the ring is omitted but Overall remains available.</i>",
+	), number, total)
+}
+
 func forecastInputsShareRun(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, surfaceErr error, cloud forecast.CloudSeries, cloudErr error) bool {
 	if surfaceErr == nil && (surface.Provider != vertical.Provider || surface.RunID != vertical.RunID || !surface.BaseTime.Equal(vertical.BaseTime)) {
 		return false
@@ -673,6 +758,53 @@ func forecastInputsShareRun(vertical forecast.VerticalSeries, surface forecast.S
 		return false
 	}
 	return true
+}
+
+// AttachReferenceVBand enriches already computed Overall frames without
+// changing their generic score. It is shared by live messaging and the
+// render-point verification command so their scientific output cannot drift.
+func AttachReferenceVBand(overall []forecast.OverallIndexFrame, surface forecast.SurfaceSeries, composition forecast.AtmosphericCompositionSeries, sky astronomy.Series) error {
+	surfaceByTime := make(map[time.Time]forecast.SurfaceFrame, len(surface.Frames))
+	for _, frame := range surface.Frames {
+		surfaceByTime[frame.ValidAt] = frame
+	}
+	for index := range overall {
+		at := overall[index].ValidAt
+		surfaceFrame, ok := surfaceByTime[at]
+		if !ok {
+			return fmt.Errorf("surface frame is unavailable for Reference V-band at %s", at.Format(time.RFC3339))
+		}
+		moon := astronomy.MoonStateAt(surface.Location, at)
+		geometry := forecast.ReferenceVBandSkyGeometry{
+			ValidAt: at, SunAltitudeDegrees: sky.SunAltitudeDegrees(at),
+			MoonAltitudeDegrees:   moon.TopocentricGeometricAltitudeDegrees,
+			MoonZenithDistanceDeg: moon.TopocentricZenithDistanceDegrees,
+			MoonPhaseAngleDegrees: moon.PhaseAngleDegrees,
+			MoonEarthDistanceKM:   moon.EarthMoonDistanceKM,
+			MoonGeometryAvailable: moon.Valid,
+		}
+		compositionFrame, available := composition.FrameAt(at)
+		if !available {
+			compositionFrame = nil
+		}
+		diagnostic, err := forecast.ComputeReferenceVBandAtmosphere(surfaceFrame, overall[index], compositionFrame, geometry)
+		if err != nil {
+			return fmt.Errorf("compute Reference V-band at %s: %w", at.Format(time.RFC3339), err)
+		}
+		overall[index].ReferenceVBand = &diagnostic
+	}
+	return nil
+}
+
+func (handler *Handler) startAtmosphericComposition(location forecast.Location, validTimes []time.Time) chan compositionResult {
+	result := make(chan compositionResult, 1)
+	operationContext, cancel := context.WithTimeout(handler.atmosphericCompositionContext, handler.atmosphericCompositionTimeout)
+	go func() {
+		defer cancel()
+		composition, err := handler.atmosphericComposition.AtmosphericComposition(operationContext, location, validTimes)
+		result <- compositionResult{series: composition, err: err}
+	}()
+	return result
 }
 
 func (handler *Handler) offerHorizon(ctx context.Context, chatID int64, requestID uint64, provider, runID string, location forecast.Location, surfaceElevationM float64, language userLanguage) {

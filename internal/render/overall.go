@@ -22,13 +22,31 @@ import (
 )
 
 const (
-	OverallWidth  = 3840
-	OverallHeight = 1200
+	OverallWidth  = 4320
+	OverallHeight = 1600
+	overallYMax   = 12.4
 )
 
-// OverallIndex renders the hourly observing-suitability index. The main label
-// is the 1..10 result; the compact label inside each bar exposes the two model
-// inputs so a low value is not presented as a black box.
+var overallStackColors = map[string]color.NRGBA{
+	"suitability":                            {R: 28, G: 132, B: 132, A: 238},
+	forecast.OverallPenaltyOpticalTurbulence: {R: 112, G: 78, B: 170, A: 238},
+	forecast.OverallPenaltyCloudObstruction:  {R: 85, G: 118, B: 145, A: 238},
+	forecast.OverallPenaltySurfaceWind:       {R: 230, G: 149, B: 54, A: 238},
+	forecast.OverallPenaltyFog:               {R: 55, G: 180, B: 205, A: 238},
+	forecast.OverallPenaltyPrecipitation:     {R: 197, G: 48, B: 62, A: 248},
+}
+
+var overallPenaltyOrder = []string{
+	forecast.OverallPenaltyOpticalTurbulence,
+	forecast.OverallPenaltyCloudObstruction,
+	forecast.OverallPenaltySurfaceWind,
+	forecast.OverallPenaltyFog,
+	forecast.OverallPenaltyPrecipitation,
+}
+
+// OverallIndex renders the hourly observing-suitability index together with
+// an exact additive allocation of the multiplicative loss. The extra vertical
+// room above 10 is reserved for the legend, so it never hides forecast bars.
 func OverallIndex(destination string, series forecast.VerticalSeries, frames []forecast.OverallIndexFrame, sky astronomy.Series, options Options) error {
 	if len(frames) < 2 {
 		return fmt.Errorf("overall index chart requires at least two frames")
@@ -44,18 +62,18 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	}
 	p := plot.New()
 	stylePlot(p)
-	p.Title.TextStyle.Font.Size = vg.Points(22)
-	p.X.Label.TextStyle.Font.Size = vg.Points(15)
-	p.Y.Label.TextStyle.Font.Size = vg.Points(17)
+	p.Title.TextStyle.Font.Size = vg.Points(30)
+	p.X.Label.TextStyle.Font.Size = vg.Points(20)
+	p.Y.Label.TextStyle.Font.Size = vg.Points(23)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, frames[0].ValidAt)
-	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Общий индекс пригодности для астрономии (1–10)\n%s · почасовой · ICON TKE до динамической MH (500–2000 м над землёй) + HMNSP99 выше · сиинг и τ₀ на 500 нм · эффективная облачная преграда + туман", "(%.2f, %.2f) Overall Astronomy Index (1–10)\n%s · hourly · ICON TKE to dynamic MH (500–2000 m AGL) + HMNSP99 aloft · seeing and tau0 at 500 nm · effective cloud obstruction + fog"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
+	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Общий астрономический индекс (1–10) и состав потерь\n%s · почасовой · пригодность снизу, цветные сегменты показывают вклад ограничений до уровня 10", "(%.2f, %.2f) Overall Astronomy Index (1–10) and loss decomposition\n%s · hourly · suitability is shown from the bottom; colored segments show each constraint's contribution up to 10"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
 	p.X.Label.Text = fmt.Sprintf(localized(options,
-		"Местное время · %s  |  подписи: сиинг″ / τ₀ мс / T%%; T = эффективное пропускание облаков; f/F = возможный/сильный туман; MH = почасовая глубина перемешанного слоя ICON  |  %s\nФон от светлого к тёмному: день · светлые сумерки 0…−12° · астрономические сумерки −12…−18° · ночь <−18°",
-		"Local time · %s  |  stacked labels: seeing″ / τ₀ ms / T%%; T = effective cloud transmission; f/F = possible/high fog; MH = hourly ICON mixed-layer depth  |  %s\nBackground, light to dark: day · bright twilight 0…−12° · astronomical twilight −12…−18° · night <−18°"),
+		"Местное время · %s  |  подписи: индекс; сиинг″ / τ₀ мс / T%%; ! = неполные входные данные; P = осадки, наблюдение не рекомендуется  |  %s\n○ = эталонная V-полоса в зените (только Солнце <−18°; PWV/AOD/O₃/Луна/PSF, без засветки)  |  Фон: день · светлые сумерки · астрономические сумерки · ночь",
+		"Local time · %s  |  labels: index; seeing″ / τ₀ ms / T%%; ! = incomplete inputs; P = precipitation, observing is not recommended  |  %s\n○ = reference V band at zenith (Sun <−18° only; PWV/AOD/O₃/Moon/PSF, no artificial light)  |  Background: day · bright twilight · astronomical twilight · night"),
 		timeZoneLabel, Version)
 	p.Y.Label.Text = localized(options, "Пригодность для наблюдений (1–10)", "Observing suitability (1–10)")
 	p.X.Min, p.X.Max = -0.6, float64(len(frames))-0.4
-	p.Y.Min, p.Y.Max = 0, 10.8
+	p.Y.Min, p.Y.Max = 0, overallYMax
 	times := make([]time.Time, len(frames))
 	for index := range frames {
 		times[index] = frames[index].ValidAt
@@ -64,8 +82,8 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	p.X.Tick.Label.Rotation = math.Pi / 3
 	p.X.Tick.Label.XAlign = draw.XRight
 	p.X.Tick.Label.YAlign = draw.YCenter
-	p.X.Tick.Label.Font.Size = vg.Points(18)
-	p.Y.Tick.Label.Font.Size = vg.Points(18)
+	p.X.Tick.Label.Font.Size = vg.Points(28)
+	p.Y.Tick.Label.Font.Size = vg.Points(24)
 	p.Y.Tick.Marker = plot.ConstantTicks([]plot.Tick{{Value: 0, Label: "0"}, {Value: 2, Label: "2"}, {Value: 4, Label: "4"}, {Value: 6, Label: "6"}, {Value: 8, Label: "8"}, {Value: 10, Label: "10"}})
 	if err := addSolarBackground(p, frames, sky); err != nil {
 		return err
@@ -74,25 +92,140 @@ func OverallIndex(destination string, series forecast.VerticalSeries, frames []f
 	grid.Vertical.Color = color.NRGBA{R: 225, G: 228, B: 232, A: 255}
 	grid.Horizontal.Color = color.NRGBA{R: 225, G: 228, B: 232, A: 255}
 	p.Add(grid)
-	colors := magma(96)
-	for index, frame := range frames {
-		bar, err := plotter.NewBarChart(plotter.Values{frame.Index}, vg.Points(38))
-		if err != nil {
-			return err
-		}
-		bar.XMin = float64(index)
-		bar.Color = paletteColor(colors, frame.Index, 1, 10)
-		bar.LineStyle.Color = color.NRGBA{R: 70, G: 60, B: 80, A: 255}
-		bar.LineStyle.Width = vg.Points(0.3)
-		p.Add(bar)
+	baseValues, penaltyValues, err := overallStackValues(frames)
+	if err != nil {
+		return err
 	}
-	addDayBoundaries(p, times, series.Location.TimeZone, 11)
-	top, inside, err := overallIndexLabels(frames, colors, options)
+	baseBars, err := plotter.NewBarChart(baseValues, vg.Points(42))
+	if err != nil {
+		return err
+	}
+	baseBars.Color = overallStackColors["suitability"]
+	baseBars.LineStyle.Color = color.NRGBA{R: 32, G: 49, B: 57, A: 255}
+	baseBars.LineStyle.Width = vg.Points(0.45)
+	p.Add(baseBars)
+	p.Legend.Add(localized(options, "Сохранившаяся пригодность", "Retained suitability"), baseBars)
+	previous := baseBars
+	for _, key := range overallPenaltyOrder {
+		bars, createErr := plotter.NewBarChart(penaltyValues[key], vg.Points(42))
+		if createErr != nil {
+			return createErr
+		}
+		bars.Color = overallStackColors[key]
+		bars.LineStyle.Color = color.NRGBA{R: 32, G: 49, B: 57, A: 255}
+		bars.LineStyle.Width = vg.Points(0.35)
+		bars.StackOn(previous)
+		p.Add(bars)
+		p.Legend.Add(overallPenaltyLabel(key, options), bars)
+		previous = bars
+	}
+	referenceMarkers, markerErr := overallReferenceVBandMarkers(frames)
+	if markerErr != nil {
+		return markerErr
+	}
+	if referenceMarkers != nil {
+		p.Add(referenceMarkers)
+		p.Legend.Add(localized(options, "Эталон V, зенит", "Reference V, zenith"), referenceMarkers)
+	}
+	p.Legend.Top = true
+	p.Legend.Left = true
+	p.Legend.TextStyle.Font.Size = vg.Points(22)
+	p.Legend.Padding = vg.Points(2)
+	p.Legend.ThumbnailWidth = vg.Points(20)
+	addDayBoundaries(p, times, series.Location.TimeZone, 13)
+	top, inside, err := overallIndexLabels(frames, magma(96), options)
 	if err != nil {
 		return err
 	}
 	p.Add(top, inside)
 	return saveAtomic(p, options, destination)
+}
+
+func overallReferenceVBandMarkers(frames []forecast.OverallIndexFrame) (*plotter.Scatter, error) {
+	points := make(plotter.XYs, 0, len(frames))
+	for index, frame := range frames {
+		if frame.ReferenceVBand == nil || !frame.ReferenceVBand.Result.Available || frame.PrecipitationVeto {
+			continue
+		}
+		value := frame.ReferenceVBand.Result.Index
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 1 || value > 10 {
+			return nil, fmt.Errorf("overall frame %d has invalid Reference V-band index %.6g", index, value)
+		}
+		points = append(points, plotter.XY{X: float64(index), Y: value})
+	}
+	if len(points) == 0 {
+		return nil, nil
+	}
+	markers, err := plotter.NewScatter(points)
+	if err != nil {
+		return nil, err
+	}
+	markers.GlyphStyle = draw.GlyphStyle{
+		Color:  color.NRGBA{R: 12, G: 23, B: 31, A: 255},
+		Radius: vg.Points(7), Shape: draw.RingGlyph{},
+	}
+	return markers, nil
+}
+
+func overallPenaltyLabel(key string, options Options) string {
+	switch key {
+	case forecast.OverallPenaltyOpticalTurbulence:
+		return localized(options, "Потеря: оптическая турбулентность", "Loss: optical turbulence")
+	case forecast.OverallPenaltyCloudObstruction:
+		return localized(options, "Потеря: облачная преграда", "Loss: cloud obstruction")
+	case forecast.OverallPenaltySurfaceWind:
+		return localized(options, "Потеря: приземный ветер", "Loss: surface wind")
+	case forecast.OverallPenaltyFog:
+		return localized(options, "Потеря: туман", "Loss: fog")
+	case forecast.OverallPenaltyPrecipitation:
+		return localized(options, "Запрет: осадки", "Veto: precipitation")
+	default:
+		return key
+	}
+}
+
+// overallStackValues converts the unitless Shapley allocation into chart
+// points. The displayed index is 1+9Q and each loss segment is 9*phi_i, so
+// every complete column closes exactly at 10 (up to floating-point error).
+func overallStackValues(frames []forecast.OverallIndexFrame) (plotter.Values, map[string]plotter.Values, error) {
+	base := make(plotter.Values, len(frames))
+	penalties := make(map[string]plotter.Values, len(overallPenaltyOrder))
+	for _, key := range overallPenaltyOrder {
+		penalties[key] = make(plotter.Values, len(frames))
+	}
+	for index, frame := range frames {
+		if math.IsNaN(frame.Index) || math.IsInf(frame.Index, 0) || frame.Index < 1-1e-9 || frame.Index > 10+1e-9 {
+			return nil, nil, fmt.Errorf("overall frame %d has invalid index %.6g", index, frame.Index)
+		}
+		base[index] = frame.Index
+		seen := make(map[string]struct{}, len(frame.PenaltyContributions))
+		loss := 0.0
+		for _, contribution := range frame.PenaltyContributions {
+			values, known := penalties[contribution.Key]
+			if !known {
+				return nil, nil, fmt.Errorf("overall frame %d has unknown penalty %q", index, contribution.Key)
+			}
+			if _, duplicate := seen[contribution.Key]; duplicate {
+				return nil, nil, fmt.Errorf("overall frame %d repeats penalty %q", index, contribution.Key)
+			}
+			seen[contribution.Key] = struct{}{}
+			if math.IsNaN(contribution.LossFraction) || math.IsInf(contribution.LossFraction, 0) || contribution.LossFraction < -1e-12 {
+				return nil, nil, fmt.Errorf("overall frame %d has invalid %q loss %.6g", index, contribution.Key, contribution.LossFraction)
+			}
+			value := math.Max(0, contribution.LossFraction) * 9
+			values[index] = value
+			loss += contribution.LossFraction
+		}
+		if len(frame.PenaltyContributions) == 0 {
+			// Compatibility for callers that render historical frames without
+			// decomposition. The empty space above the index remains visible.
+			continue
+		}
+		if math.Abs((frame.Index+9*loss)-10) > 1e-7 {
+			return nil, nil, fmt.Errorf("overall frame %d penalty stack closes at %.9f instead of 10", index, frame.Index+9*loss)
+		}
+	}
+	return base, penalties, nil
 }
 
 type solarPhase int
@@ -174,8 +307,8 @@ func addSolarBackground(p *plot.Plot, frames []forecast.OverallIndexFrame, sky a
 		polygon, err := plotter.NewPolygon(plotter.XYs{
 			{X: x0, Y: 0},
 			{X: x1, Y: 0},
-			{X: x1, Y: 10.8},
-			{X: x0, Y: 10.8},
+			{X: x1, Y: overallYMax},
+			{X: x0, Y: overallYMax},
 		})
 		if err != nil {
 			return fmt.Errorf("create solar background: %w", err)
@@ -187,15 +320,29 @@ func addSolarBackground(p *plot.Plot, frames []forecast.OverallIndexFrame, sky a
 	return nil
 }
 
-func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Palette, options Options) (*plotter.Labels, *plotter.Labels, error) {
+func overallIndexLabels(frames []forecast.OverallIndexFrame, _ palette.Palette, options Options) (*plotter.Labels, *plotter.Labels, error) {
 	topPoints := make(plotter.XYs, len(frames))
 	topText := make([]string, len(frames))
 	insidePoints := make(plotter.XYs, len(frames))
 	insideText := make([]string, len(frames))
 	insideStyles := make([]text.Style, len(frames))
 	for index, frame := range frames {
-		topPoints[index] = plotter.XY{X: float64(index), Y: frame.Index + 0.12}
-		topText[index] = fmt.Sprintf("%.1f", frame.Index)
+		labelY := frame.Index - 0.22
+		if labelY < 0.35 {
+			labelY = 0.35
+		}
+		topPoints[index] = plotter.XY{X: float64(index), Y: labelY}
+		status := ""
+		if frame.DataCompleteness == forecast.OverallDataPartial {
+			status = "!"
+		}
+		if frame.PrecipitationVeto {
+			// Keep the critical marker in the guaranteed Latin glyph set. Emoji
+			// fallback varies between production containers and previously made
+			// operational warnings disappear from otherwise valid PNGs.
+			status = "P"
+		}
+		topText[index] = fmt.Sprintf("%.1f%s", frame.Index, status)
 		insidePoints[index] = plotter.XY{X: float64(index), Y: 0.52}
 		seeing := localized(options, "ветер", "wind")
 		if frame.PhysicalSeeing {
@@ -213,19 +360,23 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, colors palette.Pale
 			fog = " F"
 		}
 		insideText[index] = fmt.Sprintf("%s\n%s\nT%d%%%s", seeing, coherence, int(math.Round(frame.CloudTransmissionPercent)), fog)
-		labelFont := font.From(plot.DefaultFont, vg.Points(17))
+		if frame.PrecipitationVeto || frame.Index < 2.5 {
+			insideText[index] = ""
+		}
+		labelFont := font.From(plot.DefaultFont, vg.Points(21))
 		labelFont.Weight = xfont.WeightSemiBold
-		insideStyles[index] = text.Style{Color: contrastColor(paletteColor(colors, frame.Index, 1, 10)), Font: labelFont, XAlign: draw.XCenter, YAlign: draw.YCenter, Handler: plot.DefaultTextHandler}
+		insideStyles[index] = text.Style{Color: color.White, Font: labelFont, XAlign: draw.XCenter, YAlign: draw.YCenter, Handler: plot.DefaultTextHandler}
 	}
 	top, err := plotter.NewLabels(plotter.XYLabels{XYs: topPoints, Labels: topText})
 	if err != nil {
 		return nil, nil, err
 	}
 	for index := range top.TextStyle {
-		top.TextStyle[index].Font.Size = vg.Points(18)
+		top.TextStyle[index].Color = color.White
+		top.TextStyle[index].Font.Size = vg.Points(23)
 		top.TextStyle[index].Font.Weight = xfont.WeightSemiBold
 		top.TextStyle[index].XAlign = draw.XCenter
-		top.TextStyle[index].YAlign = draw.YBottom
+		top.TextStyle[index].YAlign = draw.YTop
 	}
 	inside, err := plotter.NewLabels(plotter.XYLabels{XYs: insidePoints, Labels: insideText})
 	if err != nil {

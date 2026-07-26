@@ -94,6 +94,232 @@ func TestOverallIndexIgnoresDewButPenalizesHighFog(t *testing.T) {
 	}
 }
 
+func TestOverallIndexUsesBinaryPrecipitationOperationalVeto(t *testing.T) {
+	calibration := DefaultOverallIndexCalibration()
+	calibration.PrecipitationDetectMM = 0.1
+
+	belowSurface := clearSyntheticSurface()
+	belowSurface.Frames[0].PrecipitationMM = 0.099
+	below, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), belowSurface, SyntheticCloudFixture(), calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if below[0].PrecipitationVeto || below[0].Index <= 1 {
+		t.Fatalf("sub-threshold precipitation was vetoed: %+v", below[0])
+	}
+
+	atSurface := clearSyntheticSurface()
+	atSurface.Frames[0].PrecipitationMM = 0.1
+	at, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), atSurface, SyntheticCloudFixture(), calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !at[0].PrecipitationVeto || at[0].PrecipitationMM != 0.1 || at[0].Index != 1 {
+		t.Fatalf("detected precipitation did not produce an operational veto: %+v", at[0])
+	}
+	if math.Abs(sumPenaltyContributions(at[0].PenaltyContributions)-1) > 1e-12 || at[0].PenaltyLossFraction != 1 {
+		t.Fatalf("veto penalty decomposition is not exact: %+v", at[0])
+	}
+}
+
+func TestOverallIndexUsesDefaultPrecipitationThresholdForExplicitCalibration(t *testing.T) {
+	calibration := DefaultOverallIndexCalibration()
+	calibration.PrecipitationDetectMM = 0
+	surface := clearSyntheticSurface()
+	surface.Frames[0].PrecipitationMM = DefaultOverallPrecipitationDetectMM
+	frames, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !frames[0].PrecipitationVeto || frames[0].Index != 1 {
+		t.Fatalf("zero calibration did not select the safe default threshold: %+v", frames[0])
+	}
+}
+
+func TestOverallIndexMarksMissingOptionalVisibilityAsPartial(t *testing.T) {
+	surface := clearSyntheticSurface()
+	surface.Frames[0].TransparencyAvailable = false
+	surface.Frames[0].VisibilityKM = 0
+	frames, err := ComputeHourlyOverallIndex(
+		SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatalf("missing optional visibility broke the forecast: %v", err)
+	}
+	if frames[0].FogAssessmentAvailable || frames[0].DataCompleteness != OverallDataPartial {
+		t.Fatalf("missing visibility was presented as complete: %+v", frames[0])
+	}
+	if !frames[1].FogAssessmentAvailable || frames[1].DataCompleteness != OverallDataComplete {
+		t.Fatalf("complete comparison frame was not marked complete: %+v", frames[1])
+	}
+}
+
+func TestOverallIndexMarksCloudFallbackAsPartial(t *testing.T) {
+	surface := clearSyntheticSurface()
+	surface.Frames[0].CloudCondensateAvailable = false
+	frames, err := ComputeHourlyOverallIndex(
+		SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frames[0].CloudCondensatePhysics || frames[0].DataCompleteness != OverallDataPartial {
+		t.Fatalf("cloud-cover fallback was presented as complete: %+v", frames[0])
+	}
+}
+
+func TestOverallIndexRejectsMaterialUpperProfileGaps(t *testing.T) {
+	vertical := SyntheticVerticalFixture()
+	for frameIndex := range vertical.Frames {
+		// Remove several consecutive upper-atmosphere layers. Treating this
+		// unsampled h^(5/3)-weighted region as zero would bias J, JV, and Jh low.
+		for levelIndex := 17; levelIndex <= 20; levelIndex++ {
+			vertical.Frames[frameIndex].Levels[levelIndex].TemperatureK = math.NaN()
+		}
+	}
+	if _, err := ComputeHourlyOverallIndex(
+		vertical, clearSyntheticSurface(), SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+	); err == nil {
+		t.Fatal("material upper-profile gaps unexpectedly produced an Overall score")
+	}
+}
+
+func TestOverallIndexMarksStructurallyCompleteShallowProfileAsPartial(t *testing.T) {
+	vertical := SyntheticVerticalFixture()
+	for frameIndex := range vertical.Frames {
+		vertical.Frames[frameIndex].Levels = vertical.Frames[frameIndex].Levels[:21]
+	}
+	frames, err := ComputeHourlyOverallIndex(
+		vertical, clearSyntheticSurface(), SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frames[0].TurbulenceProfileQuality != OpticalTurbulenceProfileLimited ||
+		frames[0].DataCompleteness != OverallDataPartial {
+		t.Fatalf("shallow turbulence profile was not marked partial: %+v", frames[0])
+	}
+}
+
+func TestOverallIndexRejectsInvalidCriticalSurfaceInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*SurfaceFrame)
+	}{
+		{"precipitation", func(frame *SurfaceFrame) { frame.PrecipitationMM = math.NaN() }},
+		{"cloud cover", func(frame *SurfaceFrame) { frame.CloudCoverPercent = math.NaN() }},
+		{"wind", func(frame *SurfaceFrame) { frame.WindSpeedMS = -1 }},
+		{"available visibility", func(frame *SurfaceFrame) { frame.VisibilityKM = math.NaN() }},
+		{"available condensate", func(frame *SurfaceFrame) { frame.CloudLiquidPathKgM2 = math.NaN() }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			surface := clearSyntheticSurface()
+			test.mutate(&surface.Frames[0])
+			if _, err := ComputeHourlyOverallIndex(
+				SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+			); err == nil {
+				t.Fatal("invalid critical surface input unexpectedly produced a score")
+			}
+		})
+	}
+}
+
+func TestShapleyMultiplicativeLossExactProperties(t *testing.T) {
+	tests := []struct {
+		name    string
+		factors []OverallPenaltyFactor
+	}{
+		{"identity", []OverallPenaltyFactor{{Key: "a", Factor: 1}, {Key: "b", Factor: 1}}},
+		{"mixed", []OverallPenaltyFactor{{Key: "a", Factor: 0.8}, {Key: "b", Factor: 0.4}, {Key: "c", Factor: 0.9}}},
+		{"zero", []OverallPenaltyFactor{{Key: "a", Factor: 1}, {Key: "veto", Factor: 0}, {Key: "c", Factor: 1}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contributions, totalLoss, err := ShapleyMultiplicativeLoss(test.factors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			product := 1.0
+			for _, factor := range test.factors {
+				product *= factor.Factor
+			}
+			if math.Abs(totalLoss-(1-product)) > 1e-12 {
+				t.Fatalf("total loss = %.16f, want %.16f", totalLoss, 1-product)
+			}
+			if math.Abs(sumPenaltyContributions(contributions)-totalLoss) > 1e-12 {
+				t.Fatalf("contributions %+v do not sum to %.16f", contributions, totalLoss)
+			}
+			for _, contribution := range contributions {
+				if contribution.LossFraction < 0 || contribution.LossFraction > totalLoss+1e-12 {
+					t.Fatalf("invalid contribution %+v for total %.16f", contribution, totalLoss)
+				}
+			}
+		})
+	}
+}
+
+func TestShapleyMultiplicativeLossIsSymmetricAndOrderIndependent(t *testing.T) {
+	const factor = 0.6
+	equal := []OverallPenaltyFactor{{Key: "a", Factor: factor}, {Key: "b", Factor: factor}, {Key: "c", Factor: factor}}
+	contributions, totalLoss, err := ShapleyMultiplicativeLoss(equal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEach := totalLoss / float64(len(equal))
+	for _, contribution := range contributions {
+		if math.Abs(contribution.LossFraction-wantEach) > 1e-12 {
+			t.Fatalf("equal factors have unequal Shapley contribution: %+v, want %.16f", contributions, wantEach)
+		}
+	}
+
+	forward := []OverallPenaltyFactor{{Key: "a", Factor: 0.8}, {Key: "b", Factor: 0.4}, {Key: "c", Factor: 0.9}}
+	reverse := []OverallPenaltyFactor{{Key: "c", Factor: 0.9}, {Key: "b", Factor: 0.4}, {Key: "a", Factor: 0.8}}
+	forwardContributions, _, err := ShapleyMultiplicativeLoss(forward)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverseContributions, _, err := ShapleyMultiplicativeLoss(reverse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contribution := range forwardContributions {
+		if math.Abs(contribution.LossFraction-penaltyContributionByKey(reverseContributions, contribution.Key)) > 1e-12 {
+			t.Fatalf("factor order changed contribution for %q: forward=%+v reverse=%+v", contribution.Key, forwardContributions, reverseContributions)
+		}
+	}
+}
+
+func TestShapleyMultiplicativeLossAssignsIdentityZeroFactorTheFullVeto(t *testing.T) {
+	contributions, totalLoss, err := ShapleyMultiplicativeLoss([]OverallPenaltyFactor{
+		{Key: "identity-a", Factor: 1}, {Key: "veto", Factor: 0}, {Key: "identity-b", Factor: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totalLoss != 1 || penaltyContributionByKey(contributions, "veto") != 1 ||
+		penaltyContributionByKey(contributions, "identity-a") != 0 || penaltyContributionByKey(contributions, "identity-b") != 0 {
+		t.Fatalf("unexpected zero-factor allocation: total=%v contributions=%+v", totalLoss, contributions)
+	}
+}
+
+func sumPenaltyContributions(contributions []OverallPenaltyContribution) float64 {
+	total := 0.0
+	for _, contribution := range contributions {
+		total += contribution.LossFraction
+	}
+	return total
+}
+
+func penaltyContributionByKey(contributions []OverallPenaltyContribution, key string) float64 {
+	for _, contribution := range contributions {
+		if contribution.Key == key {
+			return contribution.LossFraction
+		}
+	}
+	return math.NaN()
+}
+
 func TestOverallIndexInterpolatesWindLinearly(t *testing.T) {
 	vertical := SyntheticVerticalFixture()
 	surface := clearSyntheticSurface()
@@ -122,6 +348,37 @@ func TestOverallIndexUsesNativeGroundLayerWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestOverallIndexDerivesModelSurfacePressureFromNativeLowestLevel(t *testing.T) {
+	cloud := SyntheticCloudFixture()
+	frames, err := ComputeHourlyOverallIndex(
+		SyntheticVerticalFixture(), clearSyntheticSurface(), cloud, DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowest := cloud.Frames[0].Levels[0]
+	for _, level := range cloud.Frames[0].Levels[1:] {
+		if level.HeightM < lowest.HeightM {
+			lowest = level
+		}
+	}
+	want := lowest.PressureHPA * math.Exp(9.80665*(lowest.HeightM-cloud.SurfaceElevationM)/(287.05*lowest.TemperatureK))
+	if math.Abs(frames[0].SurfacePressureHPA-want) > 1e-12 ||
+		frames[0].SurfacePressureProvenance != ModelSurfacePressureProvenance {
+		t.Fatalf("surface pressure = %.12g (%q), want %.12g (%q)", frames[0].SurfacePressureHPA,
+			frames[0].SurfacePressureProvenance, want, ModelSurfacePressureProvenance)
+	}
+}
+
+func TestModelSurfacePressureRejectsDistantOrInvalidProfile(t *testing.T) {
+	if _, ok := modelSurfacePressureHPA([]CloudLevel{{PressureHPA: 900, HeightM: 2500, TemperatureK: 280}}, 0); ok {
+		t.Fatal("distant model level unexpectedly produced surface pressure")
+	}
+	if _, ok := modelSurfacePressureHPA([]CloudLevel{{PressureHPA: math.NaN(), HeightM: 10, TemperatureK: 280}}, 0); ok {
+		t.Fatal("invalid model pressure unexpectedly produced surface pressure")
+	}
+}
+
 func TestOverallIndexUsesHourlyICONMixedLayerDepthWithinBounds(t *testing.T) {
 	vertical := SyntheticVerticalFixture()
 	surface := clearSyntheticSurface()
@@ -147,6 +404,16 @@ func TestOverallCalibrationRejectsInvalidBoundaryLayerBounds(t *testing.T) {
 		calibration.BoundaryLayerTopM = bounds[1]
 		if err := calibration.Validate(); err == nil {
 			t.Fatalf("bounds [%v, %v] unexpectedly passed validation", bounds[0], bounds[1])
+		}
+	}
+}
+
+func TestOverallCalibrationRejectsInvalidPrecipitationThreshold(t *testing.T) {
+	for _, threshold := range []float64{-0.01, 10.01, math.NaN()} {
+		calibration := DefaultOverallIndexCalibration()
+		calibration.PrecipitationDetectMM = threshold
+		if err := calibration.Validate(); err == nil {
+			t.Fatalf("precipitation detection threshold %v unexpectedly passed validation", threshold)
 		}
 	}
 }
@@ -286,6 +553,7 @@ func clearSyntheticSurface() SurfaceSeries {
 		frame.HighCloudCoverPercent = 0
 		frame.CloudLiquidPathKgM2 = 0
 		frame.CloudIcePathKgM2 = 0
+		frame.PrecipitationMM = 0
 		frame.VisibilityKM = 50
 		frame.RelativeHumidityPercent = 50
 		frame.DewPointC = frame.TemperatureC - 10

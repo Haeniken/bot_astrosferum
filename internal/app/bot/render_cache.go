@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,9 +16,9 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "shared-render-v18-phase-structure-coherence"
+const renderCacheVersion = "shared-render-v19-reference-v-band-penalty-decomposition"
 
-func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
+func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, composition forecast.AtmosphericCompositionSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
 	if len(surface.Frames) > 0 {
 		firstSurface, lastSurface = surface.Frames[0].ValidAt, surface.Frames[len(surface.Frames)-1].ValidAt
@@ -31,6 +32,8 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 		"vertical=" + vertical.Provider + "/" + vertical.Product + "/" + vertical.RunID,
 		"surface=" + surface.Provider + "/" + surface.Product + "/" + surface.RunID,
 		"cloud=" + cloud.Provider + "/" + cloud.Product + "/" + cloud.RunID,
+		"composition=" + composition.Provider + "/" + composition.Product + "/" + composition.RunID + "/" + composition.BaseTime.UTC().Format(time.RFC3339) + "/" + composition.Grid + "/" + compositionFrameCacheIdentity(composition.Frames),
+		"reference_v=" + forecast.ReferenceVBandContractVersion + "/" + forecast.ReferenceVBandAtmosphereVersion + "/" + forecast.ReferenceVBandBenchmarkVersion + "/" + forecast.ReferenceVBandPassbandID,
 		"grid=" + vertical.Grid,
 		fmt.Sprintf("location=%.6f,%.6f,%s", vertical.Location.Latitude, vertical.Location.Longitude, vertical.Location.TimeZone),
 		"surface_period=" + firstSurface.UTC().Format(time.RFC3339) + "/" + lastSurface.UTC().Format(time.RFC3339),
@@ -43,6 +46,23 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 		fmt.Sprintf("calibration=%#v", calibration),
 	}, "|")
 	digest := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(digest[:])
+}
+
+func compositionFrameCacheIdentity(frames []forecast.AtmosphericCompositionFrame) string {
+	var identity strings.Builder
+	for _, frame := range frames {
+		_, _ = fmt.Fprintf(&identity, "%s/%016x/%016x/%s/%s/%s/%s|",
+			frame.ValidAt.UTC().Format(time.RFC3339Nano),
+			math.Float64bits(frame.AerosolOpticalDepth550),
+			math.Float64bits(frame.TotalColumnOzoneDU),
+			frame.Provider,
+			frame.RunID,
+			frame.BaseTime.UTC().Format(time.RFC3339Nano),
+			frame.Grid+"/"+frame.AerosolSpectralAssumption,
+		)
+	}
+	digest := sha256.Sum256([]byte(identity.String()))
 	return hex.EncodeToString(digest[:])
 }
 

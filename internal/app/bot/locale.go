@@ -82,7 +82,9 @@ Cloud layers and astronomy:
 • in the weather table, white is <10%, blue is 10–49%, and orange is ≥50%; this is cover, not optical thickness;
 • clouds do not change wind-based seeing, but can prevent observing or imaging.
 
-2. Overall Astronomy Index — suitability from 1 to 10: hybrid ICON seeing (TKE up to dynamic MH 500–2000 m AGL + HMNSP99 above), τ₀, effective cloud obstruction, and fog. Surface wind has a mild penalty; dew has none. ICON HHL sets the AGL geometry of the model surface, boundary layer, and clouds but gives no separate altitude bonus. Labels show seeing / τ₀ ms / T% transmission; f/F means possible/high fog. Background means day/twilight/night.
+2. Overall Astronomy Index, 1–10: retained suitability is at the bottom; above it, an exact additive decomposition of losses from optical turbulence, cloud obstruction, wind, fog, and precipitation closes every column at 10. Precipitation above the configured threshold is a red operational veto and forces index 1; “!” means incomplete inputs. Hybrid seeing uses ICON TKE in the boundary layer plus HMNSP99 above it. Surface wind has a mild penalty; dew has none.
+
+The “Reference V, zenith” ring is shown only during astronomical night. It accounts for PWV, AOD, O₃, the Moon, and PSF/seeing, but not artificial light. If GEOS-CF is unavailable, the ring is omitted while the main Overall chart remains available.
 
 3. ICON Effective Cloud Obstruction — CLC+QC/QI and layer thickness: 0% is nearly clear, 100% is opaque; thin high clouds matter less than dense low clouds.
 

@@ -7,6 +7,10 @@ import (
 
 func TestComputeDiagnostics(t *testing.T) {
 	series := SyntheticVerticalFixture()
+	// Keep the general fixture physically complete; inject one diagnostic-only
+	// gap here to exercise heatmap missing-value propagation.
+	series.Frames[11].Levels[17].UMS = math.NaN()
+	series.Frames[11].Levels[17].VMS = math.NaN()
 	diagnostics, err := ComputeDiagnostics(series)
 	if err != nil {
 		t.Fatal(err)
