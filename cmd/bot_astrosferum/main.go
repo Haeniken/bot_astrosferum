@@ -275,6 +275,9 @@ func runSyncICONEU(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
+	if err := iconeu.PublishCurrent(cfg.Paths.Data, manifest); err != nil {
+		return err
+	}
 	return writeJSON(stdout, manifest.Manifest)
 }
 
