@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
 Date: 2026-08-09
-Stage: Stage 3 live ICON → Telegram and VK; Horizon live; Astrodome administrator rollout live, production-v2/v29/v23 current; v28/v22 full-run retained as the measured baseline
+Stage: Stage 3 live ICON → Telegram and VK; Horizon live; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v29/v23 current; v28/v22 full-run retained as the measured baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -176,9 +176,9 @@ forecast latency during concurrent Horizon work, and the administrator report.
 Failure of any mandatory gate requires rollback or a failure report instead of
 a success notification.
 
-## Astrodome — administrator rollout live, full-run measured
+## Astrodome — controlled rollout and public reference live, full-run measured
 
-The ICON-EU-only directional atmospheric web product is deployed for administrator access as
+The ICON-EU-only directional atmospheric web product is deployed with controlled calculation access as
 one asynchronous dataset of up to 72 consecutive native hourly frames from the explicit 10° calculation boundary
 to a single azimuth-independent zenith. Completed code includes:
 
@@ -295,7 +295,8 @@ to a single azimuth-independent zenith. Completed code includes:
 - an authenticated `ru`/`en` web-language preference stored in PostgreSQL and
   synchronized across active sessions while retaining explicit localized URLs;
 - gzip visualization archives with an ordinary 96-hour TTL, plus one explicit
-  non-expiring `admin_fixture` visible to every configured Telegram admin. The
+  non-expiring `admin_fixture` visible read-only to signed-out visitors and to
+  every configured Telegram administrator, but not to authenticated non-admins. The
   fixture and saved-result decoder accept only v29/v23 with a supported pinned
   profile; production web output is `production-v2`. An older payload is
   rejected until a successful current same-coordinate result replaces the
@@ -311,12 +312,13 @@ to a single azimuth-independent zenith. Completed code includes:
   isolated worker in the bot stack, and pinned-TLS nginx templates for
   `alice-bg` → `dragon-he`.
 
-The rollout switch is implemented as access control, not as a worker kill
+The rollout switch is implemented as calculation access control, not as a worker kill
 switch: `ASTRO_ASTRODOME_ENABLED=true` permits every authenticated Telegram
 OIDC user; `false` restricts access to `ASTRO_TELEGRAM_ADMIN_IDS`; `false`
 with an empty list denies everyone. Web and bot both enforce the rule. Access
-mode never forces sparse geometry: both modes use the profile selected by
-`DiskBudget`; dense storage maps to `production-v2`, while
+mode never forces sparse geometry. Anonymous users can only read the permanent
+fixture and cannot access points or job operations. Both calculation modes use
+the profile selected by `DiskBudget`; dense storage maps to `production-v2`, while
 `sparse-storage-v1` remains the declared storage fallback.
 
 On immutable ICON-EU run `2026080812` (manifest SHA-256

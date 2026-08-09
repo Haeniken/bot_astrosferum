@@ -18,8 +18,9 @@ limited to ICON-EU, and follows the same reproducibility and current-run
 requirements as the ordinary forecast.
 
 The directional atmospheric Astrodome method in section 8 is implemented for
-ICON-EU and its
-web path is deployed under controlled administrator access. Production-v2/v29/v23
+ICON-EU. Its web path is deployed under controlled calculation access, while
+unauthenticated visitors may inspect one permanent read-only reference fixture.
+Production-v2/v29/v23
 is the current writer; the complete v28/v22 numerical measurement recorded below
 is an explicitly historical baseline;
 multi-cycle resource, release, and observational validation remain separate
@@ -4306,9 +4307,11 @@ measurement, and observational validation remain separate gates.
 This numerical revision does not alter the product contracts: a dataset has
 one to 72 consecutive native hourly forecast frames. An ordinary successfully
 saved user visualization is retained for exactly 96 hours. One explicitly
-marked `admin_fixture` may be retained without expiry and is visible only to
-the configured Telegram administrators; it is a test archive, not a cache hit
-eligible for ordinary users or new calculations.
+marked `admin_fixture` may be retained without expiry. It is a read-only public
+reference for unauthenticated visitors and remains visible to configured
+Telegram administrators. An authenticated non-administrator cannot list or
+open it and sees only owner-scoped 96-hour results. The fixture is a test
+archive, not a cache hit eligible for new calculations.
 
 This remains a reproducible NWP diagnostic, not a measurement. ICON cannot
 resolve local obstruction, dome seeing, telescope thermal plumes, or sub-grid

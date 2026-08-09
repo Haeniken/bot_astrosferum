@@ -84,7 +84,8 @@ observing-sky model: directional aerosols/molecular extinction, remote fog and
 precipitation, Moon/daylight background, atmospheric dispersion, and
 directional artificial skyglow are not included. Telegram OpenID Connect provides the web
 identity and exposes the same saved points. The implementation and deployment
-templates are present and controlled administrator rollout is deployed. The
+templates are present; calculation access is controlled, while signed-out
+visitors can inspect one permanent read-only reference visualization. The
 current production writer is production-v2/v29/v23. It publishes a visibly
 lower `limited` quality for explicitly bounded short-path approximations and
 keeps the cumulative approximated path at or below 1 m; all other unresolved

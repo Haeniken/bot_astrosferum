@@ -4,7 +4,8 @@ Status: implemented MVP, architecture revision 0.4; the
 `surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production.
 The optional ICON-EU Horizon extension is implemented as a configuration-gated
 application capability. The directional atmospheric Astrodome code path and deployment templates are
-deployed for controlled administrator access. The current production writer is
+deployed with controlled calculation access and one anonymous read-only
+reference fixture. The current production writer is
 production-v2 with science-kernel v29/path v23; the immutable v28/v22 full run
 remains the preceding measured baseline. Repeated cold/warm resource and
 observational gates remain open before public rollout.
@@ -1843,7 +1844,11 @@ therefore neither persistence nor authorization.
 
 One explicitly marked `admin_fixture` is a narrow exception: it has no expiry,
 is excluded from cleanup and ordinary per-user replacement, and is listed for
-every current configured Telegram administrator. Ordinary users never see it.
+every unauthenticated visitor and every current configured Telegram
+administrator. An authenticated non-administrator cannot list or open it and
+continues to see only owner-scoped 96-hour results. Anonymous access is
+read-only: it does not expose saved points, job admission, status, cancellation,
+or any owner-scoped result.
 The fixture, stored-visualization decoder, current writer, calculator, browser,
 and cache accept only v29/v23 with an explicitly supported pinned grid profile;
 the production web writer uses `production-v2`. An older fixture is not migrated
@@ -1932,8 +1937,8 @@ probes are specified in [the deployment runbook](../deploy/README.md).
 
 Grid, physics, acquisition contracts, shared coordinator/worker boundary,
 OIDC/session/CSRF handlers, asynchronous API, WebGL2/Canvas client, and
-deployment templates are implemented, and the controlled administrator site
-is deployed. Production-v2/v29/v23 is the current writer; its complete
+deployment templates are implemented, and the controlled site plus anonymous
+read-only reference fixture are deployed. Production-v2/v29/v23 is the current writer; its complete
 current-run release measurement is recorded only after an immutable full
 rerender. The preceding v28/v22 baseline measured 9,284 available of 9,288
 node-hours in 33 min 14 s. The first five-hour finer-grid

@@ -210,8 +210,10 @@ independent of whether the browser remains open.
 
 One database row may be explicitly pinned as `admin_fixture`. It has no expiry,
 is excluded from periodic cleanup and ordinary coordinate-key replacement, and
-is listed for every ID currently configured in `ASTRO_TELEGRAM_ADMIN_IDS`.
-Ordinary users cannot list or open it. This is an operator-created regression
+is listed for unauthenticated visitors and every ID currently configured in
+`ASTRO_TELEGRAM_ADMIN_IDS`. Anonymous access is read-only. An authenticated
+non-administrator cannot list or open the fixture and sees only owner-scoped
+96-hour results. This is an operator-created regression
 fixture, not an environment-controlled retention class; additional permanent
 rows are not created automatically. When a successfully archived calculation
 has exactly the fixture's canonical coordinates, the catalogue compares the
@@ -219,8 +221,8 @@ exact fractions `unavailable / total` without floating-point rounding. It
 atomically replaces the shared fixture when the new fraction is smaller or
 equal; only a strictly worse, invalid, failed, or cancelled result leaves the
 fixture unchanged. The promoted file is retained independently of the
-ordinary user's 96-hour copy and remains visible to current and future
-configured administrators.
+ordinary user's 96-hour copy and remains visible to signed-out visitors and
+current and future configured administrators.
 
 The pinned fixture, saved-result decoder, writer, browser, and calculation
 cache accept only the current v29/path-v23 identity with an explicitly
