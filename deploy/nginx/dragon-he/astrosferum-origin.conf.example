@@ -1,0 +1,45 @@
+# Installed as /etc/nginx/sites-available/astrosferum-origin. The certificate
+# is a private, self-signed origin leaf whose public half is pinned on alice-bg.
+# The separate mode-0640 snippet must contain exactly one generated directive:
+# proxy_set_header X-Astrosferum-Edge "<opaque random credential>";
+server {
+    listen 18082 ssl;
+    listen [::]:18082 ssl;
+    server_name astrosferum-origin.internal;
+    server_tokens off;
+
+    ssl_certificate /etc/nginx/astrosferum-origin/tls.crt;
+    ssl_certificate_key /etc/nginx/astrosferum-origin/tls.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:astrosferum_origin:2m;
+    ssl_session_tickets off;
+
+    # alice-bg public address. Direct Internet clients and other hosts are
+    # rejected before a request can reach the loopback-only web container.
+    allow 159.194.222.38;
+    deny all;
+
+    access_log /var/log/nginx/astrosferum-origin.access.log;
+    error_log /var/log/nginx/astrosferum-origin.error.log warn;
+
+    client_max_body_size 32k;
+
+    location / {
+        proxy_pass http://127.0.0.1:18083;
+        proxy_http_version 1.1;
+        proxy_set_header Host astrosferum.com;
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host astrosferum.com;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        include /etc/nginx/snippets/astrosferum-edge-header.conf;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 15m;
+        proxy_request_buffering off;
+        proxy_buffering off;
+    }
+}

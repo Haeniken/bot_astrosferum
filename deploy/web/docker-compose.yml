@@ -1,0 +1,92 @@
+name: bot_astrosferum_web
+
+services:
+  web:
+    image: bot_astrosferum:latest
+    pull_policy: never
+    entrypoint: ["/usr/local/bin/bot_astrosferum_web"]
+    command: ["--config", "/app/config/config.yaml"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      ASTRO_WEB_ENABLED: "true"
+      ASTRO_WEB_LISTEN: ":8080"
+      ASTRO_WEB_PUBLIC_ORIGIN: "https://astrosferum.com"
+      ASTRO_WEB_OIDC_CLIENT_ID: ${ASTRO_WEB_OIDC_CLIENT_ID:?ASTRO_WEB_OIDC_CLIENT_ID is required}
+      ASTRO_WEB_OIDC_CLIENT_SECRET_FILE: /run/secrets/telegram_oidc_client_secret
+      ASTRO_WEB_CSRF_KEY_FILE: /run/secrets/web_csrf_key
+      ASTRO_WEB_EDGE_CREDENTIAL_FILE: /run/secrets/edge_credential
+      ASTRO_WEB_DIRECTIONAL_GATEWAY_URL: http://bot_astrosferum:18083
+      ASTRO_WEB_DIRECTIONAL_CREDENTIAL_FILE: /run/secrets/directional_credential
+      ASTRO_WEB_DB_USER: ${ASTRO_WEB_DB_USER:-bot_astrosferum_web}
+      ASTRO_WEB_DB_PASSWORD_FILE: /run/secrets/web_db_password
+      # Production calculations are explicitly cancellable but have no
+      # estimate-derived wall-clock cutoff. Keep the web validator aligned
+      # with the bot and worker even when an older shared config file still
+      # contains the former finite test limits.
+      ASTRO_ASTRODOME_JOB_TIMEOUT: ${ASTRO_ASTRODOME_JOB_TIMEOUT:-0s}
+      ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT: ${ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT:-0s}
+      # true grants every authenticated Telegram user access; false restricts
+      # Astrodome to ASTRO_TELEGRAM_ADMIN_IDS (empty means deny everyone).
+      ASTRO_ASTRODOME_ENABLED: ${ASTRO_ASTRODOME_ENABLED:?ASTRO_ASTRODOME_ENABLED is required and must match the bot stack}
+      ASTRO_TELEGRAM_ADMIN_IDS: ${ASTRO_TELEGRAM_ADMIN_IDS-}
+      GOMEMLIMIT: 768MiB
+    ports:
+      - "127.0.0.1:18083:8080"
+    networks:
+      - egress
+      - astrosferum_internal
+    volumes:
+      - /opt/docker/bot-astrosferum/config/config.yaml:/app/config/config.yaml:ro
+      # Completed owner-scoped Astrodome JSON is retained independently of
+      # browser cache for exactly 96 hours. PostgreSQL stores metadata only.
+      - /opt/docker/bot-astrosferum/data/web/astrodome:/app/data/web/astrodome
+    secrets:
+      - telegram_oidc_client_secret
+      - web_csrf_key
+      - edge_credential
+      - directional_credential
+      - web_db_password
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: "1.00"
+    pids_limit: 128
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/bot_astrosferum_web", "--healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+networks:
+  egress:
+  astrosferum_internal:
+    external: true
+    name: astrosferum-internal
+
+secrets:
+  telegram_oidc_client_secret:
+    file: ./secrets/telegram_oidc_client_secret
+  web_csrf_key:
+    file: ./secrets/web_csrf_key
+  edge_credential:
+    file: ./secrets/edge_credential
+  directional_credential:
+    # The exact same mode-0600 file is mounted by bot and worker. Do not keep a
+    # second copy in the web deployment directory.
+    file: /opt/docker/bot-astrosferum/secrets/directional_credential
+  web_db_password:
+    file: ./secrets/web_db_password

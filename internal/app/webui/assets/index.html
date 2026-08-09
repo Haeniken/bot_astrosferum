@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" data-language-ready="false" data-session-state="pending">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" id="themeColor" content="#07152d">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="description" id="metaDescription" content="Astrosferum Astrodome: an interactive directional astronomy forecast from 10 degrees to zenith.">
+  <title>Astrosferum Astrodome</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=astrodome-v3">
+  <script type="module" src="/assets/js/app.js?v=astrodome-v3"></script>
+</head>
+<body data-twilight="astronomical_night">
+  <div class="boot-splash" id="bootSplash" role="status" aria-label="Astrosferum"><span class="brand-mark" aria-hidden="true"><span></span></span></div>
+  <a class="skip-link" href="#workspace" data-i18n="skip.main">Skip to Astrodome</a>
+
+  <header class="site-header">
+    <a class="brand" id="brandLink" href="/en/account/sky-conditions" aria-label="Astrosferum">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span>
+        <strong data-i18n="app.title">Astrosferum Astrodome</strong>
+        <small data-i18n="app.subtitle">A discrete directional forecast from the 10° calculation boundary to zenith</small>
+      </span>
+    </a>
+    <div class="header-status" aria-live="polite">
+      <span class="status-chip" id="runChip"><span data-i18n="run.label">Run</span>: <b>—</b></span>
+      <span class="status-chip" id="freshnessChip"><span data-i18n="run.freshness">Freshness</span>: <b>—</b></span>
+      <span class="status-chip twilight-chip" id="twilightChip">—</span>
+    </div>
+    <div class="account">
+      <a class="button ghost language-toggle" id="languageButton" href="/ru/account/sky-conditions" hreflang="ru" aria-label="Switch to Russian">RU</a>
+      <button class="button night-mode-toggle" id="nightModeButton" type="button" aria-pressed="false">
+        <span class="night-mode-indicator" aria-hidden="true"></span>
+        <span data-i18n="theme.red">Red night mode</span>
+      </button>
+      <span id="profileGreeting" data-session-view="authenticated" hidden></span>
+      <a class="button secondary" id="loginButton" href="/auth/telegram/login?lang=en" data-session-view="anonymous" data-i18n="auth.login">Sign in with Telegram</a>
+      <button class="button ghost" id="logoutButton" type="button" data-session-view="authenticated" data-i18n="auth.logout" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main class="workspace" id="workspace">
+    <aside class="control-rail" aria-label="Astrodome controls">
+      <section class="panel availability-panel" aria-labelledby="availabilityTitle">
+        <div class="panel-heading">
+          <h2 id="availabilityTitle" data-i18n="availability.title">Model availability</h2>
+          <span class="signal" id="availabilitySignal" data-state="loading" aria-hidden="true"></span>
+        </div>
+        <p id="availabilityText" class="primary-status" aria-live="polite" aria-atomic="true">…</p>
+        <dl class="compact-meta">
+          <div><dt data-i18n="run.label">Run</dt><dd id="availabilityRun">—</dd></div>
+          <div><dt data-i18n="run.freshness">Freshness</dt><dd id="availabilityFreshness">—</dd></div>
+        </dl>
+        <p class="microcopy" id="availabilityDetails">—</p>
+      </section>
+
+      <section class="panel" aria-labelledby="pointTitle">
+        <h2 id="pointTitle" data-i18n="point.title">Observation point</h2>
+        <p id="authenticationNotice" class="notice" data-session-view="anonymous" data-i18n="auth.required">Sign in to use saved locations and calculate an Astrodome forecast.</p>
+        <form id="pointForm" data-session-view="authenticated" hidden>
+          <div class="segmented" role="radiogroup" aria-labelledby="pointTitle">
+            <label><input type="radio" name="pointMode" value="saved" checked><span data-i18n="point.saved">Saved location</span></label>
+            <label><input type="radio" name="pointMode" value="manual"><span data-i18n="point.manual">Coordinates</span></label>
+          </div>
+          <div id="savedPointFields">
+            <label for="pointSelect" data-i18n="point.choose">Choose a saved location</label>
+            <select id="pointSelect" required></select>
+          </div>
+          <div id="manualPointFields" class="coordinate-grid" hidden>
+            <label><span data-i18n="point.latitude">Latitude</span><input id="latitudeInput" type="number" min="-90" max="90" step="any" inputmode="decimal" autocomplete="off"></label>
+            <label><span data-i18n="point.longitude">Longitude</span><input id="longitudeInput" type="number" min="-180" max="180" step="any" inputmode="decimal" autocomplete="off"></label>
+          </div>
+          <p class="field-error" id="pointError" role="alert" hidden></p>
+          <button class="button primary wide" id="calculateButton" type="submit" data-i18n="point.calculate">Calculate Astrodome</button>
+        </form>
+      </section>
+
+      <section class="panel job-panel" aria-labelledby="jobTitle">
+        <h2 id="jobTitle" data-i18n="job.title">Astrodome job</h2>
+        <div class="job-progress" id="jobProgress" aria-hidden="true"><span id="jobProgressBar"></span></div>
+        <p id="jobStatus" aria-live="polite" data-i18n="job.idle">Choose a point to calculate up to 72 hourly sky-condition frames.</p>
+        <button class="button ghost wide" id="cancelJobButton" type="button" data-i18n="job.cancel" hidden>Cancel request</button>
+      </section>
+
+      <section class="panel saved-visualizations-panel" id="savedVisualizationsPanel" data-session-view="authenticated" aria-labelledby="savedVisualizationsTitle" hidden>
+        <h2 id="savedVisualizationsTitle" data-i18n="saved.title">Saved visualizations</h2>
+        <p class="microcopy" data-i18n="saved.retention">Completed domes remain available here for 96 hours.</p>
+        <p class="microcopy" id="savedVisualizationsEmpty" data-i18n="saved.empty">No completed Astrodome visualizations yet.</p>
+        <ol class="saved-visualizations" id="savedVisualizationsList"></ol>
+      </section>
+
+      <section class="panel" aria-labelledby="layerTitle">
+        <h2 id="layerTitle" data-i18n="layer.title">Displayed diagnostic</h2>
+        <select id="layerSelect" disabled>
+          <option value="overall" data-i18n="layer.overall">Overall Astronomy Index</option>
+          <option value="cloud" data-i18n="layer.cloud">Effective cloud obstruction</option>
+          <option value="seeing" data-i18n="layer.seeing">Slant seeing at 500 nm</option>
+          <option value="tau0" data-i18n="layer.tau0">Coherence time at 500 nm</option>
+          <option value="water_vapour" data-i18n="layer.water_vapour">Slant water-vapour column</option>
+          <option value="limiting_factor" data-i18n="layer.limiting_factor">Main limiting factor</option>
+          <option value="data_quality" data-i18n="layer.data_quality">Input-data quality</option>
+        </select>
+        <ol class="legend" id="layerLegend" aria-label="Colour legend"></ol>
+        <p class="microcopy" data-i18n="legend.flat">Every cell has one source-node value; no derived score is spatially or temporally interpolated.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="viewTitle">
+        <h2 id="viewTitle" data-i18n="view.title">View</h2>
+        <div class="view-switch">
+          <button class="button secondary active" type="button" id="webglModeButton" data-i18n="view.webgl" aria-pressed="true">3D dome</button>
+          <button class="button secondary" type="button" id="canvasModeButton" data-i18n="view.canvas" aria-pressed="false">Accessible 2D map</button>
+        </div>
+        <p class="microcopy" id="webglNotice" data-i18n="controls.help">Drag or swipe to look around. Mouse wheel or +/- changes field of view. Arrow keys or WASD rotate; Enter selects the centre direction.</p>
+      </section>
+    </aside>
+
+    <section class="dome-column" aria-label="Interactive Astrodome">
+      <section class="fatal-error" id="fatalError" role="alert" hidden>
+        <strong data-i18n="error.title">Dataset rejected</strong>
+        <p id="fatalErrorMessage"></p>
+        <code id="fatalErrorDetail"></code>
+      </section>
+
+      <section class="empty-state" id="emptyState">
+        <span class="empty-orbit" aria-hidden="true"><i></i></span>
+        <h1 data-i18n="app.title">Astrosferum Astrodome</h1>
+        <p data-i18n="job.idle">Choose a point to calculate up to 72 hourly sky-condition frames.</p>
+      </section>
+
+      <section class="dome-stage" id="domeStage" hidden>
+        <canvas id="domeCanvas" tabindex="0" role="img" aria-describedby="outerBoundaryNote controlsHelp" data-active="true"></canvas>
+        <canvas id="overlayCanvas" aria-hidden="true" data-active="true"></canvas>
+        <canvas id="mapCanvas" tabindex="-1" role="img" aria-describedby="outerBoundaryNote" aria-hidden="true" data-active="false"></canvas>
+        <div class="sr-only" id="domeTooltip" role="status" aria-live="polite" hidden></div>
+        <span class="mode-badge" id="modeBadge">WebGL2</span>
+        <div class="stage-controls" id="stageControls">
+          <button class="stage-control mode-control" id="stageModeButton" type="button" aria-label="Switch to the accessible 2D map" title="Switch to the accessible 2D map">
+            <span id="stageModeLabel" aria-hidden="true">2D</span>
+          </button>
+          <button class="stage-control fullscreen-control" id="fullscreenButton" type="button" aria-pressed="false" aria-label="Expand the Astrodome viewer" title="Expand the Astrodome viewer" disabled>
+            <span class="fullscreen-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </section>
+
+      <p class="outer-boundary" id="outerBoundaryNote" data-i18n="outerBoundary">10° is the outer calculation boundary, not the geometric horizon. Lower altitudes are not calculated.</p>
+      <p class="sr-only" id="controlsHelp" data-i18n="controls.help">Drag or swipe to look around. Arrow keys or WASD rotate; Enter selects the centre direction.</p>
+
+      <section class="timeline panel" aria-labelledby="timeTitle">
+        <div class="timeline-heading">
+          <div>
+            <h2 id="timeTitle" data-i18n="time.title">Forecast hour</h2>
+            <p><strong id="localTime">—</strong><span id="utcTime">—</span></p>
+          </div>
+          <span id="timePosition">—</span>
+        </div>
+        <input id="timeSlider" type="range" min="0" max="71" value="0" step="1" disabled aria-labelledby="timeTitle">
+        <div class="timeline-scale" aria-hidden="true"><span>0 h</span><span>12 h</span><span>24 h</span><span>36 h</span><span>48 h</span><span>60 h</span><span>71 h</span></div>
+      </section>
+    </section>
+
+    <aside class="inspector panel" aria-labelledby="inspectTitle">
+      <h2 id="inspectTitle" data-i18n="inspect.title">Selected cell</h2>
+      <p id="inspectEmpty" data-i18n="inspect.none">Select a dome cell to inspect its unmodified model result.</p>
+      <div id="inspectContent" hidden>
+        <div class="score-orb"><strong id="inspectOverall">—</strong><span>Overall</span></div>
+        <dl class="inspection-grid">
+          <div><dt data-i18n="inspect.azimuth">Azimuth</dt><dd id="inspectAzimuth">—</dd></div>
+          <div><dt data-i18n="inspect.elevation">Altitude</dt><dd id="inspectElevation">—</dd></div>
+          <div><dt data-i18n="inspect.state">State</dt><dd id="inspectState">—</dd></div>
+          <div><dt data-i18n="inspect.quality">Data quality</dt><dd id="inspectQuality">—</dd></div>
+          <div><dt data-i18n="inspect.seeing">Seeing</dt><dd id="inspectSeeing">—</dd></div>
+          <div><dt data-i18n="inspect.tau0">Coherence time</dt><dd id="inspectTau">—</dd></div>
+          <div><dt data-i18n="inspect.cloud">Cloud obstruction</dt><dd id="inspectCloud">—</dd></div>
+          <div><dt data-i18n="inspect.pwv">Slant water vapour</dt><dd id="inspectPWV">—</dd></div>
+          <div class="wide"><dt data-i18n="inspect.factor">Main limitation</dt><dd id="inspectFactor">—</dd></div>
+        </dl>
+        <h3 data-i18n="inspect.penalties">Overall penalty contributions</h3>
+        <div class="penalties" id="penaltyList"></div>
+        <div class="quality-vector" id="qualityVector"></div>
+      </div>
+    </aside>
+  </main>
+
+  <details class="data-table-wrap" id="dataTableDetails" hidden>
+    <summary data-i18n="table.summary">Accessible table for the selected hour</summary>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th data-i18n="table.direction">Direction</th><th data-i18n="table.overall">Overall</th><th data-i18n="table.state">State</th><th data-i18n="table.quality">Quality</th></tr></thead>
+        <tbody id="dataTableBody"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <footer>
+    <span>Astrosferum</span>
+    <span data-i18n="outerBoundary">10° is the outer calculation boundary, not the geometric horizon.</span>
+  </footer>
+</body>
+</html>

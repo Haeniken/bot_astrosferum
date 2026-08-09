@@ -82,6 +82,9 @@ UPDATE forecast_usage_daily SET successful_count=request_count WHERE request_cou
 	if err != nil {
 		return fmt.Errorf("migrate PostgreSQL: %w", err)
 	}
+	if err := db.migrateWeb(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -182,6 +185,9 @@ func (db *PostgreSQL) RunMaintenance(ctx context.Context, logf func(string, ...a
 		}
 		if tag.RowsAffected() > 0 {
 			logf("PostgreSQL maintenance removed %d old daily usage rows", tag.RowsAffected())
+		}
+		if err := db.cleanupWeb(ctx, logf); err != nil && ctx.Err() == nil {
+			logf("PostgreSQL web maintenance failed: %v", err)
 		}
 	}
 	cleanup()
