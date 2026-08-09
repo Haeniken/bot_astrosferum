@@ -70,12 +70,39 @@ immediately before each send, including cache hits. See
 [Current implementation status](docs/implementation-status.en.md) for the
 implemented contract and operational validation gates.
 
+The repository also contains the directional atmospheric **Astrodome** web application for
+`astrosferum.com`. It renders up to 72 consecutive native hourly directional datasets from the explicit
+`10°` calculation boundary to one azimuth-independent zenith node. The browser
+can rotate the quantitative dome, inspect a cell, switch diagnostics, or use
+the accessible 2D/table fallback. Every direction is calculated from
+interpolated native ICON-EU primitives followed by a complete physical
+recalculation; finished seeing, `tau0`, cloud transmission, Overall, and data
+quality are never interpolated. It publishes separate nominal and conservative
+cloud transmission, and Overall uses the conservative value. This is a dome of
+modelled turbulence, cloud obstruction, and slant water column—not a complete
+observing-sky model: directional aerosols/molecular extinction, remote fog and
+precipitation, Moon/daylight background, atmospheric dispersion, and
+directional artificial skyglow are not included. Telegram OpenID Connect provides the web
+identity and exposes the same saved points. The implementation and deployment
+templates are present and controlled administrator rollout is deployed. The
+current production writer is production-v2/v29/v23. It publishes a visibly
+lower `limited` quality for explicitly bounded short-path approximations and
+keeps the cumulative approximated path at or below 1 m; all other unresolved
+cases remain fail-closed. The preceding immutable v28/v22 baseline measured
+9,284 of 9,288 available node-hours in 33 min 14 s. The first finer-grid comparison also found material
+low-elevation discretization. Multi-site angular-grid, multi-cycle cold/warm
+resource, and observational validation remain open before public rollout. See [Architecture](docs/architecture.en.md),
+[scientific method](docs/scientific-method.en.md), and the
+[deployment runbook](deploy/README.md).
+
 - [Архитектура на русском](docs/architecture.ru.md)
 - [Architecture in English](docs/architecture.en.md)
 - [Научная методика, формулы и воспроизводимость](docs/scientific-method.ru.md)
 - [Scientific method, formulas, and reproducibility](docs/scientific-method.en.md)
 - [Текущий статус реализации](docs/implementation-status.ru.md)
 - [Current implementation status](docs/implementation-status.en.md)
+- [Configuration reference](docs/configuration.en.md)
+- [Astrodome deployment runbook](deploy/README.md)
 - [Privacy notice](PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
@@ -90,7 +117,7 @@ synthetic `render-sample` command need substantially fewer resources.
 |---|---:|---:|
 | CPU | 4 x86-64 cores | 8–12 x86-64 cores |
 | RAM | 32 GiB | 48–64 GiB |
-| Free SSD space | 200 GiB | 300 GiB or more on NVMe |
+| Free SSD space | 300 GiB | 550 GiB or more on NVMe |
 | Software | 64-bit Linux, Docker Engine, Docker Compose v2 | Current stable Docker on a supported Linux distribution |
 
 Building the production image requires outbound HTTPS access to GHCR, Docker
@@ -113,7 +140,23 @@ runs, PostgreSQL, point/render caches, and light-pollution tiles. Outbound DNS
 and HTTPS access to DWD, NASA GEOS-CF, Telegram, VK, and the configured atlas sources is
 required; neither platform's long polling needs an inbound application port.
 
-The repository contains no model runs or credentials. Runtime data and bind mounts live only below `/opt/docker/bot_astrosferum` on the production host.
+The optional Astrodome deployment adds an isolated directional worker shared
+with Horizon. The initial, deliberately conservative candidate gives that
+worker four CPUs, a `24 GB` cgroup hard limit, and `GOMEMLIMIT=12GiB`. It also
+enforces a `400 GiB` project-footprint ceiling and a `150 GiB` free-space
+reserve before dome admission. These are rollout guardrails, not measured
+minimum requirements: do not reduce them or publish a smaller production
+profile until cold/warm full-dome, concurrent model-sync, memory-pressure, and
+ordinary-forecast latency benchmarks pass. The shared active-slot limit is
+`ASTRO_DIRECTIONAL_CONCURRENCY=1` by default; increasing it can multiply the
+full-dome resident footprint and requires repeating those resource tests. The
+public web process is a
+separate Compose project and does not download or retain another ICON model
+store.
+
+The repository contains no model runs or credentials. Runtime data and bind
+mounts live below `/opt/docker/bot-astrosferum`; the public web gateway uses
+`/opt/docker/bot-astrosferum-web`.
 
 Platform tokens are separate ignored files: `secrets/telegram_token` and
 `secrets/vk_token`, both mode `0600`. Enabling VK also requires the numeric
@@ -128,7 +171,7 @@ and YAML effects and recommended values.
 Useful commands on the target host:
 
 ```sh
-cd /opt/docker/bot_astrosferum
+cd /opt/docker/bot-astrosferum
 docker compose up -d --build
 docker compose logs -f bot_astrosferum
 docker compose run --rm bot_astrosferum doctor --config /app/config/config.yaml
@@ -142,7 +185,9 @@ docker compose run --rm bot_astrosferum light-pollution --lat 55.7558 --lon 37.6
 `render-horizon` is an operational verification command. It requires Horizon
 to be enabled and a complete current ICON-EU run whose full directional
 footprint is supported; end-user availability additionally depends on the
-enabled platform adapter and action path.
+enabled platform adapter and action path. It waits on the same process-shared
+execution lease as the directional worker and therefore cannot overlap a
+Horizon or Astrodome job.
 
 `/start` in Telegram or VK explains coordinate input and the charts. Native Telegram locations, VK geo attachments, plain `latitude, longitude` text, and `/forecast latitude longitude` are accepted. The adapters use independent long-polling supervisors: a temporary outage of one platform does not stop the other. Points inside the ICON-EU domain use ICON-EU; every other world coordinate uses the latest complete DWD ICON Global run. Both routes provide the same seven chart types, including native model-level cloud obstruction and lower-atmosphere TKE. DWD publishes Global TKE only through `+48 h`, so its hybrid Overall chart honestly ends there while weather, cloud obstruction, and pressure-level diagnostics continue through the main horizon. Global also lacks the direct `VIS` field used for fog diagnosis and the transparency proxy.
 

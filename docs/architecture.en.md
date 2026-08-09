@@ -1,16 +1,29 @@
-# bot_astrosferum: KISS architecture
+# bot-astrosferum: KISS architecture
 
-Status: implemented MVP, architecture revision 0.3; the
+Status: implemented MVP, architecture revision 0.4; the
 `surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production.
 The optional ICON-EU Horizon extension is implemented as a configuration-gated
-application capability.
-External sources last checked: 2026-07-19; last revision: 2026-07-22
+application capability. The directional atmospheric Astrodome code path and deployment templates are
+deployed for controlled administrator access. The current production writer is
+production-v2 with science-kernel v29/path v23; the immutable v28/v22 full run
+remains the preceding measured baseline. Repeated cold/warm resource and
+observational gates remain open before public rollout.
+External sources last checked: 2026-07-28; last revision: 2026-08-09
 Deployment target: operator-managed host
-Deployment directory: `/opt/docker/bot_astrosferum`
+Deployment directories: `/opt/docker/bot-astrosferum` and
+`/opt/docker/bot-astrosferum-web`
 
 ## 1. Decision in one paragraph
 
-`bot_astrosferum` is one Go binary running in one main Docker container. It serves Telegram and VK through long polling, updates ICON, calculates conditions, renders PNG charts, and returns them to the user. PostgreSQL stores users, saved points, and daily aggregates; Redis, a message broker, Kubernetes, a separate Python renderer, and a public HTTP port are unnecessary. Every bind mount remains below `/opt/docker/bot_astrosferum`.
+The ordinary product remains one `bot_astrosferum` Go process: it serves
+Telegram and VK, owns model publication, calculates forecasts, and renders
+PNG charts. The directional atmospheric Astrodome adds only two failure-isolation boundaries: a
+small public Go web gateway and one heavy `directional_worker` shared with
+Horizon. They use the same Go module, PostgreSQL, immutable model store, and
+scientific packages; there is no second downloader, formula implementation,
+Redis, broker, Kubernetes, or Python renderer. Runtime state stays below
+`/opt/docker/bot-astrosferum`, while the web gateway's secrets and Compose
+files stay below `/opt/docker/bot-astrosferum-web`.
 
 ### PostgreSQL, saved points, and statistics
 
@@ -28,21 +41,21 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 
 | Area | MVP decision | Reason |
 |---|---|---|
-| Executable | One `bot_astrosferum` Go binary | One build and one domain implementation |
+| Executables | `bot_astrosferum`, a thin web gateway, and one directional worker from the same Go module/image | One domain and science implementation with explicit failure isolation |
 | Toolchain | Go `1.26.5`, pinned in `go.mod` and the Docker builder | Reproducible current build |
-| Runtime | One main `app` container | Minimal operational dependencies |
+| Runtime | Main app plus optional web/directional containers | Ordinary forecasts remain independent of heavy directional-dome failures |
 | Telegram | Bot API long polling | No ingress or webhook required |
 | VK | Bots Long Poll API | No public callback endpoint required |
 | Scheduler | Embedded in `bot_astrosferum serve` | No host cron or scheduler container |
 | Operations | `sync`, `doctor`, `render-sample`, and point/Horizon render subcommands | Production code and image are reused; `render-horizon` remains a predeployment verification path |
-| GRIB2 | ecCodes for ordinary extraction; CDO for ICON Global points and optional ICON-EU Horizon batches | No custom decoder or per-point intermediate GRIB |
+| GRIB2 | ecCodes for ordinary extraction; CDO for ICON Global points and ICON-EU directional batches | No custom decoder or per-point intermediate GRIB |
 | Priority model inside the European domain | DWD ICON-EU | Open ~7 km grid and complete surface/model-level field set |
 | Model outside the European domain | DWD ICON Global | Stable worldwide official open GRIB feed |
 | ICON-Ru | Documented candidate for a future shadow adapter | Its public WIS product is coarser and has fewer fields than the native model |
 | Application storage | PostgreSQL for users; atomic files for model/cache data | Durable user state without adding Redis or a broker |
 | Point cache | Versioned `gob.gz` plus an in-memory LRU | Preserves `NaN`, stays compact, and needs no Redis |
 | Render cache | PNG files | Directly uploadable to both platforms |
-| Work queue | Bounded Go channel plus per-key `singleflight` | No external queue is needed |
+| Work queue | Bounded in-process FIFO plus per-key fan-out | No external queue is needed; Horizon and Astrodome share an explicit active-slot limit, recommended `1` until benchmarked |
 | Rendering | Deterministic pure-Go mixed-size PNG | Readable 72-hour tables without a Python service |
 | Logs | Plain structured messages to stdout | Docker handles collection and rotation |
 
@@ -144,7 +157,7 @@ An initial decision may be reviewed after 30 days, but the router must not flap 
 
 - claims of physically measured seeing or a calibrated Pickering scale;
 - telescope-specific optical predictions;
-- web UI, accounts, payments, and subscriptions;
+- payments, subscriptions, and any web feature outside the authenticated Astrodome;
 - long-term storage of conversations or exact user coordinates;
 - non-ICON model families;
 - a default user response beyond 72 hours;
@@ -205,7 +218,7 @@ Manual `sync` and the embedded scheduler share one file lock so two refreshes ca
 ## 7. Repository layout
 
 ```text
-bot_astrosferum/
+bot-astrosferum/
 ├── cmd/bot_astrosferum/              # main and subcommand parsing
 ├── internal/
 │   ├── app/                   # lifecycle and shared bot application handler
@@ -239,7 +252,7 @@ Packages represent useful responsibilities. The project will not create ceremoni
 ## 8. Runtime directories on the production host
 
 ```text
-/opt/docker/bot_astrosferum/
+/opt/docker/bot-astrosferum/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── config/
@@ -942,7 +955,10 @@ Only platform adapters handle attachment-count and message-length limits. Domain
 - each enabled platform has six peer-affine workers, so different peers run concurrently while each peer stays ordered;
 - each adapter queue is bounded and applies backpressure to its own poller when full;
 - one shared ordinary-forecast queue limits active calculations across Telegram and VK to `ASTRO_FORECAST_CONCURRENCY` and reports a position to waiting users;
-- Horizon uses the independent `ASTRO_HORIZON_CONCURRENCY` limit and its existing bounded queue;
+- Horizon and Astrodome share one bounded directional FIFO sized by
+  `ASTRO_DIRECTIONAL_QUEUE_SIZE`; `ASTRO_DIRECTIONAL_CONCURRENCY` controls
+  active heavy calculations (recommended `1` until benchmarked), while legacy
+  `ASTRO_HORIZON_CONCURRENCY=1` cannot change production scheduling;
 - ecCodes has a shared eight-process semaphore;
 - publishing a new run cannot alter an in-flight immutable manifest reference;
 - every cache write uses `temp + fsync + rename`.
@@ -997,11 +1013,22 @@ horizon_analysis:
   enabled: true
   queue_size: 4
   concurrency: 1
-  cdo_workers: 2
+  cdo_workers: 8
   job_timeout: 10m
   cache_ttl: 48h
   cache_entries: 128
   estimated_duration: 3m
+
+directional:
+  queue_size: 8
+  concurrency: 1
+  estimated_horizon: 3m
+  estimated_astrodome: 30m
+  internal_request_timeout: 0s
+
+astrodome:
+  enabled: true
+  job_timeout: 0s
 
 paths:
   data: /app/data
@@ -1241,7 +1268,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 ### Stage 4 — production
 
 - Dockerfile and Compose;
-- deploy below `/opt/docker/bot_astrosferum`;
+- deploy below `/opt/docker/bot-astrosferum`;
 - PostgreSQL healthcheck and log rotation;
 - restart/incomplete-sync recovery checks;
 - disk and retention limits;
@@ -1260,7 +1287,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - incomplete runs never publish;
 - current model manifests survive restart; platform cursors are reacquired from the APIs;
 - tokens are absent from Git and logs;
-- every bind mount is below `/opt/docker/bot_astrosferum`;
+- every bot/worker bind mount is below `/opt/docker/bot-astrosferum`;
 - failure of one platform API does not stop the other;
 - the application publishes no host TCP port.
 
@@ -1359,8 +1386,11 @@ terms of that same run onto the hourly grid; HMNSP/TKE, `Cn2`, seeing, `tau0`,
 and the index are recomputed after interpolation and are never themselves
 interpolated. There is no extrapolation beyond `f072`, across a missing edge,
 or across a run boundary. Lookup coordinates in
-the same `0.0625 deg` output cell are deduplicated. CDO writes tabular values
-directly; no intermediate per-point GRIB copies are retained. The scientific
+the same `0.0625 deg` output cell are deduplicated. Horizon prepares one
+request-scoped CDO nearest-neighbour remapping plan: `gennn` creates the
+read-only weights once and every field/step reuses them through `remap`. CDO
+writes tabular values directly; no intermediate per-point GRIB copies are
+retained. The scientific
 equations and limitations are specified in
 [the Horizon section of the scientific method](scientific-method.en.md#7-directional-horizon-analysis).
 
@@ -1373,15 +1403,25 @@ request a new ordinary forecast. The caption is generated at delivery time and
 uses the configured ICON-EU `max_stale_age`, so cached and newly rendered
 results report freshness by the same rule.
 
-### 29.4. Separate heavy-work class
+### 29.4. Isolated directional heavy-work class
 
-Horizon work must not consume the ordinary point-forecast workers. The current
-source implements this single-process boundary:
+Horizon and Astrodome work must not consume the ordinary point-forecast
+workers. The current composition implements this boundary:
 
-- one shared bounded queue for both Telegram and VK, with the independently
-  configurable `ASTRO_HORIZON_CONCURRENCY` worker count;
-- a separate Horizon CDO semaphore controlled by
-  `horizon_analysis.cdo_workers`, at most two subprocesses by default;
+- one bounded directional FIFO, sized by `ASTRO_DIRECTIONAL_QUEUE_SIZE`, shared
+  by Telegram/VK Horizon requests and web Astrodome requests; its active limit
+  is `ASTRO_DIRECTIONAL_CONCURRENCY` (`1..32`, recommended `1` until benchmarked);
+- one isolated HTTP worker service for both calculation kinds; its concurrency
+  guard enforces the same configured slot count, while process-shared slot
+  leases under `data/state/run-leases` cap aggregate work across accidental
+  additional replicas and the operator-only `render-horizon` CLI;
+- the old `horizon_analysis.concurrency` /
+  `ASTRO_HORIZON_CONCURRENCY` value remains only a constructor compatibility
+  bound; attaching the coordinator starts zero local Horizon calculation
+  workers;
+- one shared CDO semaphore controlled by `horizon_analysis.cdo_workers`, with
+  eight subprocesses by default across Horizon and Astrodome preload work in
+  the isolated directional worker;
 - two delivery workers and a separate bounded delivery queue, with bounded
   admission for cache-hit uploads, so slow platform uploads cannot create an
   unbounded goroutine or memory backlog;
@@ -1395,18 +1435,22 @@ source implements this single-process boundary:
 - ordinary forecast workers, their semaphore, and their timeout remain
   independent.
 
-Each extracted CDO table is normalized as its bounded worker finishes and the
+Each extracted CDO table is normalized as its bounded subprocess finishes and the
 raw table is released; only the normalized 73-frame result remains for the
-calculation. Together with the two-process default this bounds Horizon's
-incremental RAM use. The application container has no separate Docker hard
-memory limit; `GOMEMLIMIT=24GiB` is a Go GC target, not an allocation guarantee.
-Any increase must follow measured peak RSS during the mandatory full-run smoke
-test and leave headroom for CDO, PostgreSQL, and the host page cache.
+calculation. The directional worker's Compose hard limit is configured with
+`ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` (`24g` by default), and its lower Go
+heap target with `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` (`12GiB` by default).
+Neither is a scientific constant. Any change must follow measured peak RSS
+during a full-run smoke test and leave headroom for CDO, PostgreSQL, and the
+host page cache. In particular, increasing directional concurrency multiplies
+the possible Astrodome resident footprint and requires revalidating both the
+worker cgroup limit and project disk admission.
 
-A bounded in-process channel is enough. In-flight jobs are not durable across a
-restart: the user can retry, while an already completed atomic disk-cache entry
-survives. This is a simpler and more honest failure model than introducing a
-database-backed job system for one optional calculation.
+A bounded in-process coordinator queue plus the isolated synchronous worker is
+enough. In-flight jobs are not durable across a restart: the user can retry,
+while an already completed atomic disk-cache entry survives. This is a simpler
+and more honest failure model than introducing a database-backed job system for
+one optional calculation class.
 
 ### 29.5. Cache and cleanup
 
@@ -1449,3 +1493,452 @@ an ordinary forecast, the Horizon button/action, and ordinary-forecast latency
 during a concurrent Horizon job are mandatory gates. A failed gate requires
 stopping or rolling back the deployment and reporting the failure rather than
 sending a success notification.
+
+## 30. ICON-EU Astrodome web application
+
+### 30.1. Product contract
+
+Astrodome is an asynchronous, authenticated, directional atmospheric product for
+`astrosferum.com`. It contains up to 72 consecutive native whole-hour frames. A
+fresh run normally supplies all 72; an ageing run ends before the first native
+hourly cadence gap instead of interpolating a finished directional value. The
+outer circle is the **10° calculation boundary**, not the geometric horizon;
+lower elevations are absent by contract. Every profile contains one and only
+one `90°` node with `azimuth=null`.
+
+Two immutable production angular profiles exist:
+
+- dense storage maps to `production-v2`: eight rings at
+  `10/20/30/40/50/60/70/80°`, each with 16 azimuths, plus the zenith — 129
+  nodes/frame and 9,288 node-hours for 72 frames;
+- storage fallback `sparse-storage-v1`: 16 azimuths at
+  `10/20/30/45/60/75°`, plus the zenith — 97 nodes/frame and 6,984
+  node-hours.
+
+The profile is selected once before job admission. It cannot be thinned within
+a dataset. The dense storage decision therefore selects `production-v2`, while
+the versioned sparse profile remains the declared storage fallback. The former
+`dense-v1` 353-node profile is retained only as a historical archive and
+calibration identity; it is not admitted for a current calculation. If even
+sparse cannot preserve the disk and inode reserves, publication fails closed.
+Payload and browser geometry carry the exact profile, geometry version, and
+SHA-256 descriptor digest.
+
+### 30.2. Scientific and provider boundaries
+
+Astrodome is available only for a complete immutable ICON-EU run. There is no
+ICON Global Astrodome button or synthetic replacement. The model adapter owns
+raw acquisition and reconstruction; `internal/forecast` owns geometry,
+refraction, physical integration, cloud closure, and Overall. Web, Telegram,
+VK, and renderers contain no scientific formula.
+
+Only native meteorological primitives may be interpolated in model space and
+time. Each ray then performs a complete nonlinear recalculation. The following
+finished products are explicitly forbidden as interpolation inputs: seeing,
+`tau0`, cloud transmission, Horizon/Sky/Overall indices, and deterministic
+quality. Straight-ray and full Ciddor-refraction paths are separately
+versioned; the latter integrates the coupled ECEF ray equation through the
+reconstructed three-dimensional refractive-index field. Detailed equations
+and numerical tolerances are in
+[the scientific method](scientific-method.en.md#8-directional-atmospheric-astrodome).
+
+Physical breakpoints are first-class path inputs, not incidental products of
+adaptive quadrature. The current identities are
+`astrodome-science-path-v23` and
+`astrodome-science-kernel-v29`. The maximum physical- and horizontal-event root
+localisation radius is 0.2 mm. Bit-identical represented `pathM` coordinates form
+one compound geometric breakpoint even when their event identities differ;
+the sorted union of event identities is retained and every associated
+transition is applied at that section. Bit-distinct coordinates are never
+averaged or merged: candidates no more than 0.4 mm apart fail closed. The side
+guard is 0.5 mm, the generic recursive proof scale is 0.2 mm, and the enforced
+position/coordinate-evaluation envelope remains 1 mm. A nominal
+floating-point zero is retained as a residual interval; any unresolved leaf
+rejects the complete node. There is no nominal micrometre partition
+representative and no preview tolerance override. Failure of
+one node is normally isolated as an explicit `unavailable` cell instead of
+discarding the other calculated directions and hours. The only product-level
+exception is the versioned short-path allowance described below; it is
+published as `limited`, never as fully converged. A frame with no usable nodes is
+still rejected and cannot enter the result cache. An incomplete or
+terrain-blocked refracted ray keeps `direction_at_model_top_ecef=null`: the
+worker does not fabricate a tangent at a model boundary that the ray never
+reached. The tangent remains mandatory for every available refracted node.
+
+Refraction v3 performs two forward production passes and accepts a ray only
+when their endpoint, direction, and optical-path diagnostics converge within
+the versioned limits. The reverse pass is not repeated for ordinary work; it
+is enabled by the reference/strict mode used for regression and release
+verification.
+
+The accepted Shampine dense DOPRI polynomial exports a dynamic formation-sum
+bound for Cartesian position and derivative evaluation. This bounds evaluation
+of the accepted polynomial only; ODE truncation, the two-forward-pass
+refraction check, science-integral estimation, and meteorological uncertainty
+remain separate. Point position and derivative errors use independent
+absolute-monomial scales for X/Y/Z, an audited `gamma128` envelope per
+component, and an outward Euclidean reduction. The longer Bernstein
+formation/restriction paths used to bound derivatives and accelerations retain
+their separate `gamma1024` envelope. Every horizontal-root
+evaluation, physical sample, and metric midpoint converts dense-position,
+spherical-coordinate, normalized-grid, and grid-snap errors to one equivalent
+position value and enforces the 1-mm hard ceiling. Accepted residuals use the
+actual smaller errors rather than that ceiling: ECEF grid predicates use the
+dense-position bound; bilinear predicates use field-specific uncertainty from
+the latitude/longitude fraction bounds and that field's opposing-edge
+differences; HHL/PBL/cloud residuals add ray-height uncertainty to the
+uncertainties of their actual operands. The nonlinear 200-hPa fallback
+propagates the four native height/pressure coordinate intervals and adds its
+separate logarithm/division/height arithmetic enclosure. Unit-aware binary64
+roundoff based on the raw cancelling operands remains a separate term.
+
+The public-access switch never selects a scientific grid. Administrator-only
+access while public rollout is disabled and ordinary public access use the
+same `DiskBudget` decision: dense storage maps to `production-v2`, and the
+versioned `sparse-storage-v1` profile is selected only when the declared disk
+budget requires it. There is no forced-sparse administrator preview.
+
+Horizontal cell boundaries are isolated directly in ECEF as
+$y\cos\lambda_b-x\sin\lambda_b=0$ and
+$z\cos\phi_b-\sqrt{x^2+y^2}\sin\phi_b=0$; rounded `atan2`/`asin` equality is
+never used as a root predicate. For metric and curvature certificates the
+dense Bernstein speed is promoted to $U=\max\{1,U_B\}$. Positive lower bounds
+for $\rho=\sqrt{x^2+y^2+z^2}$ and $p=\sqrt{x^2+y^2}$ are derived directly
+from the midpoint ECEF point, the dynamic dense-evaluation bound, and
+$U\Delta s/2$. The cylindrical radius is not reconstructed as
+$\rho\cos\phi$.
+
+Candidate grid lines are enumerated from an outward angular reach bound for
+every accepted DOPRI interval; endpoint signs are not used as a filter and no
+short interval is silently skipped. Latitude and longitude roots are kept as
+separate certified brackets. They form one compound grid corner only when
+both predicates have an exact zero at the identical path coordinate;
+overlapping finite brackets are not merged. A trajectory that cannot be
+proved to occupy one side because it follows, or lies inside the numerical
+tube of, a grid line is currently unavailable. Supporting that rare case
+requires a future explicit two-cell ownership contract with union derivative
+bounds; bypassing the cell check would not be scientifically valid.
+
+WMO lapse decisions continue to use the provider-neutral compensated residual
+$R=\Delta z+500\,\mathrm{m\,K^{-1}}\Delta T$ with the same binary64 operation
+order in planner and kernel. Reachability proofs enumerate only predicates the
+discrete WMO algorithm can actually read. Smooth HHL, full-level, surface,
+cloud-tier, and WMO-bilinear boundaries retain the secant/curvature
+transversality certificate. At omitted horizontal-cell endpoint slivers, HHL,
+full-level, cloud-tier, and raw bilinear PBL-clamp predicates may additionally
+transport the adjacent interior derivative enclosure by the certified
+second-derivative bound. If neither the Lipschitz nor one-sided proof excludes a
+root, v23 records only the omitted sliver in the limited one-metre budget while
+retaining complete root isolation over the certified interior.
+PBL receives the full root certificate only after the complete interval
+is certified inside one branch of `clamp(MH,500 m,2000 m)`. In a mixed cell,
+the planner strictly isolates the native bilinear decision roots `MH-500 m`
+and `MH-2000 m`, makes their evidence brackets mandatory endpoints, proves one
+branch on each resulting partition, and only then isolates the smooth PBL
+surface. Indeterminate/overlapping branch evidence fails closed. When the
+upper clamp makes the PBL boundary exactly equal to the low-cloud top
+`HSURF+2000 m`, the common zero set is registered once. Path v23 retains the v22
+the algebraically justified single registration of the shared
+`mean-lapse(lower, upper=lower+1)` and instantaneous-lapse zero set.
+
+Path v23 retains the v22 contractor for a monotone root whose existence
+and uniqueness were already proved by strict opposite endpoint residual
+intervals and a derivative enclosure that excludes zero. It preserves that
+ancestor certificate and a separate root enclosure, then intersects the
+enclosure with outward-rounded, safeguarded interval-Newton images
+$I\cap(x-F(x)/D)$ at the endpoints and midpoint. If midpoint contraction is
+insufficient, paired off-centre probes on both sides of the central window are
+evaluated before the refinement budget can be exhausted. A strict residual
+interval may also contract the corresponding monotone side; an interval that
+contains zero is never assigned its nominal sign. Lack of contraction or an
+irreducible evaluation-information floor remains fail-closed. Acceptance still
+requires both outward radii from the represented midpoint to be no greater than
+0.2 mm; the 0.4-mm distinct-root threshold and 0.5-mm side guard are unchanged.
+The historical v25/path-v21 full probe completed 9,029 of 9,030 node-hours; its
+sole unavailable cell was this exact PBL case. In the targeted v26/path-v22
+production rerun, preload of 150 columns took 180.744 s and the cell was
+available after a 1.068-s node calculation. This historical targeted result
+did not stand in for a complete run; the historical v28/path-v22 measurement is
+reported separately below.
+
+The nonlinear 200-hPa fallback surface is reconstructed from native pressure
+and height fields with cancellation-resistant `log1p` ratios. Its complete
+pressure/log/division/height arithmetic error is bounded outward and added to
+every residual sample. A logarithmic denominator that is not separated from
+its arithmetic error, or a reconstructed-height error above the 1-mm
+position/coordinate-evaluation ceiling, fails closed. First- and second-derivative bounds
+then permit the same secant/curvature uniqueness certificate without
+interpolating a finished fallback height.
+
+The 0.5-mm side guard gives endpoint-aware strict floors of
+`0.001000000000001… m` for two physical endpoints,
+`0.0005000000000005… m` for one physical endpoint, and `0.01 m` for two
+adaptive numerical endpoints. Thus 1 mm is the ordinary atomic floor for two
+physical endpoints without a `CertifiedShortInterval`; the evidence-aware
+short-panel path replaces that ordinary floor with its certified open-safe
+span. The standard-rule boundaries are
+$L_{GL2,\min}=0.002366025403786804672\ \mathrm{m}$,
+$L_{GL3,\min}=0.004436491673108144934\ \mathrm{m}$,
+$L_{GL5,\min}=0.010658690662000389306\ \mathrm{m}$, and
+$L_{K15,\min}=0.11703258434509156429\ \mathrm{m}$. Kernel v29 uses independent
+GL2/GL1, GL3/GL2, and GL5/GL3 between their successive boundaries and G7/K15
+above the K15 boundary; a two-numerical-endpoint child always uses G7/K15. A
+physical panel with $L_{GL2,\min}<L$ uses GL2/GL1. At or below that boundary,
+v29 may use the positive one-point midpoint estimate only when three safe
+interior probes remain in one certified partition. The cumulative accounting
+is the sum of midpoint-panel lengths plus the union length of accepted endpoint
+slivers; exactly 1 m is accepted and any greater value fails closed. Such a
+node has `data_quality=limited`, `quadrature_convergence=0`, a non-zero
+`approximation_length_m`, and reason `short_path_approximation`.
+Kernel v29 retains removal of the former
+moment-fitted Q5/Q3 path because endpoint guards could make its signed weights
+arbitrarily ill-conditioned; exact coefficient construction did not bound
+errors in the nonlinear integrand. All selected higher/lower-rule differences
+remain engineering estimators rather than rigorous truncation-error enclosures.
+
+Every ordinary, non-limited panel applies the componentwise
+absolute-plus-relative test, and the accumulated embedded errors of those
+ordinary panels must also fit one global absolute-plus-relative budget. A
+limited midpoint panel instead publishes its explicit engineering allowance
+and reports non-convergence. Unsupported negative estimates of physically
+non-negative components fail closed; only values whose magnitude is covered
+by their error estimator may be clipped to zero. Production performs one
+accepted adaptive science pass and propagates its guarded higher/lower-rule
+estimates. The independent half-tolerance repeat, including its one-time split
+of every original physical/physical interval, is reserved for regression,
+calibration, and release verification. Any partition-signature mismatch fails
+closed: path v23 must certify raw WMO breakpoints before integration, and the
+kernel no longer auto-splits them. Finished seeing, `tau0`, cloud transmission,
+or Overall values are never interpolated.
+
+Cloud cover is not estimated from quadrature samples alone. For each exact
+active CLC vertical-support branch, the reconstructor takes the maximum raw
+CLC across the four horizontal stencil columns, the native temporal-bracket
+endpoints, and only the active adjacent full-level pair (or one constant
+top/bottom extension level). Convex temporal, bilinear-horizontal, and
+vertical reconstruction makes this an upper envelope; `nextUp`, any positive
+excess of the represented horizontal-weight sum above one, and `256·2^-53`
+provide the declared outward binary64 allowance before clamping to `[0,1]`.
+Block cover is the maximum of these atomic envelopes within one cell/tier.
+Vertical-support identity is part of the partition signature and cache key;
+provider certificates for every native full-level transition and raw WMO
+predicate are mandatory, and any mismatch fails closed. The envelope is
+conservative across the active raw stencil but does not take a maximum over an
+entire tier or atmospheric column.
+
+Kernel v29 keeps that envelope separate from the sampled reconstructed CLC.
+Each `(native horizontal cell, AGL tier)` block accumulates its own liquid and
+ice optical depths and the corresponding embedded numerical allowances.
+`cloud_transmission_nominal` uses the reconstructed CLC samples and nominal
+block depths; `cloud_transmission_conservative` uses the raw-support envelope
+and `tau_block + error_block`. The compatibility field
+`effective_cloud_transmission` equals the conservative value, and only this
+conservative value enters directional Overall. Exact-zero blocks are handled
+before log accumulation; other block products use `log1p(T-1)`.
+
+The former 50/100/125-micrometre scales and centimetre-subpanel examples are
+historical failure evidence only. They motivated the complete evaluation-chain
+audit but are not current acceptance thresholds. In particular, the historical
+`0.0251479956 m` and `0.0181762987 m` panels remain evidence about earlier
+kernels; they are above the historical v24 5-mm two-physical-endpoint floor and
+were not rejected by v24 merely because of their length. The completed
+v25/path-v21 regressions preserve distinct 1.53107653-, 1.9401-, 3.7474-, 3.9203-,
+4.802253-, 15.9325455-, 26.7341866-, 31.1486803-, 41.5455627-, and 48.78-mm physical
+intervals and separately verify exact simultaneous-event compounding. This
+documentation does not claim a successful complete
+production smoke test. The numerical policy changes neither the product's
+**maximum of 72 consecutive native hourly forecast frames** nor the catalogue's **exactly 96 hours of
+ordinary retention**; full equations are in the scientific method
+(A26b)–(A28i).
+
+The base synchronizer remains the only downloader and publisher. Dome
+augmentation reuses matching immutable base-run files and acquires only
+missing full- and half-level primitives. Astrodome preload validates the HHL
+GRIB regular-grid metadata against the immutable manifest, constructs targets
+only from exact native integer grid indices, and builds one request-scoped CDO
+`gennn` collection plan. The generated SCRIP file must prove one exact native
+source address, the expected destination address, and a bit-exact unit weight
+for every target. Every remapped GRIB message must reproduce the proven HHL
+grid geometry and scanning order. The worker reuses that plan read-only with `remap` for every
+native field and step. No ray coordinate is a CDO target: project-owned
+four-column bilinear reconstruction is the sole scientific horizontal
+interpolation. The canonical source-index plan is persisted as
+`source_column_plan_digest`. Its production default
+is eight concurrent CDO subprocesses; Horizon uses the same reusable plan and
+the same shared limit. Ordinary ICON-EU `grib_get` point extraction remains on
+the existing provider-versioned point-bundle caches, so repeated requests for
+the same run/cell do not repeat ordinary extraction. A worker never changes `current`: it reads
+`/app/data/models` read-only and writes only the shared directional workspace,
+process-shared lease directory, and its private temporary directory. Result
+publication remains bot-coordinator-owned.
+
+The preceding v28/v22 measured profile is factual: on immutable ICON-EU run
+`2026080812`, preloading 2,863 source columns took `357.118 s`; calculating all
+129 nodes for 72 native hours took 33 min 14 s end to end, with peak cgroup
+memory of 15,127,642,112 bytes. Of 9,288 node-hours, 9,284 were available and
+four sub-GL2 physical spans failed closed as `integration_nonconvergence`.
+It is a historical baseline, not a measurement of the current v29/v23 writer.
+Operational scheduling advertises 30 minutes as guidance, but production configures both the Astrodome
+job and bot-to-worker request deadlines as `0s`: the estimate does not terminate
+a healthy calculation. Explicit cancellation, coordinator shutdown, and
+process shutdown still propagate through the request context.
+
+### 30.3. Queue, cache, and failure isolation
+
+Horizon and Astrodome share one bounded FIFO. Identical calculation identities
+fan out to multiple waiters instead of duplicating work. Queue capacity is
+configured by `ASTRO_DIRECTIONAL_QUEUE_SIZE`; the running-job limit is
+`ASTRO_DIRECTIONAL_CONCURRENCY` (`1..32`, with `1` recommended until measured).
+The old Horizon concurrency field remains a constructor compatibility bound
+and does not affect production scheduling. Ordinary Telegram/VK forecasts keep
+their independent worker limit and do not depend on the directional worker
+being healthy.
+
+The bot coordinator owns admission, cancellation, job ownership, current-run
+guards, and cache identity. The isolated worker owns only synchronous heavy
+execution. Requests cross an authenticated internal HTTP boundary and name an
+already-created workspace below an allow-listed root; model/result bytes are
+not proxied through the bot. A worker crash, timeout, or OOM marks the
+directional job failed but does not stop model synchronization or ordinary
+forecasts.
+
+The configured active-job limit is deliberately enforced at three layers: the
+coordinator starts `ASTRO_DIRECTIONAL_CONCURRENCY` FIFO consumers, the worker
+HTTP handler admits the same number of requests across both kinds, and a
+context-aware N-slot `flock` gate under `data/state/run-leases` spans worker
+processes and `render-horizon`. Kernel lock release on process exit avoids stale
+PID-file recovery. Thus accidental extra worker replicas or an operator CLI
+cannot raise aggregate execution above the configured limit. Queue capacity is
+independently controlled by `ASTRO_DIRECTIONAL_QUEUE_SIZE` and never implies a
+running-job count.
+
+Completed language-neutral datasets are gzip-compressed and atomically
+published. Their identity includes coordinates, run and manifest digest,
+72-hour window, grid/digest, primitive contract, geometry/refraction/science
+versions, and calibration. Calculation-request schema v3 also binds the
+science-path version, apparent-direction contract, and SHA-256 of the complete
+configured science calibration; the same digest is retained in the dataset.
+The narrow `astrodome-dataset-writer-v2` identity also participates in the
+calculation cache key, so a writer correction regenerates the payload without
+claiming a different scientific formula or dataset schema.
+An earlier request or a bot/worker calibration mismatch fails closed rather
+than hitting the current cache. Run leases prevent cleanup of source data during a
+calculation. TTL, entry caps, the project disk ceiling, free-byte reserve, and
+free-inode reserve bound all staging, completed, leased, and temporary state.
+
+The directional science cache and the user-visible visualization catalogue
+have separate lifecycles. As soon as the server observes a ready job, it
+persists the result as an atomically published gzip JSON file below
+`data/web/astrodome`; it does not wait for the browser or a later archive job.
+PostgreSQL stores only owner-scoped metadata, digest, exact generated filename,
+and expiry, never the scientific payload. The latest successful calculation
+for the same authenticated user and canonical coordinates atomically replaces
+the previous catalogue pointer and starts a new lifetime of **exactly 96
+hours** from successful archival. A queued, failed, or cancelled rerun neither
+resets that expiry nor replaces the existing ready visualization. Catalogue
+reads recheck owner and expiry on the server. Startup and hourly maintenance
+remove expired rows and only their validated exact files, then remove orphaned
+internally named files left by an interrupted publication. Browser cache is
+therefore neither persistence nor authorization.
+
+One explicitly marked `admin_fixture` is a narrow exception: it has no expiry,
+is excluded from cleanup and ordinary per-user replacement, and is listed for
+every current configured Telegram administrator. Ordinary users never see it.
+The fixture, stored-visualization decoder, current writer, calculator, browser,
+and cache accept only v29/v23 with an explicitly supported pinned grid profile;
+the production web writer uses `production-v2`. An older fixture is not migrated
+or reinterpreted and must be replaced by a successful current calculation.
+The serialized high-quality value is `good`.
+When a successful archive has the fixture's canonical coordinates, promotion
+compares the exact `unavailable / total` fractions by integer cross
+multiplication. The shared permanent fixture is replaced atomically by a result
+whose unavailable fraction is smaller or equal; only a strictly worse,
+invalid, failed, or cancelled result leaves it unchanged. Promotion is
+independent of the requesting administrator's ordinary 96-hour copy.
+
+The web process also reconciles a bounded set of pending job IDs with the
+internal gateway on a short exponentially backed-off interval. Consequently,
+a successful job is archived even when the user closes the page before the
+browser observes completion; transient gateway failures leave both pending
+metadata and any older ready visualization intact.
+
+This catalogue has non-configurable defensive limits: both a decoded dataset
+and its stored gzip member must fit within `128 MiB`; the complete catalogue is
+limited to `8192` files and `32 GiB`. The gzip stream is validated while the
+ready result is published and is stored already compressed. There is therefore
+no 24-hour compression/archive task: such a task would add a second state
+transition without reducing retained bytes.
+
+### 30.4. Web, identity, and access control
+
+The web process is a thin Go gateway. Telegram OpenID Connect establishes a
+server-side session; it does not trust a browser-supplied Telegram user ID.
+The OIDC flow binds `state`, nonce, PKCE, redirect origin, and the expected bot
+client, then validates the signed ID token. Session cookies are
+`Secure`, `HttpOnly`, and `SameSite=Lax`; state-changing routes also require
+same-origin CSRF protection. Saved points are read through a dedicated
+least-privilege PostgreSQL role. Job/status/dataset endpoints enforce ownership
+and return `404` for another user's opaque identifier.
+
+The account page has explicit locale URLs,
+`/en/account/sky-conditions` and `/ru/account/sky-conditions`. The root is a
+stable `x-default` and always redirects temporarily to English; the visible
+language control is an ordinary link between the two equivalent URLs. The URL
+is authoritative for the current document. For an authenticated account, an
+explicit switch is persisted as `bot_users.preferred_web_language` in
+PostgreSQL and synchronized with active server-side sessions; opening the
+account on the other locale redirects to that saved choice. The preference is
+also carried through the OIDC transaction and callback. Before the external module applies that
+locale, the shell shows only a neutral bootstrap mark; authentication-dependent
+controls remain hidden until `/api/v1/me` resolves. This prevents both an
+English-content flash and a false signed-out flash. Alternate/canonical link
+headers make the route structure ready for future public localized pages, but
+the whole development host currently sends `X-Robots-Tag: noindex` and an HTML
+`noindex` directive; private account pages should remain non-indexable even
+after public pages are opened to crawlers.
+
+The rollout switch has deliberately narrow semantics:
+
+- `ASTRO_ASTRODOME_ENABLED=true` permits every authenticated Telegram OIDC
+  user;
+- `false` permits only IDs in `ASTRO_TELEGRAM_ADMIN_IDS` for controlled access;
+- `false` plus an empty admin list denies everyone.
+
+It is not a downloader/worker kill switch. Both web and bot admission enforce
+the same rule; disagreement fails closed.
+
+### 30.5. Browser renderer and edge
+
+The dependency-free client validates the dataset cardinality, ordering,
+versions, geometry digest, finite values, nullable states, and timestamps
+before drawing anything. WebGL2 is the primary inside-dome view; Canvas 2D and
+an HTML table are equivalent fallbacks. Cells use the exact node value and a
+fixed quantitative palette. Grid, compass, selection glow, and astronomical
+decoration are visual aids only and never modify the data colour. The star
+field is a background layer behind the scientific mesh; the page exposes one
+visible selected-cell inspector, while its live-region duplicate is
+screen-reader-only. View/fullscreen controls are placed clear of the compass
+in both normal and fullscreen layouts. Keyboard,
+touch, focus, contrast, and reduced-motion paths are retained.
+
+`alice-bg` terminates public TLS and proxies to a source-IP-restricted,
+certificate-pinned TLS origin on `dragon-he`; the origin then reaches the web
+container over loopback. The web process reaches only the bot's internal
+gateway; it cannot address the worker or model store directly. Deployment
+order, secret files, least-privilege grants, nginx validation, and health
+probes are specified in [the deployment runbook](../deploy/README.md).
+
+### 30.6. Current rollout state
+
+Grid, physics, acquisition contracts, shared coordinator/worker boundary,
+OIDC/session/CSRF handlers, asynchronous API, WebGL2/Canvas client, and
+deployment templates are implemented, and the controlled administrator site
+is deployed. Production-v2/v29/v23 is the current writer; its complete
+current-run release measurement is recorded only after an immutable full
+rerender. The preceding v28/v22 baseline measured 9,284 available of 9,288
+node-hours in 33 min 14 s. The first five-hour finer-grid
+comparison found material low-elevation discretization, so multi-site and
+multi-run angular-grid acceptance criteria remain required. Repeated cold/warm
+CPU/RSS/disk/payload benchmarks, final edge/origin security probes, ordinary-forecast
+non-regression, rollback smoke tests, and observational validation remain
+rollout gates before public access.

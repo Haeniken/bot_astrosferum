@@ -59,12 +59,14 @@ when the environment variable is absent.
 
 This heavier analysis is available only when the selected forecast provider is
 ICON-EU. A forecast served by ICON Global never contains its action button.
-This production feature has its own queue and calculation limit.
+Production execution shares one bounded directional FIFO and one configurable
+active-slot limit with Astrodome; it remains independent of ordinary forecast
+workers. The recommended rollout value is one active heavy calculation.
 
 | Variable | Required | Recommended value | Effect |
 |---|---|---|---|
-| `ASTRO_HORIZON_ANALYSIS_ENABLED` | No | `true` | Overrides `horizon_analysis.enabled`. When `false`, the application does not start the horizon-analysis queue or its data source and does not show the action button. The ordinary seven-chart forecast is unaffected. |
-| `ASTRO_HORIZON_CONCURRENCY` | No | `1` | Maximum number of Horizon calculations running at once. It is independent from `ASTRO_FORECAST_CONCURRENCY`. |
+| `ASTRO_HORIZON_ANALYSIS_ENABLED` | No | `true` | Overrides `horizon_analysis.enabled`. When `false`, the application does not initialize the Horizon data source or show the action button. The shared directional FIFO may still serve Astrodome; the ordinary seven-chart forecast is unaffected. |
+| `ASTRO_HORIZON_CONCURRENCY` | No | `1` | Legacy Horizon constructor bound. Keep `1`; production scheduling is controlled only by `ASTRO_DIRECTIONAL_CONCURRENCY`, independently of `ASTRO_FORECAST_CONCURRENCY`. |
 
 The bundled Compose file always sets this variable, using `true` when it is
 absent from `.env`. Consequently its environment value always wins over YAML
@@ -79,7 +81,7 @@ horizon_analysis:
   enabled: true
   queue_size: 4
   concurrency: 1
-  cdo_workers: 2
+  cdo_workers: 8
   job_timeout: 10m
   cache_ttl: 48h
   cache_entries: 128
@@ -89,26 +91,162 @@ horizon_analysis:
 | YAML field | Recommended default | Effect |
 |---|---:|---|
 | `enabled` | `true` | Enables the ICON-EU-only feature when no environment override is present. `false` prevents the queue and source from starting and removes the action button. Under bundled Compose, use the environment switch described above. |
-| `queue_size` | `4` | Bounds the number of heavy jobs waiting for the dedicated worker. A full queue rejects new work instead of slowing ordinary forecasts through unbounded backlog. |
-| `concurrency` | `1` | Number of Horizon jobs executed concurrently; Compose overrides it through `ASTRO_HORIZON_CONCURRENCY`. |
-| `cdo_workers` | `2` | Limits concurrent CDO subprocesses used by the Horizon source. The conservative default reserves capacity for ordinary forecast requests. |
+| `queue_size` | `4` | Legacy local-constructor bound. Production admission is bounded by `directional.queue_size`; this field does not create a second queue. |
+| `concurrency` | `1` | Legacy local-constructor bound. Keep `1`; it never raises the shared production worker concurrency. |
+| `cdo_workers` | `8` | Shared limit for concurrent CDO subprocesses used by Horizon and Astrodome native-column preload in the isolated directional worker. Validation accepts `1..16`, and both runners consume this exact setting. Astrodome validates every source-message grid and uses `gennn` only to collect exact native-index targets before its own bilinear reconstruction; SCRIP addresses and bit-exact unit weights are proved before the plan is reused read-only through `remap`. Raising this value requires CPU, memory, and ordinary-forecast non-regression measurements. |
 | `job_timeout` | `10m` | Maximum execution time of one horizon-analysis job before it is cancelled. |
 | `cache_ttl` | `48h` | Maximum age of a completed cached result before it becomes ineligible for reuse. Expired entries are removed at startup, periodically while the worker runs, and during cache publication. |
 | `cache_entries` | `128` | Maximum number of completed horizon-analysis results retained in its bounded cache. |
 | `estimated_duration` | `3m` | User-facing duration estimate. It does not change the timeout or worker scheduling and is not a guaranteed completion time. |
 
 Keep the recommended limits unless load measurements justify changing them.
-They bound this optional workload independently; enabling it does not make the
-feature available for ICON Global points.
+Enabling Horizon does not make it available for ICON Global points.
 
-## Shared Overall and Horizon calibration
+## Shared directional execution and Astrodome
+
+Horizon and the directional atmospheric Astrodome share one coordinator, one bounded FIFO and
+one isolated worker service. The active-slot count is explicit and common to
+the bot coordinator, worker and operator CLI. Keep it at one until full-dome
+memory, CPU and ordinary-forecast latency benchmarks justify more.
+
+| Variable | Required | Recommended value | Effect |
+|---|---|---|---|
+| `ASTRO_DIRECTIONAL_QUEUE_SIZE` | No | `8` | Maximum queued Horizon + Astrodome jobs. A full FIFO rejects new admission; identical identities may share one calculation. |
+| `ASTRO_DIRECTIONAL_CONCURRENCY` | No | `1` until benchmarked | Shared active Horizon + Astrodome calculations. Validation accepts `1..32`. Every additional Astrodome slot can consume the full resident limit, so bot, worker, and operator CLI must use the same value and the cgroup/disk budgets must be revalidated before increasing it. |
+| `ASTRO_ASTRODOME_ENABLED` | No | `true` after rollout | Public-access switch, not a worker kill switch. `true` permits every authenticated Telegram OIDC user; `false` permits only `ASTRO_TELEGRAM_ADMIN_IDS`; `false` plus an empty list denies everyone. |
+| `ASTRO_ASTRODOME_RESIDENT_LIMIT` | No | `10GiB` | Maximum projected resident footprint of preloaded native ICON-EU columns for one Astrodome job. Validation accepts `1GiB..20GiB`; keep it below the worker cgroup hard limit with headroom for Go, CDO/ecCodes, and charged file cache. |
+| `ASTRO_ASTRODOME_JOB_TIMEOUT` | No | `0s` | Astrodome wall-clock deadline. `0s` disables it so a live calculation is not cancelled by an estimate; positive values must be `1m..1h`. Explicit user cancellation and process shutdown remain effective. |
+| `ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT` | No | `0s` | Bot-to-worker HTTP deadline. `0s` disables the transport cutoff; positive values must be `1s..8h`. It must be `0s` when the Astrodome job timeout is disabled, or exceed a finite Astrodome job timeout. |
+| `ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` | No | `24g` until benchmarked | Compose hard cgroup limit for Go, CDO/ecCodes children, and charged file cache. It is an initial conservative candidate, not a measured minimum. |
+| `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` | No | `12GiB` until benchmarked | Go heap target inside the worker hard limit. It is not a total-process or cgroup limit. |
+| `ASTRO_DIRECTIONAL_WORKER_CPU_LIMIT` | No | `8.00` on the 12-thread production host | Compose CPU quota for the isolated worker. The retained single directional slot leaves four logical CPUs for model sync and ordinary forecasts. Rebenchmark before applying this host-specific value elsewhere. |
+
+Relevant YAML defaults are:
+
+```yaml
+directional:
+  queue_size: 8
+  concurrency: 1
+  completed_ttl: 48h
+  completed_entries: 128
+  estimated_horizon: 3m
+  estimated_astrodome: 30m
+  internal_request_timeout: 0s
+astrodome:
+  enabled: true
+  job_timeout: 0s
+  cache_ttl: 48h
+  cache_entries: 64
+  resident_limit: 10GiB
+  project_disk_cap: 400GiB
+  min_free_space: 100GiB
+  min_free_inodes: 10000
+```
+
+The current bounded profile measured a 300-column preload at `244.151 s` with
+four CDO workers and five production-v2 node calculations at
+`0.969..1.423 s` each. For the production-v2 geometry (129 nodes over 72
+frames) on the configured eight-CPU worker, including the existing per-frame
+scheduling bound, these samples project `22.8..33.1 min`. Production preload
+is configured for eight CDO workers, but the documentation does not infer an
+unmeasured speed-up from the worker-count change. The `30m` value is therefore
+queue/UI scheduling guidance only, not a completion guarantee or an execution
+deadline. Production uses `0s` for both the Astrodome job timeout and the
+bot-to-worker transport timeout, so a healthy calculation is not truncated by
+that estimate. Explicit cancellation, coordinator shutdown and process
+shutdown still propagate through the request context. Operators may configure
+finite guards within the validation ranges above; the transport guard must then
+exceed the job guard, and it cannot remain finite while the job guard is
+disabled. The historical v28/path-v22 baseline covered all 9,288
+node-hours in 33 min 14 s: 9,284 were available and four sub-GL2 physical
+spans failed closed. This single run does not replace repeated cold/warm,
+simultaneous-sync, payload, or observational gates.
+Completed results are
+bounded by TTL and entry count. Admission also accounts for staging, leases,
+temporary data, the complete project disk ceiling, free bytes, and free
+inodes. Queue capacity limits waiting jobs; directional concurrency limits
+running jobs and is not inferred from queue size. Dense storage maps to the
+production-v2 geometry: eight `10..80°` rings with 16 azimuths each plus one
+zenith, or 129 nodes/frame and 9,288 node-hours over 72 frames. The versioned
+97-node sparse profile is selected only when the storage budget requires it;
+the historical 353-node dense-v1 profile is archive-only. Access mode does not
+override this `DiskBudget` choice: administrators do not receive a forced
+sparse profile while public access is disabled. Do not lower the worker limits
+or introduce finite deadlines until repeated cold/warm full-dome benchmarks pass.
+
+## Public web gateway
+
+The site is a separate Compose project. No secret value belongs in `.env`;
+these variables name mode-`0600` secret files or non-secret endpoints.
+
+| Variable | Required when web is enabled | Recommended value | Effect |
+|---|---|---|---|
+| `ASTRO_WEB_ENABLED` | Yes | `false` until OIDC/edge provisioning is complete | Starts the web application only when explicitly enabled. |
+| `ASTRO_WEB_LISTEN` | No | `:8080` | Listen address inside the web container. |
+| `ASTRO_WEB_PUBLIC_ORIGIN` | Yes | `https://astrosferum.com` | Exact public origin used for redirects, Origin checks, and secure cookies. |
+| `ASTRO_WEB_OIDC_CLIENT_ID` | Yes | Positive Telegram bot ID issued for OIDC | Expected OIDC audience/client identifier. |
+| `ASTRO_WEB_OIDC_CLIENT_SECRET_FILE` | Yes | `/run/secrets/telegram_oidc_client_secret` | Telegram OIDC client-secret file. BotFather must register the public origin and exact `/auth/telegram/callback` URI and retain the default `RS256` signing algorithm. |
+| `ASTRO_WEB_CSRF_KEY_FILE` | Yes | `/run/secrets/web_csrf_key` | At least 32 random bytes for CSRF/session binding. |
+| `ASTRO_WEB_EDGE_CREDENTIAL_FILE` | Yes | `/run/secrets/edge_credential` | Credential required on the pinned Alice-to-Dragon origin hop. |
+| `ASTRO_WEB_DIRECTIONAL_GATEWAY_URL` | Yes | `http://bot_astrosferum:18083` | Internal bot admission gateway; the web process never calls the worker directly. |
+| `ASTRO_WEB_DIRECTIONAL_CREDENTIAL_FILE` | Yes | `/run/secrets/directional_credential` | Shared internal request credential mounted in web, bot, and worker. |
+| `ASTRO_WEB_DB_USER` | Yes | `bot_astrosferum_web` | Dedicated least-privilege PostgreSQL role; never use the database owner. |
+| `ASTRO_WEB_DB_PASSWORD_FILE` | Yes | `/run/secrets/web_db_password` | Password file for the web database role. |
+
+Both Compose projects must receive the same `ASTRO_ASTRODOME_ENABLED` and
+`ASTRO_TELEGRAM_ADMIN_IDS`; a mismatch fails closed. Complete secret creation,
+database grants, origin TLS, nginx bootstrap, validation, and startup order are
+in the [deployment runbook](../deploy/README.md).
+
+### Saved Astrodome visualization retention
+
+Saved visualizations deliberately have no additional environment variables.
+The server archives a ready result immediately as gzip JSON and stores only
+owner-scoped catalogue metadata in PostgreSQL. A successful rerun for the same
+user and canonical coordinates replaces the previous file and starts a fresh
+96-hour TTL; a pending, failed, or cancelled rerun preserves both the prior
+file and its original expiry. Background pending-job reconciliation makes this
+independent of whether the browser remains open.
+
+One database row may be explicitly pinned as `admin_fixture`. It has no expiry,
+is excluded from periodic cleanup and ordinary coordinate-key replacement, and
+is listed for every ID currently configured in `ASTRO_TELEGRAM_ADMIN_IDS`.
+Ordinary users cannot list or open it. This is an operator-created regression
+fixture, not an environment-controlled retention class; additional permanent
+rows are not created automatically. When a successfully archived calculation
+has exactly the fixture's canonical coordinates, the catalogue compares the
+exact fractions `unavailable / total` without floating-point rounding. It
+atomically replaces the shared fixture when the new fraction is smaller or
+equal; only a strictly worse, invalid, failed, or cancelled result leaves the
+fixture unchanged. The promoted file is retained independently of the
+ordinary user's 96-hour copy and remains visible to current and future
+configured administrators.
+
+The pinned fixture, saved-result decoder, writer, browser, and calculation
+cache accept only the current v29/path-v23 identity with an explicitly
+supported pinned grid profile; the production web writer uses `production-v2`.
+Older payloads are not migrated or reinterpreted and must be replaced by a
+successful current calculation. The only supported serialized high-quality
+value is `good`.
+
+The fixed safety contract is `128 MiB` maximum for the decoded dataset (and
+also for the stored gzip member), `32 GiB` for the complete visualization
+directory, and `8192` files. Results are compressed and validated when created,
+so there is no separate 24-hour archive/compression job. These constants are
+intentional integrity and storage bounds, not tuning knobs; changing them
+requires code review, tests, and revalidation of the web cgroup and volume.
+
+## Shared Overall, Horizon, and Astrodome calibration
 
 The remaining optional variables form one calibration shared by the Overall
-Astronomy Index and the optional Horizon directional index. The repository
+Astronomy Index, the optional Horizon directional index, and Astrodome. The repository
 defaults below are the recommended production profile; change them as one
 reviewed calibration set rather than tuning individual values casually. The
-complete calibration is part of each Horizon cache key, so a change produces a
-new identity instead of reusing a result calculated with old values. Invalid or
+complete calibration is part of each Horizon/Astrodome cache key. Astrodome
+calculation-request schema v3 carries the SHA-256 of its canonical complete
+calibration, the worker rejects a bot/worker digest mismatch, and the dataset
+retains the same digest as provenance. A change therefore produces a new
+identity instead of reusing a result calculated with old values. Invalid or
 inconsistent values stop the application during configuration validation.
 
 | Variable | Recommended | Effect |
