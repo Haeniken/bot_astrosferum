@@ -34,6 +34,14 @@ func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, _ string, a
 		runner.active--
 		runner.mu.Unlock()
 	}()
+	for _, argument := range args {
+		if strings.HasPrefix(argument, "gennn,") {
+			if err := os.WriteFile(args[len(args)-1], []byte("synthetic weights"), 0o600); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+	}
 	points, err := horizonSeriesRunnerPoints(args)
 	if err != nil {
 		return nil, err
@@ -96,6 +104,10 @@ func horizonSeriesRunnerPoints(args []string) ([]batchPoint, error) {
 	for _, argument := range args {
 		if strings.HasPrefix(argument, "-remapnn,") {
 			gridPath = strings.TrimPrefix(argument, "-remapnn,")
+			break
+		}
+		if strings.HasPrefix(argument, "-remap,") {
+			gridPath = strings.SplitN(strings.TrimPrefix(argument, "-remap,"), ",", 2)[0]
 			break
 		}
 	}
@@ -178,7 +190,7 @@ func TestHorizonSeriesBuilds73ExactHoursAndInterpolatesRawPressureState(t *testi
 		t.Fatalf("computed horizon frames = %d", len(frames))
 	}
 	calls, maximum := runner.counts()
-	wantCalls := 1 + 25 + 2*73
+	wantCalls := 1 + 1 + 25 + 2*73
 	if calls != wantCalls || maximum > 2 {
 		t.Fatalf("CDO batch calls/max concurrency = %d/%d, want %d/<=2", calls, maximum, wantCalls)
 	}

@@ -23,6 +23,11 @@ type batchValueKey struct {
 	level float64
 }
 
+type batchCoordinateIdentity struct {
+	latitudeMicrodegrees  int64
+	longitudeMicrodegrees int64
+}
+
 // batchValues contains one normalized field map for every target point. CDO
 // reads the source GRIB once and performs all nearest-neighbour lookups in the
 // same process; the work therefore scales with model files rather than with
@@ -61,10 +66,98 @@ func (extractor batchExtractor) extract(ctx context.Context, source string, poin
 	if err := writeBatchGrid(gridPath, points); err != nil {
 		return nil, err
 	}
+	return extractor.extractWithOperator(ctx, source, points, expectedMessages, runner, "-remapnn,"+gridPath)
+}
+
+// prepareRemapPlan computes the ICON-EU nearest-neighbour search once for an
+// immutable target footprint. The same read-only SCRIP weights are safe to use
+// concurrently for every field and forecast step on that unchanged source
+// grid; they contain no meteorological values.
+func (extractor batchExtractor) prepareRemapPlan(
+	ctx context.Context,
+	geometrySource string,
+	points []batchPoint,
+) (*batchRemapPlan, error) {
+	return prepareBatchRemapPlan(ctx, extractor.runner, extractor.tempRoot, geometrySource, points)
+}
+
+func prepareBatchRemapPlan(
+	ctx context.Context,
+	runner CommandRunner,
+	tempRoot string,
+	geometrySource string,
+	points []batchPoint,
+) (*batchRemapPlan, error) {
+	if strings.TrimSpace(geometrySource) == "" || len(points) == 0 {
+		return nil, fmt.Errorf("batch remap plan input is incomplete")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if runner == nil {
+		runner = execRunner{}
+	}
+	if strings.TrimSpace(tempRoot) == "" {
+		tempRoot = os.TempDir()
+	}
+	if err := os.MkdirAll(tempRoot, 0o750); err != nil {
+		return nil, fmt.Errorf("create batch temp root: %w", err)
+	}
+	directory, err := os.MkdirTemp(tempRoot, "spatial-remap-")
+	if err != nil {
+		return nil, fmt.Errorf("create batch remap directory: %w", err)
+	}
+	plan := &batchRemapPlan{
+		directory:   directory,
+		gridPath:    filepath.Join(directory, "points.grid"),
+		weightsPath: filepath.Join(directory, "nearest-neighbour-weights.nc"),
+	}
+	if err := writeBatchGrid(plan.gridPath, points); err != nil {
+		_ = plan.Close()
+		return nil, err
+	}
+	output, err := runner.CombinedOutput(ctx, "cdo",
+		"-s", "gennn,"+plan.gridPath,
+		"-sellevel,1", "-selname,HHL", geometrySource, plan.weightsPath)
+	if err != nil {
+		_ = plan.Close()
+		return nil, fmt.Errorf("generate batch nearest-neighbour weights: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return plan, nil
+}
+
+func (extractor batchExtractor) extractWithPlan(
+	ctx context.Context,
+	source string,
+	points []batchPoint,
+	expectedMessages int,
+	plan *batchRemapPlan,
+) (batchValues, error) {
+	if plan == nil || strings.TrimSpace(plan.gridPath) == "" || strings.TrimSpace(plan.weightsPath) == "" {
+		return nil, fmt.Errorf("batch remap plan is incomplete")
+	}
+	runner := extractor.runner
+	if runner == nil {
+		runner = execRunner{}
+	}
+	return extractor.extractWithOperator(
+		ctx, source, points, expectedMessages, runner,
+		"-remap,"+plan.gridPath+","+plan.weightsPath,
+	)
+}
+
+func (extractor batchExtractor) extractWithOperator(
+	ctx context.Context,
+	source string,
+	points []batchPoint,
+	expectedMessages int,
+	runner CommandRunner,
+	remapOperator string,
+) (batchValues, error) {
 	output, err := runner.CombinedOutput(ctx, "cdo",
 		"-s", "--precision", "12",
 		"-outputtab,name:16,lev:12,lon:16,lat:16,value:24",
-		"-remapnn,"+gridPath,
+		remapOperator,
 		source,
 	)
 	if err != nil {
@@ -80,7 +173,7 @@ func (extractor batchExtractor) extract(ctx context.Context, source string, poin
 }
 
 func writeBatchGrid(path string, points []batchPoint) error {
-	seen := make(map[string]struct{}, len(points))
+	seen := make(map[batchCoordinateIdentity]struct{}, len(points))
 	longitudes := make([]string, len(points))
 	latitudes := make([]string, len(points))
 	for index, point := range points {
@@ -105,7 +198,7 @@ func writeBatchGrid(path string, points []batchPoint) error {
 }
 
 func parseBatchOutput(output []byte, points []batchPoint, expectedMessages int) (batchValues, error) {
-	pointIndex := make(map[string]int, len(points))
+	pointIndex := make(map[batchCoordinateIdentity]int, len(points))
 	for index, point := range points {
 		pointIndex[batchCoordinateKey(point.Latitude, point.Longitude)] = index
 	}
@@ -167,8 +260,11 @@ func parseBatchOutput(output []byte, points []batchPoint, expectedMessages int) 
 	return result, nil
 }
 
-func batchCoordinateKey(latitude, longitude float64) string {
-	return fmt.Sprintf("%.0f/%.0f", math.Round(latitude*batchCoordinateScale), math.Round(normalizeBatchLongitude(longitude)*batchCoordinateScale))
+func batchCoordinateKey(latitude, longitude float64) batchCoordinateIdentity {
+	return batchCoordinateIdentity{
+		latitudeMicrodegrees:  int64(math.Round(latitude * batchCoordinateScale)),
+		longitudeMicrodegrees: int64(math.Round(normalizeBatchLongitude(longitude) * batchCoordinateScale)),
+	}
 }
 
 func normalizeBatchLongitude(longitude float64) float64 {

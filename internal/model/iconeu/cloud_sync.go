@@ -91,7 +91,7 @@ func (client *Client) AugmentCloud(ctx context.Context, dataRoot string, loaded 
 	if err := os.MkdirAll(incoming, 0o750); err != nil {
 		return LoadedManifest{}, fmt.Errorf("create cloud incoming directory: %w", err)
 	}
-	finalName := "cloud-hourly-v4"
+	finalName := "cloud-hourly-v5-full-hhl"
 	finalDirectory := filepath.Join(loaded.Directory, finalName)
 	oldDirectory := ""
 	if len(loaded.CloudSteps) > 0 {
@@ -379,16 +379,15 @@ func (client *Client) validateCloudMetadata(ctx context.Context, path string, ex
 }
 
 func cloudGeometryLevels() []int {
-	seen := make(map[int]bool, len(DefaultCloudModelLevels)*2)
-	for _, level := range DefaultCloudModelLevels {
-		seen[level] = true
-		seen[level+1] = true
+	// HHL is time invariant and comparatively small. Keep every native ICON-EU
+	// half level in the base run so both the point forecast and directional
+	// products share one complete vertical geometry. Astrodome must reconstruct
+	// physical height along each ray; the former sparse union around the point
+	// forecast levels is insufficient for that calculation.
+	levels := make([]int, domeHalfLevelCount)
+	for index := range levels {
+		levels[index] = index + 1
 	}
-	levels := make([]int, 0, len(seen))
-	for level := range seen {
-		levels = append(levels, level)
-	}
-	sort.Ints(levels)
 	return levels
 }
 

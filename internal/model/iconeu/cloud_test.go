@@ -106,6 +106,18 @@ func TestCloudSurfaceElevationUsesHHL75(t *testing.T) {
 	}
 }
 
+func TestCloudGeometryPublishesEveryNativeHalfLevel(t *testing.T) {
+	levels := cloudGeometryLevels()
+	if len(levels) != domeHalfLevelCount {
+		t.Fatalf("cloud geometry levels = %d, want %d", len(levels), domeHalfLevelCount)
+	}
+	for index, level := range levels {
+		if want := index + 1; level != want {
+			t.Fatalf("cloud geometry level[%d] = %d, want %d", index, level, want)
+		}
+	}
+}
+
 func TestCloudFieldURLs(t *testing.T) {
 	client := NewClient()
 	want := "https://opendata.dwd.de/weather/nwp/icon-eu/grib/12/clc/icon-eu_europe_regular-lat-lon_model-level_2026071912_003_25_CLC.grib2.bz2"
@@ -137,6 +149,11 @@ func TestManifestHourlyCloudRequiresGroundLayerThermodynamics(t *testing.T) {
 	if !manifest.HasHourlyCloud() {
 		t.Fatal("current ground-layer cloud publication was rejected")
 	}
+	manifest.CloudGeometry.Messages--
+	if manifest.HasHourlyCloud() {
+		t.Fatal("legacy partial HHL geometry was accepted as current")
+	}
+	manifest.CloudGeometry.Messages++
 	manifest.CloudVariables = []string{"ccl", "pres", "qc", "qi", "HHL"}
 	if manifest.HasHourlyCloud() {
 		t.Fatal("legacy cloud publication was accepted as current")

@@ -50,6 +50,11 @@ var surfaceFields = []surfaceField{
 	{Directory: "tqc", Code: "TQC", ShortName: "TQC"},
 	{Directory: "tqi", Code: "TQI", ShortName: "TQI"},
 	{Directory: "mh", Code: "MH", ShortName: "mld"},
+	// Keep unreduced surface pressure and two-metre specific humidity for the
+	// Astrodome refractivity lower boundary. QV_2M shares its vertical anchor
+	// with T_2M; appending both preserves the established 17-message order.
+	{Directory: "ps", Code: "PS", ShortName: "sp"},
+	{Directory: "qv_2m", Code: "QV_2M", ShortName: "2sh"},
 }
 
 // AugmentSurface atomically adds independently validated surface bundles to a
@@ -57,7 +62,7 @@ var surfaceFields = []surfaceField{
 // section or all hourly steps for forecast hours 0 through 78.
 func (client *Client) AugmentSurface(ctx context.Context, dataRoot string, loaded LoadedManifest) (LoadedManifest, error) {
 	client.defaults()
-	if loaded.HasHourlySurface() {
+	if loaded.HasAstrodomeSurface() {
 		return loaded, nil
 	}
 	stateDirectory := filepath.Join(dataRoot, "state")
@@ -204,6 +209,22 @@ func hasAllSurfaceVariables(variables []string) bool {
 		seen[variable] = true
 	}
 	for _, field := range surfaceFields {
+		if !seen[field.ShortName] {
+			return false
+		}
+	}
+	return true
+}
+
+func hasOperationalSurfaceVariables(variables []string) bool {
+	seen := make(map[string]bool, len(variables))
+	for _, variable := range variables {
+		seen[variable] = true
+	}
+	for _, field := range surfaceFields {
+		if field.ShortName == "sp" || field.ShortName == "2sh" {
+			continue
+		}
 		if !seen[field.ShortName] {
 			return false
 		}

@@ -13,7 +13,8 @@ import (
 
 const (
 	ManifestSchemaVersion      = 1
-	SurfaceBundleSchemaVersion = 17
+	SurfaceLegacySchemaVersion = 17
+	SurfaceBundleSchemaVersion = 19
 	HourlySurfaceStepCount     = 79 // ICON-EU is hourly through forecast hour +78.
 )
 
@@ -180,7 +181,24 @@ func (manifest Manifest) HasSurface() bool {
 }
 
 func (manifest Manifest) HasHourlySurface() bool {
-	if !manifest.HasSurface() || len(manifest.SurfaceSteps) != HourlySurfaceStepCount || !hasAllSurfaceVariables(manifest.SurfaceVariables) {
+	if !manifest.HasSurface() || len(manifest.SurfaceSteps) != HourlySurfaceStepCount ||
+		!hasOperationalSurfaceVariables(manifest.SurfaceVariables) {
+		return false
+	}
+	for _, step := range manifest.SurfaceSteps {
+		if step.Messages != len(manifest.SurfaceVariables) || step.Messages < SurfaceLegacySchemaVersion {
+			return false
+		}
+	}
+	return true
+}
+
+// HasAstrodomeSurface is deliberately stricter than HasHourlySurface. An
+// already published legacy bundle stays usable by ordinary forecasts and
+// Horizon while PS/QV_2M are downloaded and atomically published, but it must
+// never be admitted as the lower boundary of an Astrodome refraction field.
+func (manifest Manifest) HasAstrodomeSurface() bool {
+	if !manifest.HasHourlySurface() || !hasAllSurfaceVariables(manifest.SurfaceVariables) {
 		return false
 	}
 	for _, step := range manifest.SurfaceSteps {

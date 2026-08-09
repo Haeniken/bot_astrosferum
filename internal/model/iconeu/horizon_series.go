@@ -62,11 +62,18 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 	}
 
 	started := time.Now()
-	geometryValues, err := store.extractor.extract(
+	geometryPath := filepath.Join(manifest.Directory, manifest.CloudGeometry.File)
+	remapPlan, err := store.extractor.prepareRemapPlan(ctx, geometryPath, points)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = remapPlan.Close() }()
+	geometryValues, err := store.extractor.extractWithPlan(
 		ctx,
-		filepath.Join(manifest.Directory, manifest.CloudGeometry.File),
+		geometryPath,
 		points,
 		manifest.CloudGeometry.Messages,
+		remapPlan,
 	)
 	if err != nil {
 		return nil, err
@@ -133,8 +140,8 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 		go func() {
 			defer group.Done()
 			for job := range jobChannel {
-				values, extractionError := store.extractor.extract(
-					workContext, filepath.Join(manifest.Directory, job.file), points, job.messages,
+				values, extractionError := store.extractor.extractWithPlan(
+					workContext, filepath.Join(manifest.Directory, job.file), points, job.messages, remapPlan,
 				)
 				select {
 				case resultChannel <- horizonSeriesExtraction{job: job, values: values, err: extractionError}:

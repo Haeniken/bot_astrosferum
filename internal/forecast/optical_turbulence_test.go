@@ -2,8 +2,81 @@ package forecast
 
 import (
 	"math"
+	"math/big"
 	"testing"
 )
+
+func TestWMOThermalLapseResidualMatchesThresholdAtAndAroundEquality(t *testing.T) {
+	t.Parallel()
+
+	lowerHeight, upperHeight := 6000.0, 6500.0
+	lowerTemperature := 270.0
+	equalTemperature := 269.0
+	if residual := WMOThermalLapseResidual(lowerHeight, upperHeight, lowerTemperature, equalTemperature); residual != 0 {
+		t.Fatalf("WMO equality residual = %.17g, want zero", residual)
+	}
+	above := math.Nextafter(equalTemperature, math.Inf(1))
+	below := math.Nextafter(equalTemperature, math.Inf(-1))
+	if residual := WMOThermalLapseResidual(lowerHeight, upperHeight, lowerTemperature, above); residual <= 0 {
+		t.Fatalf("one-ULP stable side residual = %.17g, want positive", residual)
+	}
+	if residual := WMOThermalLapseResidual(lowerHeight, upperHeight, lowerTemperature, below); residual >= 0 {
+		t.Fatalf("one-ULP unstable side residual = %.17g, want negative", residual)
+	}
+}
+
+func TestWMOThermalLapseResidualSignMatchesExactBinary64Arithmetic(t *testing.T) {
+	t.Parallel()
+
+	state := uint64(0x6a09e667f3bcc909)
+	next := func() float64 {
+		state = state*6364136223846793005 + 1442695040888963407
+		return float64(state>>11) / (1 << 53)
+	}
+	toRat := func(value float64) *big.Rat {
+		result := new(big.Rat).SetFloat64(value)
+		if result == nil {
+			t.Fatalf("cannot represent finite binary64 %.17g as a rational", value)
+		}
+		return result
+	}
+	sign := func(value float64) int {
+		switch {
+		case value < 0:
+			return -1
+		case value > 0:
+			return 1
+		default:
+			return 0
+		}
+	}
+	for sample := 0; sample < 20_000; sample++ {
+		lowerHeight := 5000 + 15_000*next()
+		deltaHeight := 10 + 2500*next()
+		upperHeight := lowerHeight + deltaHeight
+		lowerTemperature := 190 + 100*next()
+		threshold := lowerTemperature - deltaHeight/500
+		upperTemperature := threshold
+		steps := int(state%17) - 8
+		for steps > 0 {
+			upperTemperature = math.Nextafter(upperTemperature, math.Inf(1))
+			steps--
+		}
+		for steps < 0 {
+			upperTemperature = math.Nextafter(upperTemperature, math.Inf(-1))
+			steps++
+		}
+
+		exactHeight := new(big.Rat).Sub(toRat(upperHeight), toRat(lowerHeight))
+		exactTemperature := new(big.Rat).Sub(toRat(upperTemperature), toRat(lowerTemperature))
+		exactTemperature.Mul(exactTemperature, big.NewRat(500, 1))
+		exact := new(big.Rat).Add(exactHeight, exactTemperature)
+		got := WMOThermalLapseResidual(lowerHeight, upperHeight, lowerTemperature, upperTemperature)
+		if sign(got) != exact.Sign() {
+			t.Fatalf("sample %d WMO sign = %d (%g), exact sign = %d", sample, sign(got), got, exact.Sign())
+		}
+	}
+}
 
 func TestHMNSP99SeeingProducesPlausibleStandardProfile(t *testing.T) {
 	levels := standardAtmosphereProfile(0.002)

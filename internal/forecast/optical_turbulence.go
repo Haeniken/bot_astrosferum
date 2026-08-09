@@ -520,35 +520,146 @@ func validProfileTemperature(value float64) bool {
 	return finite(value) && value >= 150 && value <= 350
 }
 
-// thermalTropopauseHeight approximates the WMO lapse-rate definition on the
-// available pressure levels: the first level above 5 km with lapse rate at or
-// below 2 K/km and an average lapse rate no greater than 2 K/km through the
-// following 2 km.
+const wmoLapseLimitHeightPerK = 500.0
+
+// wmoFloatExpansion retains an exact sum of binary64 components using the
+// error-free TwoSum/TwoProduct transforms. The WMO comparisons sit directly
+// on a cancellation boundary, so evaluating an algebraically equivalent
+// quotient is not sufficiently reproducible for path partitioning.
+type wmoFloatExpansion struct {
+	components [16]float64
+	length     int
+}
+
+func (expansion *wmoFloatExpansion) add(value float64) {
+	carry := value
+	next := [16]float64{}
+	length := 0
+	for index := 0; index < expansion.length; index++ {
+		sum, residual := wmoTwoSum(carry, expansion.components[index])
+		if residual != 0 {
+			next[length] = residual
+			length++
+		}
+		carry = sum
+	}
+	if carry != 0 || length == 0 {
+		next[length] = carry
+		length++
+	}
+	expansion.components = next
+	expansion.length = length
+}
+
+func (expansion wmoFloatExpansion) value() float64 {
+	result := 0.0
+	for index := 0; index < expansion.length; index++ {
+		result += expansion.components[index]
+	}
+	return result
+}
+
+func wmoTwoSum(left, right float64) (float64, float64) {
+	sum := left + right
+	rightVirtual := sum - left
+	leftVirtual := sum - rightVirtual
+	leftResidual := left - leftVirtual
+	rightResidual := right - rightVirtual
+	return sum, leftResidual + rightResidual
+}
+
+func (expansion *wmoFloatExpansion) addProduct(left, right float64) {
+	product := left * right
+	residual := math.FMA(left, right, -product)
+	expansion.add(residual)
+	expansion.add(product)
+}
+
+// CompensatedDifferenceResidual returns minuend-subtrahend-offset without
+// losing a small signed residual to cancellation of the source-scale values.
+// It is exported only because the ICON-EU path planner must partition the
+// exact same provider-neutral decision used by the science kernel.
+func CompensatedDifferenceResidual(minuend, subtrahend, offset float64) float64 {
+	expansion := wmoFloatExpansion{}
+	expansion.add(minuend)
+	expansion.add(-subtrahend)
+	expansion.add(-offset)
+	return expansion.value()
+}
+
+// WMOThermalLapseResidual evaluates the WMO 2 K/km threshold in metres:
+//
+//	R = (z_upper-z_lower) + 500*(T_upper-T_lower).
+//
+// For an upward ordered pair, R >= 0 is exactly the same decision as a mean
+// lapse rate <= 2 K/km. The factor 500 is exactly representable in binary64;
+// the expansion also retains the product residual from the fused operation.
+func WMOThermalLapseResidual(lowerHeightM, upperHeightM, lowerTemperatureK, upperTemperatureK float64) float64 {
+	expansion := wmoFloatExpansion{}
+	expansion.add(upperHeightM)
+	expansion.add(-lowerHeightM)
+	expansion.addProduct(wmoLapseLimitHeightPerK, upperTemperatureK)
+	expansion.addProduct(-wmoLapseLimitHeightPerK, lowerTemperatureK)
+	return expansion.value()
+}
+
+// thermalTropopauseHeight applies the WMO first-tropopause lapse-rate test to
+// the available native levels. The discrete contract is conservative: the
+// profile must extend at least 2 km above a candidate, and the mean lapse from
+// the candidate to every following native level through the first level at or
+// above 2 km must not exceed 2 K/km. Checking only that final level can hide an
+// intervening layer that violates the WMO "average lapse ... at any point"
+// condition; accepting a profile ending at 1.5 km is likewise insufficient.
 func thermalTropopauseHeight(levels []VerticalLevel) float64 {
+	index := thermalTropopauseLevelIndex(levels)
+	if index < 0 {
+		return math.NaN()
+	}
+	return levels[index].HeightM
+}
+
+func thermalTropopauseLevelIndex(levels []VerticalLevel) int {
 	for index := 0; index+1 < len(levels); index++ {
-		if levels[index].HeightM < 5000 || !validProfileTemperature(levels[index].TemperatureK) {
+		if CompensatedDifferenceResidual(levels[index].HeightM, 0, 5000) < 0 ||
+			!validProfileTemperature(levels[index].TemperatureK) {
 			continue
 		}
-		dz := levels[index+1].HeightM - levels[index].HeightM
+		dz := CompensatedDifferenceResidual(levels[index+1].HeightM, levels[index].HeightM, 0)
 		if dz <= 0 || !validProfileTemperature(levels[index+1].TemperatureK) {
 			continue
 		}
-		lapseKPerKM := -(levels[index+1].TemperatureK - levels[index].TemperatureK) / dz * 1000
-		if lapseKPerKM > 2 {
+		if WMOThermalLapseResidual(
+			levels[index].HeightM, levels[index+1].HeightM,
+			levels[index].TemperatureK, levels[index+1].TemperatureK,
+		) < 0 {
 			continue
 		}
 		top := index + 1
-		for top+1 < len(levels) && levels[top].HeightM-levels[index].HeightM < 2000 {
+		for top < len(levels) &&
+			CompensatedDifferenceResidual(levels[top].HeightM, levels[index].HeightM, 2000) < 0 {
 			top++
 		}
-		if levels[top].HeightM-levels[index].HeightM < 1500 || !validProfileTemperature(levels[top].TemperatureK) {
+		if top >= len(levels) {
 			continue
 		}
-		meanLapse := -(levels[top].TemperatureK - levels[index].TemperatureK) /
-			(levels[top].HeightM - levels[index].HeightM) * 1000
-		if meanLapse <= 2 {
-			return levels[index].HeightM
+		allMeansValid := true
+		for upper := index + 1; upper <= top; upper++ {
+			deltaHeightM := CompensatedDifferenceResidual(levels[upper].HeightM, levels[index].HeightM, 0)
+			if deltaHeightM <= 0 || !validProfileTemperature(levels[upper].TemperatureK) {
+				allMeansValid = false
+				break
+			}
+			if WMOThermalLapseResidual(
+				levels[index].HeightM, levels[upper].HeightM,
+				levels[index].TemperatureK, levels[upper].TemperatureK,
+			) < 0 {
+				allMeansValid = false
+				break
+			}
+		}
+		if allMeansValid {
+			return index
 		}
 	}
-	return math.NaN()
+	return -1
 }

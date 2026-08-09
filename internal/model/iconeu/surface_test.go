@@ -3,6 +3,7 @@ package iconeu
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ type surfaceValidationRunner struct {
 
 func (runner surfaceValidationRunner) CombinedOutput(_ context.Context, name string, arguments ...string) ([]byte, error) {
 	if name == "grib_count" {
-		return []byte("17\n"), nil
+		return []byte(strconv.Itoa(SurfaceBundleSchemaVersion) + "\n"), nil
 	}
 	for _, argument := range arguments {
 		if argument == "shortName=mld" {
@@ -114,7 +115,7 @@ func TestSurfaceFieldURL(t *testing.T) {
 	if got != want {
 		t.Fatalf("URL = %q, want %q", got, want)
 	}
-	mixedLayer := surfaceFields[len(surfaceFields)-1]
+	mixedLayer := surfaceFields[SurfaceLegacySchemaVersion-1]
 	got = client.surfaceFieldURL("2026071912", 3, mixedLayer)
 	want = "https://opendata.dwd.de/weather/nwp/icon-eu/grib/12/mh/icon-eu_europe_regular-lat-lon_single-level_2026071912_003_MH.grib2.bz2"
 	if got != want {
@@ -136,30 +137,44 @@ func TestValidateSurfaceBundleRequiresMixedLayerDepthInMetres(t *testing.T) {
 
 func TestHourlySurfaceDetectsFieldSetUpgrade(t *testing.T) {
 	now := time.Now()
+	legacyVariables := make([]string, SurfaceLegacySchemaVersion)
+	for index, field := range surfaceFields[:SurfaceLegacySchemaVersion] {
+		legacyVariables[index] = field.ShortName
+	}
 	manifest := Manifest{
-		SurfaceVariables:   []string{"2t", "2d", "2r", "CLCT", "tp", "10u", "10v", "VMAX_10M", "prmsl"},
+		SurfaceVariables:   legacyVariables,
 		SurfacePublishedAt: &now,
 		SurfaceSteps:       make([]SurfaceStepFile, HourlySurfaceStepCount),
 	}
 	for index := range manifest.SurfaceSteps {
-		manifest.SurfaceSteps[index].Messages = SurfaceBundleSchemaVersion
+		manifest.SurfaceSteps[index].Messages = SurfaceLegacySchemaVersion
 	}
-	if manifest.HasHourlySurface() {
-		t.Fatal("legacy field set was treated as current")
-	}
-	for _, field := range surfaceFields[:len(surfaceFields)-1] {
-		manifest.SurfaceVariables = append(manifest.SurfaceVariables, field.ShortName)
-	}
-	if manifest.HasHourlySurface() {
-		t.Fatal("v16 field set without mixed-layer depth was treated as current")
-	}
-	manifest.SurfaceVariables = append(manifest.SurfaceVariables, surfaceFields[len(surfaceFields)-1].ShortName)
 	if !manifest.HasHourlySurface() {
-		t.Fatal("current field set was not detected")
+		t.Fatal("legacy field set was not kept operational during upgrade")
 	}
-	manifest.SurfaceSteps[0].Messages = SurfaceBundleSchemaVersion - 1
-	if manifest.HasHourlySurface() {
-		t.Fatal("v16 bundle message count was treated as current")
+	if manifest.HasAstrodomeSurface() {
+		t.Fatal("legacy field set was admitted to Astrodome")
+	}
+	manifest.SurfaceVariables = append(manifest.SurfaceVariables, surfaceFields[SurfaceLegacySchemaVersion].ShortName)
+	for index := range manifest.SurfaceSteps {
+		manifest.SurfaceSteps[index].Messages++
+	}
+	if !manifest.HasHourlySurface() {
+		t.Fatal("operational bundle with only one lower-bound field was rejected")
+	}
+	if manifest.HasAstrodomeSurface() {
+		t.Fatal("partial Astrodome lower boundary was accepted")
+	}
+	manifest.SurfaceVariables = append(manifest.SurfaceVariables, surfaceFields[SurfaceLegacySchemaVersion+1].ShortName)
+	for index := range manifest.SurfaceSteps {
+		manifest.SurfaceSteps[index].Messages++
+	}
+	if !manifest.HasAstrodomeSurface() {
+		t.Fatal("complete Astrodome surface field set was not detected")
+	}
+	manifest.SurfaceSteps[0].Messages--
+	if manifest.HasHourlySurface() || manifest.HasAstrodomeSurface() {
+		t.Fatal("bundle with inconsistent message count was accepted")
 	}
 }
 
