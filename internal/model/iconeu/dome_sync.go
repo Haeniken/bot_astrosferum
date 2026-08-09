@@ -105,6 +105,16 @@ func (client *Client) SyncDome(
 	dataRoot string,
 	loaded LoadedManifest,
 	diskBudget *model.DiskBudget,
+) (LoadedDomeManifest, error) {
+	return client.syncDome(ctx, dataRoot, loaded, diskBudget, domeSyncProjections)
+}
+
+func (client *Client) syncDome(
+	ctx context.Context,
+	dataRoot string,
+	loaded LoadedManifest,
+	diskBudget *model.DiskBudget,
+	project func([]domeSyncTask) (model.DiskProjection, model.DiskProjection, error),
 ) (result LoadedDomeManifest, resultErr error) {
 	client.defaults()
 	if ctx == nil {
@@ -112,6 +122,9 @@ func (client *Client) SyncDome(
 	}
 	if diskBudget == nil {
 		return LoadedDomeManifest{}, errors.New("ICON-EU Astrodome disk budget is required")
+	}
+	if project == nil {
+		return LoadedDomeManifest{}, errors.New("ICON-EU Astrodome disk projection is required")
 	}
 	if strings.TrimSpace(dataRoot) == "" {
 		return LoadedDomeManifest{}, errors.New("ICON-EU Astrodome data root is required")
@@ -163,7 +176,7 @@ func (client *Client) SyncDome(
 	if err != nil {
 		return LoadedDomeManifest{}, err
 	}
-	denseProjection, sparseProjection, err := domeSyncProjections(tasks)
+	denseProjection, sparseProjection, err := project(tasks)
 	if err != nil {
 		return LoadedDomeManifest{}, err
 	}
