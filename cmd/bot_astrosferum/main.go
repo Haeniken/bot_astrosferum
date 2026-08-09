@@ -18,6 +18,7 @@ import (
 
 	"bot_astrosferum/internal/app"
 	"bot_astrosferum/internal/app/bot"
+	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/config"
 	"bot_astrosferum/internal/forecast"
@@ -79,7 +80,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writer) (resultErr error) {
 	flags := flag.NewFlagSet("render-horizon", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "/app/config/config.yaml", "configuration file")
@@ -135,15 +136,31 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 	if !horizonStore.Supports(plan) {
 		return errors.New("horizon footprint is outside ICON-EU")
 	}
+	executionGate, err := directional.NewExecutionGate(
+		filepath.Join(cfg.Paths.Data, "state", "run-leases"),
+		cfg.Directional.Concurrency,
+	)
+	if err != nil {
+		return err
+	}
+	executionLease, err := executionGate.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, executionLease.Close()) }()
+	currentRun, err := horizonStore.CurrentRunID()
+	if err != nil || currentRun != cloud.RunID {
+		return errors.New("ICON-EU horizon run changed before calculation")
+	}
 	snapshots, err := horizonStore.Series(ctx, cloud.RunID, plan)
 	if err != nil {
 		return err
 	}
-	frames, err := forecast.ComputeHorizonSeries(ctx, snapshots, plan, overallCalibration(cfg.Algorithms))
+	frames, err := forecast.ComputeHorizonSeries(ctx, snapshots, plan, app.OverallCalibration(cfg.Algorithms))
 	if err != nil {
 		return err
 	}
-	currentRun, err := horizonStore.CurrentRunID()
+	currentRun, err = horizonStore.CurrentRunID()
 	if err != nil || currentRun != cloud.RunID {
 		return errors.New("ICON-EU horizon run changed before rendering")
 	}
@@ -362,7 +379,7 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err := render.Weather(result.Weather, surface, sky, render.Options{Language: *language}); err != nil {
 		return err
 	}
-	calibration := overallCalibration(cfg.Algorithms)
+	calibration := app.OverallCalibration(cfg.Algorithms)
 	if hasCloud {
 		result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
 		if err := render.CloudObstruction(result.CloudObstruction, cloud, calibration, render.Options{Width: 3200, Height: 1100, Language: *language}); err != nil {
@@ -443,6 +460,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	// The flag controls the public rollout. Administrators must retain a fully
+	// operational preview path while public access is disabled.
+	astrodomeOperational := cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
+	var astrodomeDiskBudget *model.DiskBudget
+	if astrodomeOperational {
+		astrodomeDiskBudget, err = newAstrodomeDiskBudget(cfg)
+		if err != nil {
+			return err
+		}
+	}
 	var horizonJobs *bot.HorizonJobs
 	if cfg.HorizonAnalysis.Enabled {
 		horizonSource := iconeu.NewHorizonStore(
@@ -468,14 +495,25 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 				return err
 			}
 			return renderContext.Err()
-		}, overallCalibration(cfg.Algorithms), logf)
+		}, app.OverallCalibration(cfg.Algorithms), logf)
 		if err != nil {
 			return err
 		}
-		if err := horizonJobs.Start(ctx); err != nil {
+	}
+	var directionalService *directionalRuntime
+	if cfg.HorizonAnalysis.Enabled || astrodomeOperational {
+		directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, logf)
+		if err != nil {
 			return err
 		}
-		defer horizonJobs.Close()
+		if err := directionalService.Start(ctx); err != nil {
+			return err
+		}
+		defer func() {
+			if closeErr := directionalService.Close(); closeErr != nil {
+				logf("directional runtime shutdown failed: %v", closeErr)
+			}
+		}()
 	}
 	database, err := pgstore.Open(ctx, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name, cfg.Database.User, cfg.Database.Password, cfg.Database.MaxConns)
 	if err != nil {
@@ -515,7 +553,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 				return err
 			}
 		}
-		if err := handler.SetOverallIndexCalibration(overallCalibration(cfg.Algorithms)); err != nil {
+		if err := handler.SetOverallIndexCalibration(app.OverallCalibration(cfg.Algorithms)); err != nil {
 			return err
 		}
 		if err := handler.EnableForecast(forecastStore, filepath.Join(cfg.Paths.Temp, renderDirectory), render.Options{Width: cfg.Render.Width, Height: cfg.Render.Height}); err != nil {
@@ -603,7 +641,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		Client: syncClient, DataRoot: cfg.Paths.Data,
 		PollInterval: cfg.Sync.PollInterval.Duration, KeepRuns: cfg.Providers.ICONEU.KeepRuns,
 		MaxStaleAge: cfg.Providers.ICONEU.MaxStaleAge.Duration,
-		Logf:        func(format string, values ...any) { writeLog(stderr, format, values...) },
+		DomeEnabled: astrodomeOperational, DomeBudget: astrodomeDiskBudget,
+		Logf: func(format string, values ...any) { writeLog(stderr, format, values...) },
 	}
 	go scheduler.Run(ctx)
 	if cfg.Providers.ICONGlobal.Enabled {
@@ -885,30 +924,6 @@ func printUsage(writer io.Writer) error {
 
 func writeLog(writer io.Writer, format string, values ...any) {
 	_, _ = fmt.Fprintf(writer, format+"\n", values...)
-}
-
-func overallCalibration(config config.AlgorithmsConfig) forecast.OverallIndexCalibration {
-	return forecast.OverallIndexCalibration{
-		SeeingWeight: config.OverallSeeingWeight, CloudWeight: config.OverallCloudWeight,
-		CoherenceTimeWeight:         config.OverallCoherenceTimeWeight,
-		OpticalTurbulenceMaxPenalty: config.OverallOpticalTurbulenceMaxPenalty,
-		PossibleFogFactor:           config.OverallPossibleFogFactor, HighFogFactor: config.OverallHighFogFactor,
-		PrecipitationDetectMM: config.OverallPrecipitationDetectMM,
-		GoodSeeingArcsec:      config.OverallGoodSeeingArcsec, BadSeeingArcsec: config.OverallBadSeeingArcsec,
-		BestCoherenceTimeMS:          config.OverallBestCoherenceTimeMS,
-		BadCoherenceTimeMS:           config.OverallBadCoherenceTimeMS,
-		BoundaryLayerMinM:            config.OverallBoundaryLayerMinM,
-		BoundaryLayerTopM:            config.OverallBoundaryLayerTopM,
-		GroundCn2Scale:               config.OverallGroundCn2Scale,
-		UnresolvedCloudObstruction:   config.OverallUnresolvedCloudObstruction,
-		SurfaceWindMaxPenalty:        config.OverallSurfaceWindMaxPenalty,
-		SurfaceWindStartMS:           config.OverallSurfaceWindStartMS,
-		SurfaceWindFullMS:            config.OverallSurfaceWindFullMS,
-		SurfaceGustStartMS:           config.OverallSurfaceGustStartMS,
-		SurfaceGustFullMS:            config.OverallSurfaceGustFullMS,
-		CloudLiquidRadiusMicrometers: config.CloudLiquidRadiusMicrometers,
-		CloudIceRadiusMicrometers:    config.CloudIceRadiusMicrometers,
-	}
 }
 
 func newGEOSCFClient(cfg config.Config) *geoscf.Client {

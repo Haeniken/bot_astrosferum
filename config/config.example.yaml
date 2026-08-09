@@ -7,19 +7,63 @@ app:
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
+  # Ordinary Telegram/VK request deadline only. Directional work is async and
+  # governed by its kind-specific deadline plus internal_request_timeout.
   request_timeout: 15m
 
-# ICON-EU-only low-altitude directional analysis. Its concurrency is
-# independent from the ordinary forecast queue.
+# ICON-EU-only low-altitude directional analysis. The legacy local queue
+# values remain constructor bounds; production execution uses the single
+# shared directional FIFO below and starts no second calculation worker.
 horizon_analysis:
   enabled: true
   queue_size: 4
   concurrency: 1
-  cdo_workers: 2
+  # Shared by Horizon extraction and Astrodome native-column preload inside
+  # the isolated directional worker. Match the default eight-CPU worker quota.
+  cdo_workers: 8
   job_timeout: 10m
   cache_ttl: 48h
   cache_entries: 128
   estimated_duration: 3m
+
+# Horizon and Astrodome share this one bounded FIFO and active-slot limit.
+# Keep concurrency at 1 until production memory/CPU benchmarks justify more;
+# the hard validation range is 1..32.
+directional:
+  queue_size: 8
+  concurrency: 1
+  listen: :18083
+  worker_url: http://directional_worker:18084
+  worker_listen: :18084
+  credential_file: /run/secrets/directional_credential
+  completed_ttl: 48h
+  completed_entries: 128
+  estimated_horizon: 3m
+  # UI/queue estimate only. It never cancels a calculation and remains
+  # independent from the execution and transport timeout policy below.
+  estimated_astrodome: 30m
+  # 0s disables the bot -> worker HTTP deadline so a live calculation is not
+  # truncated by transport. A positive value is an optional operator guard.
+  internal_request_timeout: 0s
+
+# ICON-EU-only full-sky calculation. enabled is the public rollout switch:
+# true allows every authenticated Telegram identity, false allows only IDs in
+# ASTRO_TELEGRAM_ADMIN_IDS; model preparation and the shared worker remain on
+# for admin preview. The production product contains up to 72 consecutive native hourly frames.
+# Dense source storage maps to the bounded production-v2 angular grid; sparse
+# source storage is selected only when the project budget requires it.
+astrodome:
+  enabled: true
+  # 0s disables the wall-clock job deadline. Explicit user cancellation and
+  # process shutdown still cancel the calculation through its context.
+  job_timeout: 0s
+  cache_ttl: 48h
+  cache_entries: 64
+  # Maximum resident footprint of preloaded native ICON-EU columns per job.
+  resident_limit: 10GiB
+  project_disk_cap: 400GiB
+  min_free_space: 100GiB
+  min_free_inodes: 10000
 
 paths:
   data: /app/data
@@ -110,6 +154,26 @@ database:
   name: bot_astrosferum
   user: bot_astrosferum
   max_conns: 10
+
+# Public website runs as a separate process/compose project. Secret values are
+# never placed in YAML or .env; only mode-0600 file paths are configured here.
+# The directional credential is one shared file mounted by web, bot, and worker;
+# authentication still uses separate headers on the two internal hops.
+web:
+  enabled: false
+  listen: :8080
+  public_origin: https://astrosferum.com
+  oidc_client_id: "" # positive Telegram bot ID after BotFather OIDC setup
+  oidc_client_secret_file: /run/secrets/telegram_oidc_client_secret
+  csrf_key_file: /run/secrets/web_csrf_key
+  edge_credential_file: /run/secrets/edge_credential
+  directional_gateway_url: http://bot_astrosferum:18083
+  directional_credential_file: /run/secrets/directional_credential
+  transaction_ttl: 10m
+  session_ttl: 720h
+  database_user: bot_astrosferum_web
+  database_password_file: /run/secrets/web_db_password
+  database_max_conns: 5
 
 platforms:
   telegram:

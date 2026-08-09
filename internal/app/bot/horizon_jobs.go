@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
 )
 
@@ -144,9 +145,10 @@ type horizonRecentClick struct {
 	at  time.Time
 }
 
-// HorizonJobs owns one bounded heavy-job worker shared by all messenger
-// adapters. Model extraction therefore cannot multiply when Telegram and VK
-// requests arrive concurrently.
+// HorizonJobs owns platform-neutral Horizon admission and localized delivery.
+// Production can attach the shared directional coordinator so Horizon and
+// Astrodome use one FIFO and one heavy worker; the legacy local worker remains
+// available for isolated tests and command-line compositions.
 type HorizonJobs struct {
 	config      HorizonJobsConfig
 	source      HorizonSource
@@ -173,6 +175,7 @@ type HorizonJobs struct {
 	recent             map[horizonUserIdentity]horizonRecentClick
 	wait               sync.WaitGroup
 	closeOne           sync.Once
+	directional        *directional.Coordinator
 }
 
 func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer HorizonRenderFunc, calibration forecast.OverallIndexCalibration, logf func(string, ...any)) (*HorizonJobs, error) {
@@ -230,9 +233,9 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 	}, nil
 }
 
-// Start binds all queued work to the process/root lifetime rather than to a
-// short-lived webhook callback context. Its worker count is independent from
-// the ordinary-forecast calculation limit.
+// Start binds all work to the process/root lifetime rather than to a
+// short-lived webhook callback context. When a directional coordinator is
+// configured, only lightweight delivery workers are started here.
 func (jobs *HorizonJobs) Start(root context.Context) error {
 	if root == nil {
 		return errors.New("horizon root context is required")
@@ -247,8 +250,12 @@ func (jobs *HorizonJobs) Start(root context.Context) error {
 	}
 	jobs.root, jobs.cancel = context.WithCancel(root)
 	jobs.started = true
-	jobs.wait.Add(jobs.config.Concurrency + horizonDeliveryWorkers)
-	for range jobs.config.Concurrency {
+	calculationWorkers := jobs.config.Concurrency
+	if jobs.directional != nil {
+		calculationWorkers = 0
+	}
+	jobs.wait.Add(calculationWorkers + horizonDeliveryWorkers)
+	for range calculationWorkers {
 		go jobs.worker()
 	}
 	for range horizonDeliveryWorkers {
@@ -390,6 +397,12 @@ func (jobs *HorizonJobs) handleAction(ctx context.Context, platform string, mess
 				"Этот запрос уже обрабатывается.", "This request is already being processed."))
 		}
 		return nil
+	}
+	if jobs.directional != nil {
+		return jobs.handleDirectionalAdmission(ctx, &horizonJob{
+			key: key, request: request, plan: plan,
+			waiters: map[horizonUserIdentity]horizonWaiter{waiter.identity: waiter},
+		}, waiter)
 	}
 	position, joined, enqueueErr := jobs.enqueue(&horizonJob{
 		key: key, request: request, plan: plan,

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +19,8 @@ import (
 type Config struct {
 	App             AppConfig             `yaml:"app"`
 	HorizonAnalysis HorizonAnalysisConfig `yaml:"horizon_analysis"`
+	Directional     DirectionalConfig     `yaml:"directional"`
+	Astrodome       AstrodomeConfig       `yaml:"astrodome"`
 	Paths           PathsConfig           `yaml:"paths"`
 	Providers       ProvidersConfig       `yaml:"providers"`
 	Sync            SyncConfig            `yaml:"sync"`
@@ -24,6 +28,37 @@ type Config struct {
 	Render          RenderConfig          `yaml:"render"`
 	Platforms       PlatformsConfig       `yaml:"platforms"`
 	Database        DatabaseConfig        `yaml:"database"`
+	Web             WebConfig             `yaml:"web"`
+}
+
+// DirectionalConfig owns the single FIFO and active-slot limit shared by
+// Horizon and Astrodome.
+type DirectionalConfig struct {
+	QueueSize              int      `yaml:"queue_size"`
+	Concurrency            int      `yaml:"concurrency"`
+	Listen                 string   `yaml:"listen"`
+	WorkerURL              string   `yaml:"worker_url"`
+	WorkerListen           string   `yaml:"worker_listen"`
+	CredentialFile         string   `yaml:"credential_file"`
+	CompletedTTL           Duration `yaml:"completed_ttl"`
+	CompletedEntries       int      `yaml:"completed_entries"`
+	EstimatedHorizon       Duration `yaml:"estimated_horizon"`
+	EstimatedAstrodome     Duration `yaml:"estimated_astrodome"`
+	InternalRequestTimeout Duration `yaml:"internal_request_timeout"`
+}
+
+// AstrodomeConfig contains operational bounds only. Ring geometry, the
+// 72-frame window, physics, and numerical tolerances are versioned constants
+// in internal/forecast and cannot be changed through environment variables.
+type AstrodomeConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	JobTimeout     Duration `yaml:"job_timeout"`
+	CacheTTL       Duration `yaml:"cache_ttl"`
+	CacheEntries   int      `yaml:"cache_entries"`
+	ResidentLimit  ByteSize `yaml:"resident_limit"`
+	ProjectDiskCap ByteSize `yaml:"project_disk_cap"`
+	MinFreeSpace   ByteSize `yaml:"min_free_space"`
+	MinFreeInodes  uint64   `yaml:"min_free_inodes"`
 }
 
 // HorizonAnalysisConfig deliberately exposes only operational limits. The
@@ -148,6 +183,25 @@ type PlatformConfig struct {
 	AdminIDs  []int64 `yaml:"admin_ids"`
 }
 
+// WebConfig contains no secret values. Every credential is mounted as a
+// mode-0600 file by the separate web deployment and read only by serve-web.
+type WebConfig struct {
+	Enabled                   bool     `yaml:"enabled"`
+	Listen                    string   `yaml:"listen"`
+	PublicOrigin              string   `yaml:"public_origin"`
+	OIDCClientID              string   `yaml:"oidc_client_id"`
+	OIDCClientSecretFile      string   `yaml:"oidc_client_secret_file"`
+	CSRFKeyFile               string   `yaml:"csrf_key_file"`
+	EdgeCredentialFile        string   `yaml:"edge_credential_file"`
+	DirectionalGatewayURL     string   `yaml:"directional_gateway_url"`
+	DirectionalCredentialFile string   `yaml:"directional_credential_file"`
+	TransactionTTL            Duration `yaml:"transaction_ttl"`
+	SessionTTL                Duration `yaml:"session_ttl"`
+	DatabaseUser              string   `yaml:"database_user"`
+	DatabasePasswordFile      string   `yaml:"database_password_file"`
+	DatabaseMaxConns          int32    `yaml:"database_max_conns"`
+}
+
 func Defaults() Config {
 	return Config{
 		App: AppConfig{
@@ -162,9 +216,21 @@ func Defaults() Config {
 			RequestTimeout:        Duration{15 * time.Minute},
 		},
 		HorizonAnalysis: HorizonAnalysisConfig{
-			Enabled: true, QueueSize: 4, Concurrency: 1, CDOWorkers: 2,
+			Enabled: true, QueueSize: 4, Concurrency: 1, CDOWorkers: 8,
 			JobTimeout: Duration{10 * time.Minute}, CacheTTL: Duration{48 * time.Hour},
 			CacheEntries: 128, EstimatedDuration: Duration{3 * time.Minute},
+		},
+		Directional: DirectionalConfig{
+			QueueSize: 8, Concurrency: 1, Listen: ":18083", WorkerURL: "http://directional_worker:18084", WorkerListen: ":18084",
+			CredentialFile: "/run/secrets/directional_credential",
+			CompletedTTL:   Duration{48 * time.Hour}, CompletedEntries: 128,
+			EstimatedHorizon: Duration{3 * time.Minute}, EstimatedAstrodome: Duration{30 * time.Minute},
+			InternalRequestTimeout: Duration{},
+		},
+		Astrodome: AstrodomeConfig{
+			Enabled: true, JobTimeout: Duration{}, CacheTTL: Duration{48 * time.Hour},
+			CacheEntries: 64, ResidentLimit: ByteSize(10 << 30), ProjectDiskCap: ByteSize(400 << 30), MinFreeSpace: ByteSize(100 << 30),
+			MinFreeInodes: 10_000,
 		},
 		Paths: PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
 		Providers: ProvidersConfig{
@@ -210,6 +276,15 @@ func Defaults() Config {
 		},
 		Render:   RenderConfig{Version: "render-v16-overall-penalty-decomposition", Width: 1280, Height: 960},
 		Database: DatabaseConfig{Host: "postgres", Port: 5432, Name: "bot_astrosferum", User: "bot_astrosferum", MaxConns: 10},
+		Web: WebConfig{
+			Listen: ":8080", PublicOrigin: "https://astrosferum.com",
+			OIDCClientSecretFile: "/run/secrets/telegram_oidc_client_secret",
+			CSRFKeyFile:          "/run/secrets/web_csrf_key", EdgeCredentialFile: "/run/secrets/edge_credential",
+			DirectionalGatewayURL:     "http://bot_astrosferum:18083",
+			DirectionalCredentialFile: "/run/secrets/directional_credential",
+			TransactionTTL:            Duration{10 * time.Minute}, SessionTTL: Duration{30 * 24 * time.Hour},
+			DatabaseUser: "bot_astrosferum_web", DatabasePasswordFile: "/run/secrets/web_db_password", DatabaseMaxConns: 5,
+		},
 	}
 }
 
@@ -267,12 +342,84 @@ func (c *Config) applyEnvironment() error {
 		}
 		c.HorizonAnalysis.Enabled = parsed
 	}
+	if value, exists := os.LookupEnv("ASTRO_ASTRODOME_ENABLED"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_ASTRODOME_ENABLED: %w", err)
+		}
+		c.Astrodome.Enabled = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_ASTRODOME_RESIDENT_LIMIT"); exists {
+		var parsed ByteSize
+		if err := parsed.UnmarshalText([]byte(strings.TrimSpace(value))); err != nil {
+			return fmt.Errorf("parse ASTRO_ASTRODOME_RESIDENT_LIMIT: %w", err)
+		}
+		c.Astrodome.ResidentLimit = parsed
+	}
+	for _, override := range []struct {
+		name   string
+		target *Duration
+	}{
+		{name: "ASTRO_ASTRODOME_JOB_TIMEOUT", target: &c.Astrodome.JobTimeout},
+		{name: "ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT", target: &c.Directional.InternalRequestTimeout},
+	} {
+		value, exists := os.LookupEnv(override.name)
+		if !exists {
+			continue
+		}
+		var parsed Duration
+		if err := parsed.UnmarshalText([]byte(strings.TrimSpace(value))); err != nil {
+			return fmt.Errorf("parse %s: %w", override.name, err)
+		}
+		*override.target = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_DIRECTIONAL_QUEUE_SIZE"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_DIRECTIONAL_QUEUE_SIZE: %w", err)
+		}
+		c.Directional.QueueSize = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_DIRECTIONAL_CONCURRENCY"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_DIRECTIONAL_CONCURRENCY: %w", err)
+		}
+		c.Directional.Concurrency = parsed
+	}
 	if value, exists := os.LookupEnv("ASTRO_GEOS_CF_ENABLED"); exists {
 		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
 		if err != nil {
 			return fmt.Errorf("parse ASTRO_GEOS_CF_ENABLED: %w", err)
 		}
 		c.Providers.GEOSCF.Enabled = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_WEB_ENABLED"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_WEB_ENABLED: %w", err)
+		}
+		c.Web.Enabled = parsed
+	}
+	webStrings := []struct {
+		name   string
+		target *string
+	}{
+		{name: "ASTRO_WEB_LISTEN", target: &c.Web.Listen},
+		{name: "ASTRO_WEB_PUBLIC_ORIGIN", target: &c.Web.PublicOrigin},
+		{name: "ASTRO_WEB_OIDC_CLIENT_ID", target: &c.Web.OIDCClientID},
+		{name: "ASTRO_WEB_OIDC_CLIENT_SECRET_FILE", target: &c.Web.OIDCClientSecretFile},
+		{name: "ASTRO_WEB_CSRF_KEY_FILE", target: &c.Web.CSRFKeyFile},
+		{name: "ASTRO_WEB_EDGE_CREDENTIAL_FILE", target: &c.Web.EdgeCredentialFile},
+		{name: "ASTRO_WEB_DIRECTIONAL_GATEWAY_URL", target: &c.Web.DirectionalGatewayURL},
+		{name: "ASTRO_WEB_DIRECTIONAL_CREDENTIAL_FILE", target: &c.Web.DirectionalCredentialFile},
+		{name: "ASTRO_WEB_DB_USER", target: &c.Web.DatabaseUser},
+		{name: "ASTRO_WEB_DB_PASSWORD_FILE", target: &c.Web.DatabasePasswordFile},
+	}
+	for _, override := range webStrings {
+		if value, exists := os.LookupEnv(override.name); exists {
+			*override.target = strings.TrimSpace(value)
+		}
 	}
 	overrides := []struct {
 		name   string
@@ -364,6 +511,9 @@ func ensureSingleDocument(decoder *yaml.Decoder) error {
 
 func (c Config) Validate() error {
 	var problems []string
+	// ASTRO_ASTRODOME_ENABLED controls public rollout. Telegram admins retain
+	// the same fully validated preview path while public access is disabled.
+	astrodomeOperational := c.Astrodome.Enabled || len(c.Platforms.Telegram.AdminIDs) > 0
 	if c.App.Locale != "ru" && c.App.Locale != "en" {
 		problems = append(problems, "app.locale must be ru or en")
 	}
@@ -398,9 +548,6 @@ func (c Config) Validate() error {
 		if c.HorizonAnalysis.Concurrency < 1 || c.HorizonAnalysis.Concurrency > 8 {
 			problems = append(problems, "horizon_analysis.concurrency must be between 1 and 8")
 		}
-		if c.HorizonAnalysis.CDOWorkers < 1 || c.HorizonAnalysis.CDOWorkers > 4 {
-			problems = append(problems, "horizon_analysis.cdo_workers must be between 1 and 4")
-		}
 		if c.HorizonAnalysis.JobTimeout.Duration < time.Minute || c.HorizonAnalysis.JobTimeout.Duration > 30*time.Minute {
 			problems = append(problems, "horizon_analysis.job_timeout must be between 1m and 30m")
 		}
@@ -412,6 +559,80 @@ func (c Config) Validate() error {
 		}
 		if c.HorizonAnalysis.EstimatedDuration.Duration < 10*time.Second || c.HorizonAnalysis.EstimatedDuration.Duration > c.HorizonAnalysis.JobTimeout.Duration {
 			problems = append(problems, "horizon_analysis.estimated_duration must be between 10s and job_timeout")
+		}
+	}
+	if c.HorizonAnalysis.Enabled || astrodomeOperational {
+		if c.HorizonAnalysis.CDOWorkers < 1 || c.HorizonAnalysis.CDOWorkers > 16 {
+			problems = append(problems, "horizon_analysis.cdo_workers must be between 1 and 16")
+		}
+		if c.Directional.QueueSize < 1 || c.Directional.QueueSize > 8 {
+			problems = append(problems, "directional.queue_size must be between 1 and 8")
+		}
+		if c.Directional.Concurrency < 1 || c.Directional.Concurrency > 32 {
+			problems = append(problems, "directional.concurrency must be between 1 and 32")
+		}
+		if _, _, err := net.SplitHostPort(c.Directional.Listen); err != nil {
+			problems = append(problems, "directional.listen must be a host:port listener")
+		}
+		workerURL, workerURLErr := url.Parse(c.Directional.WorkerURL)
+		if workerURLErr != nil || workerURL.Scheme != "http" || workerURL.Host == "" || workerURL.RawQuery != "" || workerURL.Fragment != "" {
+			problems = append(problems, "directional.worker_url must be an absolute internal HTTP URL")
+		}
+		if _, _, err := net.SplitHostPort(c.Directional.WorkerListen); err != nil {
+			problems = append(problems, "directional.worker_listen must be a host:port listener")
+		}
+		if strings.TrimSpace(c.Directional.CredentialFile) == "" {
+			problems = append(problems, "directional.credential_file is required")
+		}
+		if c.Directional.CompletedTTL.Duration < time.Hour || c.Directional.CompletedTTL.Duration > 7*24*time.Hour {
+			problems = append(problems, "directional.completed_ttl must be between 1h and 168h")
+		}
+		if c.Directional.CompletedEntries < 1 || c.Directional.CompletedEntries > 1024 {
+			problems = append(problems, "directional.completed_entries must be between 1 and 1024")
+		}
+		if c.Directional.EstimatedHorizon.Duration < 10*time.Second ||
+			c.Directional.EstimatedHorizon.Duration > c.HorizonAnalysis.JobTimeout.Duration {
+			problems = append(problems, "directional.estimated_horizon must be between 10s and horizon job_timeout")
+		}
+		if c.Directional.EstimatedAstrodome.Duration < 10*time.Second ||
+			c.Directional.EstimatedAstrodome.Duration > 24*time.Hour {
+			problems = append(problems, "directional.estimated_astrodome must be between 10s and 24h")
+		}
+		internalTimeout := c.Directional.InternalRequestTimeout.Duration
+		if internalTimeout < 0 || internalTimeout > 8*time.Hour || (internalTimeout > 0 && internalTimeout < time.Second) {
+			problems = append(problems, "directional.internal_request_timeout must be 0 (disabled) or between 1s and 8h")
+		}
+		if astrodomeOperational && c.Astrodome.JobTimeout.Duration == 0 && internalTimeout > 0 {
+			problems = append(problems, "directional.internal_request_timeout must be 0 when astrodome.job_timeout is disabled")
+		}
+		if astrodomeOperational && c.Astrodome.JobTimeout.Duration > 0 && internalTimeout > 0 && internalTimeout <= c.Astrodome.JobTimeout.Duration {
+			problems = append(problems, "directional.internal_request_timeout must exceed astrodome.job_timeout")
+		}
+	}
+	// This is a worker hard-safety bound, not a scientific/public feature
+	// option, so validate it even while public Astrodome access is disabled.
+	if c.Astrodome.ResidentLimit < ByteSize(1<<30) || c.Astrodome.ResidentLimit > ByteSize(20<<30) {
+		problems = append(problems, "astrodome.resident_limit must be between 1GiB and 20GiB")
+	}
+	if astrodomeOperational {
+		jobTimeout := c.Astrodome.JobTimeout.Duration
+		if jobTimeout < 0 || jobTimeout > time.Hour || (jobTimeout > 0 && jobTimeout < time.Minute) {
+			problems = append(problems, "astrodome.job_timeout must be 0 (disabled) or between 1m and 1h")
+		}
+		if c.Astrodome.CacheTTL.Duration < time.Hour || c.Astrodome.CacheTTL.Duration > 7*24*time.Hour {
+			problems = append(problems, "astrodome.cache_ttl must be between 1h and 168h")
+		}
+		if c.Astrodome.CacheEntries < 1 || c.Astrodome.CacheEntries > 512 {
+			problems = append(problems, "astrodome.cache_entries must be between 1 and 512")
+		}
+		if c.Astrodome.ProjectDiskCap <= 0 || uint64(c.Astrodome.ProjectDiskCap) > 400<<30 {
+			problems = append(problems, "astrodome.project_disk_cap must be greater than 0 and no greater than 400GiB")
+		}
+		if c.Astrodome.MinFreeSpace < 0 || c.Astrodome.MinFreeSpace >= c.Astrodome.ProjectDiskCap {
+			problems = append(problems, "astrodome.min_free_space must be non-negative and below project_disk_cap")
+		}
+		if c.Astrodome.MinFreeInodes < 1 {
+			problems = append(problems, "astrodome.min_free_inodes must be positive")
 		}
 	}
 	if strings.TrimSpace(c.Paths.Data) == "" || strings.TrimSpace(c.Paths.Temp) == "" {
@@ -541,6 +762,42 @@ func (c Config) Validate() error {
 	}
 	if c.Database.MaxConns < 1 || c.Database.MaxConns > 50 {
 		problems = append(problems, "database.max_conns must be between 1 and 50")
+	}
+	if c.Web.Enabled {
+		if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
+			problems = append(problems, "web.listen must be a host:port listener")
+		}
+		publicOrigin, err := url.Parse(c.Web.PublicOrigin)
+		if err != nil || publicOrigin.Scheme != "https" || publicOrigin.Host == "" || publicOrigin.Path != "" || publicOrigin.RawQuery != "" || publicOrigin.Fragment != "" {
+			problems = append(problems, "web.public_origin must be an HTTPS origin")
+		}
+		if clientID, err := strconv.ParseInt(strings.TrimSpace(c.Web.OIDCClientID), 10, 64); err != nil || clientID <= 0 {
+			problems = append(problems, "web.oidc_client_id must be a positive Telegram bot ID")
+		}
+		for name, path := range map[string]string{
+			"oidc_client_secret_file":     c.Web.OIDCClientSecretFile,
+			"csrf_key_file":               c.Web.CSRFKeyFile,
+			"edge_credential_file":        c.Web.EdgeCredentialFile,
+			"directional_credential_file": c.Web.DirectionalCredentialFile,
+			"database_password_file":      c.Web.DatabasePasswordFile,
+		} {
+			if strings.TrimSpace(path) == "" {
+				problems = append(problems, fmt.Sprintf("web.%s is required when enabled", name))
+			}
+		}
+		gatewayURL, err := url.Parse(c.Web.DirectionalGatewayURL)
+		if err != nil || gatewayURL.Scheme != "http" || gatewayURL.Host == "" || gatewayURL.RawQuery != "" || gatewayURL.Fragment != "" {
+			problems = append(problems, "web.directional_gateway_url must be an internal HTTP URL")
+		}
+		if c.Web.TransactionTTL.Duration <= 0 || c.Web.TransactionTTL.Duration > 30*time.Minute {
+			problems = append(problems, "web.transaction_ttl must be between 0 and 30m")
+		}
+		if c.Web.SessionTTL.Duration <= 0 || c.Web.SessionTTL.Duration > 90*24*time.Hour {
+			problems = append(problems, "web.session_ttl must be between 0 and 2160h")
+		}
+		if strings.TrimSpace(c.Web.DatabaseUser) == "" || c.Web.DatabaseMaxConns < 1 || c.Web.DatabaseMaxConns > 10 {
+			problems = append(problems, "web database_user is required and database_max_conns must be between 1 and 10")
+		}
 	}
 
 	if len(problems) > 0 {
