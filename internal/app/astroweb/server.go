@@ -454,16 +454,17 @@ func (server *Server) dataset(w http.ResponseWriter, request *http.Request) {
 }
 
 func (server *Server) visualizations(w http.ResponseWriter, request *http.Request) {
-	session, _, err := server.config.Authenticator.Authenticate(request)
-	if err != nil {
-		writeProblem(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	if !server.astrodomeAllowed(session.TelegramUserID) {
+	userID, includeFixture, err := server.visualizationAccess(request)
+	if errors.Is(err, ErrAstrodomeDisabled) {
 		writeProblem(w, http.StatusForbidden, "astrodome_disabled")
 		return
 	}
-	items, err := server.config.Visualizations.List(request.Context(), session.TelegramUserID, server.isAstrodomeAdmin(session.TelegramUserID))
+	if err != nil {
+		server.logError("authenticate astrodome visualizations", err)
+		writeProblem(w, http.StatusServiceUnavailable, "visualizations_unavailable")
+		return
+	}
+	items, err := server.config.Visualizations.List(request.Context(), userID, includeFixture)
 	if err != nil {
 		server.logError("list astrodome visualizations", err)
 		writeProblem(w, http.StatusServiceUnavailable, "visualizations_unavailable")
@@ -473,16 +474,17 @@ func (server *Server) visualizations(w http.ResponseWriter, request *http.Reques
 }
 
 func (server *Server) visualizationDataset(w http.ResponseWriter, request *http.Request) {
-	session, _, err := server.config.Authenticator.Authenticate(request)
-	if err != nil {
-		writeProblem(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	if !server.astrodomeAllowed(session.TelegramUserID) {
+	userID, includeFixture, err := server.visualizationAccess(request)
+	if errors.Is(err, ErrAstrodomeDisabled) {
 		writeProblem(w, http.StatusForbidden, "astrodome_disabled")
 		return
 	}
-	dataset, err := server.config.Visualizations.Open(request.Context(), session.TelegramUserID, request.PathValue("visualizationID"), server.isAstrodomeAdmin(session.TelegramUserID))
+	if err != nil {
+		server.logError("authenticate astrodome visualization", err)
+		writeProblem(w, http.StatusServiceUnavailable, "dataset_unavailable")
+		return
+	}
+	dataset, err := server.config.Visualizations.Open(request.Context(), userID, request.PathValue("visualizationID"), includeFixture)
 	if errors.Is(err, ErrVisualizationNotFound) {
 		http.NotFound(w, request)
 		return
@@ -508,6 +510,20 @@ func (server *Server) writeVisualizationDataset(w http.ResponseWriter, dataset V
 
 func (server *Server) validEdge(value string) bool {
 	return subtle.ConstantTimeCompare([]byte(value), server.config.EdgeCredential) == 1
+}
+
+func (server *Server) visualizationAccess(request *http.Request) (userID int64, includeFixture bool, err error) {
+	session, _, err := server.config.Authenticator.Authenticate(request)
+	if errors.Is(err, ErrUnauthenticated) {
+		return 0, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if !server.astrodomeAllowed(session.TelegramUserID) {
+		return 0, false, ErrAstrodomeDisabled
+	}
+	return session.TelegramUserID, server.isAstrodomeAdmin(session.TelegramUserID), nil
 }
 
 func (server *Server) astrodomeAllowed(userID int64) bool {

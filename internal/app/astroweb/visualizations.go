@@ -218,7 +218,7 @@ func (catalog *VisualizationCatalog) Reconcile(ctx context.Context, userID int64
 }
 
 func (catalog *VisualizationCatalog) List(ctx context.Context, userID int64, includeAdminFixtures bool) ([]AstrodomeVisualization, error) {
-	if catalog == nil || userID <= 0 {
+	if catalog == nil || userID < 0 || (userID == 0 && !includeAdminFixtures) {
 		return nil, ErrVisualizationNotFound
 	}
 	items, err := catalog.store.Visualizations(ctx, userID, catalog.now().UTC(), includeAdminFixtures)
@@ -235,7 +235,7 @@ func (catalog *VisualizationCatalog) List(ctx context.Context, userID int64, inc
 }
 
 func (catalog *VisualizationCatalog) Open(ctx context.Context, userID int64, id string, includeAdminFixtures bool) (VisualizationDataset, error) {
-	if catalog == nil || userID <= 0 || !validVisualizationID(id) {
+	if catalog == nil || userID < 0 || (userID == 0 && !includeAdminFixtures) || !validVisualizationID(id) {
 		return VisualizationDataset{}, ErrVisualizationNotFound
 	}
 	catalog.mutex.Lock()

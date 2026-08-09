@@ -65,6 +65,12 @@ async function bootstrap() {
       await refreshAvailability();
       scheduleAvailabilityPoll();
     } else {
+      try {
+        visualizations = await api.visualizations(controller.signal);
+      } catch {
+        visualizations = [];
+      }
+      renderVisualizations();
       showSignedOut();
     }
   } catch (error) {
@@ -210,7 +216,7 @@ function showSignedOut() {
   elements.logoutButton.hidden = true;
   elements.authenticationNotice.hidden = false;
   elements.pointForm.hidden = true;
-  elements.savedVisualizationsPanel.hidden = true;
+  elements.savedVisualizationsPanel.hidden = visualizations.length === 0;
   elements.availabilityText.textContent = translate("auth.required");
   elements.availabilitySignal.dataset.state = "loading";
   document.documentElement.dataset.sessionState = "anonymous";

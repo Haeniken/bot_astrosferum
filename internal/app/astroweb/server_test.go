@@ -116,6 +116,92 @@ func newTestServerWithAccess(t *testing.T, public bool, adminIDs []int64) (*Serv
 	return server, auth, gateway, edge, sessionToken
 }
 
+func installServerAdminFixture(t *testing.T, server *Server) string {
+	t.Helper()
+	catalog := server.config.Visualizations
+	store, ok := catalog.store.(*memoryVisualizationStore)
+	if !ok {
+		t.Fatal("test server visualization store has an unexpected type")
+	}
+	fileName, bytesWritten, digest, etag, err := catalog.writeDataset(t.Context(), AstrodomeDataset{
+		Body: io.NopCloser(strings.NewReader(testGatewayDataset)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fixtureID = "viz_0123456789abcdef0123456789abcdef"
+	now := catalog.now().UTC()
+	store.rows[fixtureID] = visualizationMemoryRow{owner: 42, ready: &AstrodomeVisualization{
+		ID: fixtureID, Name: "Плавск", Latitude: 53.650005, Longitude: 37.346192,
+		Provider: "icon-eu", RunID: "2026080900", GridProfile: "production-v2",
+		GeometryDigest: "sha256:fixture", DatasetBytes: bytesWritten,
+		GeneratedAt: now, ExpiresAt: now.Add(-time.Hour), AdminFixture: true,
+		SourceJobID: "job_fixtureabcdefghijklmnopqr", DatasetFile: fileName, DatasetSHA256: digest, ETag: etag,
+	}}
+	return fixtureID
+}
+
+func TestServerPublicFixtureAccessIsAnonymousOrAdministratorOnly(t *testing.T) {
+	t.Run("anonymous visitor can open the permanent fixture while rollout is disabled", func(t *testing.T) {
+		server, auth, _, edge, token := newTestServerWithAccess(t, false, []int64{42})
+		fixtureID := installServerAdminFixture(t, server)
+
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://origin/api/v1/astrodome/visualizations", nil)
+		request.Header.Set(edgeHeader, edge)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var catalogue struct {
+			Visualizations []AstrodomeVisualization `json:"visualizations"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &catalogue) != nil ||
+			len(catalogue.Visualizations) != 1 || catalogue.Visualizations[0].ID != fixtureID || !catalogue.Visualizations[0].AdminFixture {
+			t.Fatalf("anonymous fixture catalogue = %d %q", response.Code, response.Body.String())
+		}
+
+		request = httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+			"http://origin/api/v1/astrodome/visualizations/"+fixtureID+"/dataset", nil)
+		request.Header.Set(edgeHeader, edge)
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Encoding") != "gzip" {
+			t.Fatalf("anonymous fixture dataset = %d encoding=%q", response.Code, response.Header().Get("Content-Encoding"))
+		}
+
+		request = authenticatedRequest(t.Context(), http.MethodGet,
+			"http://origin/api/v1/astrodome/visualizations/"+fixtureID+"/dataset", edge, token, auth.csrfToken(token), "")
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("administrator fixture dataset = %d %q", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("authenticated non-admin cannot discover or open the fixture", func(t *testing.T) {
+		server, auth, _, edge, token := newTestServerWithAccess(t, true, []int64{7})
+		fixtureID := installServerAdminFixture(t, server)
+		csrf := auth.csrfToken(token)
+
+		request := authenticatedRequest(t.Context(), http.MethodGet,
+			"http://origin/api/v1/astrodome/visualizations", edge, token, csrf, "")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var catalogue struct {
+			Visualizations []AstrodomeVisualization `json:"visualizations"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &catalogue) != nil || len(catalogue.Visualizations) != 0 {
+			t.Fatalf("non-admin fixture catalogue = %d %q", response.Code, response.Body.String())
+		}
+
+		request = authenticatedRequest(t.Context(), http.MethodGet,
+			"http://origin/api/v1/astrodome/visualizations/"+fixtureID+"/dataset", edge, token, csrf, "")
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("non-admin fixture dataset = %d %q", response.Code, response.Body.String())
+		}
+	})
+}
+
 func TestServerAstrodomePublicAndAdminAuthorization(t *testing.T) {
 	t.Run("admin preview while public rollout is disabled", func(t *testing.T) {
 		server, auth, gateway, edge, token := newTestServerWithAccess(t, false, []int64{42})

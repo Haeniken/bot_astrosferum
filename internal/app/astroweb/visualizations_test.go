@@ -502,6 +502,18 @@ func TestVisualizationCatalogAdminFixtureIsPermanentSharedAndNotReplaced(t *test
 	if _, openErr := catalog.OpenByJob(t.Context(), 42, "job_fixtureabcdefghijklmnopqr", false); !errors.Is(openErr, ErrVisualizationNotFound) {
 		t.Fatalf("fixture owner without current admin access opened fixture by job: %v", openErr)
 	}
+	if _, listErr := catalog.List(t.Context(), 0, false); !errors.Is(listErr, ErrVisualizationNotFound) {
+		t.Fatalf("anonymous catalogue without fixture access = %v", listErr)
+	}
+	guestItems, err := catalog.List(t.Context(), 0, true)
+	if err != nil || len(guestItems) != 1 || guestItems[0].ID != fixtureID || !guestItems[0].AdminFixture {
+		t.Fatalf("anonymous fixture catalogue = %+v, err=%v", guestItems, err)
+	}
+	guestDataset, err := catalog.Open(t.Context(), 0, fixtureID, true)
+	if err != nil {
+		t.Fatalf("anonymous open fixture: %v", err)
+	}
+	_ = guestDataset.Body.Close()
 	items, err := catalog.List(t.Context(), 7, true)
 	if err != nil || len(items) != 1 || items[0].ID != fixtureID || !items[0].AdminFixture {
 		t.Fatalf("administrator fixtures = %+v, err=%v", items, err)

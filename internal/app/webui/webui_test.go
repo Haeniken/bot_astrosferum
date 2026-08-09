@@ -356,6 +356,26 @@ func TestEmbeddedDatasetContractUsesPhysicalQualityUnitsAndNullableErrors(t *tes
 	}
 }
 
+func TestAnonymousBootstrapLoadsOnlyThePublicVisualizationCatalogue(t *testing.T) {
+	t.Parallel()
+	app := embeddedText(t, "assets/js/app.js")
+	for _, marker := range []string{
+		"visualizations = await api.visualizations(controller.signal)",
+		"elements.savedVisualizationsPanel.hidden = visualizations.length === 0",
+	} {
+		if !strings.Contains(app, marker) {
+			t.Fatalf("anonymous fixture bootstrap is missing %q", marker)
+		}
+	}
+	if strings.Count(app, "points = await api.points(controller.signal)") != 1 {
+		t.Fatal("anonymous bootstrap unexpectedly requests saved user points")
+	}
+	shell := embeddedText(t, "assets/index.html")
+	if strings.Contains(shell, `id="savedVisualizationsPanel" data-session-view="authenticated"`) {
+		t.Fatal("public fixture panel is still marked as authenticated-only")
+	}
+}
+
 func TestEmbeddedAstrodomePresentationKeepsAProceduralAccessibleFallback(t *testing.T) {
 	t.Parallel()
 	index := embeddedText(t, "assets/index.html")
