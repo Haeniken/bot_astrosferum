@@ -25,41 +25,11 @@ const (
 	workerHealthTimeout           = 2 * time.Second
 )
 
-var ErrDeliveryUnavailable = errors.New("account delivery is unavailable")
-
-type DeliveryKind string
-
-const (
-	DeliveryForecast DeliveryKind = "forecast"
-	DeliveryHorizon  DeliveryKind = "horizon"
-)
-
-type DeliveryAdmission struct {
-	TelegramUserID int64   `json:"telegram_user_id"`
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	Language       string  `json:"language"`
-}
-
-func (admission DeliveryAdmission) Validate() error {
-	if admission.TelegramUserID <= 0 || (admission.Language != "ru" && admission.Language != "en") {
-		return errors.New("invalid account delivery admission")
-	}
-	if err := forecast.ValidateCoordinates(admission.Latitude, admission.Longitude); err != nil {
-		return errors.New("invalid account delivery admission")
-	}
-	return nil
-}
-
-type DeliveryBackend interface {
-	AdmitDelivery(context.Context, DeliveryKind, DeliveryAdmission) error
-}
-
 type HTTPConfig struct {
 	Coordinator       *Coordinator
 	AstrodomeBackend  AstrodomeBackend
 	WorkerHealth      WorkerHealth
-	DeliveryBackend   DeliveryBackend
+	AccountJobs       AccountJobBackend
 	ServiceCredential []byte
 }
 
@@ -67,7 +37,7 @@ type HTTPHandler struct {
 	coordinator      *Coordinator
 	astrodomeBackend AstrodomeBackend
 	workerHealth     WorkerHealth
-	deliveryBackend  DeliveryBackend
+	accountJobs      AccountJobBackend
 	credentialDigest [sha256.Size]byte
 	mux              *http.ServeMux
 }
@@ -96,7 +66,7 @@ func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 	}
 	handler := &HTTPHandler{
 		coordinator: config.Coordinator, astrodomeBackend: config.AstrodomeBackend, workerHealth: config.WorkerHealth,
-		deliveryBackend:  config.DeliveryBackend,
+		accountJobs:      config.AccountJobs,
 		credentialDigest: sha256.Sum256(config.ServiceCredential), mux: http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/availability", handler.availability)
@@ -104,13 +74,16 @@ func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs/{jobID}", handler.status)
 	handler.mux.HandleFunc("DELETE /internal/v1/directional/astrodome/jobs/{jobID}", handler.cancel)
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs/{jobID}/dataset", handler.dataset)
-	if handler.deliveryBackend != nil {
-		handler.mux.HandleFunc("POST /internal/v1/account/deliveries/{kind}", handler.submitDelivery)
+	if handler.accountJobs != nil {
+		handler.mux.HandleFunc("POST /internal/v1/account/jobs/{kind}", handler.submitAccountJob)
+		handler.mux.HandleFunc("GET /internal/v1/account/jobs/{jobID}", handler.accountJobStatus)
+		handler.mux.HandleFunc("DELETE /internal/v1/account/jobs/{jobID}", handler.cancelAccountJob)
+		handler.mux.HandleFunc("GET /internal/v1/account/jobs/{jobID}/files/{fileName}", handler.accountJobFile)
 	}
 	return handler, nil
 }
 
-func (handler *HTTPHandler) submitDelivery(w http.ResponseWriter, request *http.Request) {
+func (handler *HTTPHandler) submitAccountJob(w http.ResponseWriter, request *http.Request) {
 	_, numericUserID, ok := internalOwner(request)
 	if !ok {
 		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
@@ -120,21 +93,75 @@ func (handler *HTTPHandler) submitDelivery(w http.ResponseWriter, request *http.
 		writeHTTPProblem(w, http.StatusUnsupportedMediaType, "json_required")
 		return
 	}
-	kind := DeliveryKind(request.PathValue("kind"))
-	if kind != DeliveryForecast && kind != DeliveryHorizon {
+	kind := AccountJobKind(request.PathValue("kind"))
+	if kind != AccountJobForecast && kind != AccountJobHorizon {
 		http.NotFound(w, request)
 		return
 	}
-	var admission DeliveryAdmission
+	var admission AccountJobAdmission
 	if err := decodeInternalJSON(w, request, &admission); err != nil || admission.TelegramUserID != numericUserID || admission.Validate() != nil {
 		writeHTTPProblem(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if err := handler.deliveryBackend.AdmitDelivery(request.Context(), kind, admission); err != nil {
+	status, err := handler.accountJobs.AdmitAccountJob(request.Context(), kind, admission)
+	if err != nil {
 		writeDirectionalError(w, err)
 		return
 	}
-	writeHTTPJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "kind": kind})
+	writeHTTPJSON(w, http.StatusAccepted, status)
+}
+
+func (handler *HTTPHandler) accountJobStatus(w http.ResponseWriter, request *http.Request) {
+	_, numericUserID, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	status, err := handler.accountJobs.AccountJobStatus(request.Context(), numericUserID, request.PathValue("jobID"))
+	if err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	writeHTTPJSON(w, http.StatusOK, status)
+}
+
+func (handler *HTTPHandler) cancelAccountJob(w http.ResponseWriter, request *http.Request) {
+	_, numericUserID, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	if err := handler.accountJobs.CancelAccountJob(request.Context(), numericUserID, request.PathValue("jobID")); err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (handler *HTTPHandler) accountJobFile(w http.ResponseWriter, request *http.Request) {
+	_, numericUserID, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	output, err := handler.accountJobs.OpenAccountJobFile(request.Context(), numericUserID, request.PathValue("jobID"), request.PathValue("fileName"))
+	if err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	defer func() { _ = output.Body.Close() }()
+	w.Header().Set("Content-Type", output.MediaType)
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if output.ETag != "" {
+		w.Header().Set("ETag", output.ETag)
+	}
+	if output.Bytes > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(output.Bytes, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, output.Body)
 }
 
 func (handler *HTTPHandler) ServeHTTP(w http.ResponseWriter, request *http.Request) {
@@ -351,8 +378,8 @@ func writeDirectionalError(w http.ResponseWriter, err error) {
 		writeHTTPProblem(w, http.StatusTooManyRequests, "owner_busy")
 	case errors.Is(err, ErrDisabled):
 		writeHTTPProblem(w, http.StatusForbidden, "astrodome_disabled")
-	case errors.Is(err, ErrDeliveryUnavailable):
-		writeHTTPProblem(w, http.StatusServiceUnavailable, "delivery_unavailable")
+	case errors.Is(err, ErrAccountUnavailable):
+		writeHTTPProblem(w, http.StatusServiceUnavailable, "account_job_unavailable")
 	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrNotStarted), errors.Is(err, ErrClosed):
 		writeHTTPProblem(w, http.StatusServiceUnavailable, "astrodome_unavailable")
 	case errors.Is(err, ErrIdempotencyConflict):

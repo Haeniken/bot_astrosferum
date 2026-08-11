@@ -3,6 +3,7 @@ package forecast
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +109,26 @@ func TestReferenceVBandOpaqueCloudHasFiniteJSONAndNoExtinctionMagnitude(t *testi
 	}
 	if _, err := json.Marshal(result); err != nil {
 		t.Fatalf("opaque-cloud diagnostic is not valid JSON: %v", err)
+	}
+}
+
+func TestReferenceVBandMissingCompositionSerializesAtmosphericInputsAsNull(t *testing.T) {
+	surface, overall, _, sky := completeVBandAtmosphereFixture()
+	result, err := ComputeReferenceVBandAtmosphere(surface, overall, nil, sky)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AerosolOpticalDepth550 != nil || result.TotalColumnOzoneDU != nil || result.CompositionProvider != "" {
+		t.Fatalf("missing composition was represented as measured values: %+v", result)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"aerosol_optical_depth_550":null`, `"total_column_ozone_du":null`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("missing composition JSON %s does not contain %s", encoded, want)
+		}
 	}
 }
 

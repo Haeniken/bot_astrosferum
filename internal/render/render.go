@@ -50,6 +50,7 @@ type Result struct {
 	DirectionDelta   string `json:"direction_delta"`
 	SeeingIndex      string `json:"seeing_index"`
 	OverallIndex     string `json:"overall_index,omitempty"`
+	Dataset          string `json:"dataset,omitempty"`
 }
 
 type heatSpec struct {
@@ -80,6 +81,29 @@ func All(outputDirectory string, series forecast.VerticalSeries, options Options
 	diagnostics, err := forecast.ComputeDiagnostics(series)
 	if err != nil {
 		return Result{}, fmt.Errorf("compute diagnostics: %w", err)
+	}
+	return AllDiagnostics(outputDirectory, series, diagnostics, options)
+}
+
+// AllDiagnostics writes the four upper-air PNG views from one already
+// prepared diagnostics bundle. The interactive website serializes this exact
+// bundle, so the browser and the static bot charts cannot drift because of a
+// second calculation.
+func AllDiagnostics(outputDirectory string, series forecast.VerticalSeries, diagnostics forecast.Diagnostics, options Options) (Result, error) {
+	if outputDirectory == "" {
+		return Result{}, fmt.Errorf("output directory is required")
+	}
+	if options.Width == 0 {
+		options.Width = DefaultWidth
+	}
+	if options.Height == 0 {
+		options.Height = DefaultHeight
+	}
+	if options.Width < 640 || options.Height < 480 {
+		return Result{}, fmt.Errorf("render size must be at least 640x480")
+	}
+	if len(diagnostics.Times) != len(series.Frames) || len(diagnostics.PressureHPA) < 2 {
+		return Result{}, fmt.Errorf("prepared upper-air diagnostics do not match the forecast series")
 	}
 	if err := os.MkdirAll(outputDirectory, 0o750); err != nil {
 		return Result{}, fmt.Errorf("create output directory: %w", err)
@@ -160,6 +184,21 @@ func CloudObstruction(destination string, series forecast.CloudSeries, calibrati
 	obstruction, err := forecast.ComputeCloudObstruction(diagnostics, calibration)
 	if err != nil {
 		return err
+	}
+	return CloudObstructionDiagnostics(destination, series, diagnostics, obstruction, options)
+}
+
+// CloudObstructionDiagnostics renders the already computed physical
+// obstruction matrix used by the interactive dataset.
+func CloudObstructionDiagnostics(destination string, series forecast.CloudSeries, diagnostics forecast.CloudDiagnostics, obstruction [][]float64, options Options) error {
+	if options.Width == 0 {
+		options.Width = 3200
+	}
+	if options.Height == 0 {
+		options.Height = 1100
+	}
+	if len(diagnostics.Times) != len(series.Frames) || len(obstruction) != len(diagnostics.PressureHPA) {
+		return fmt.Errorf("prepared cloud diagnostics do not match the forecast series")
 	}
 	p := plot.New()
 	stylePlot(p)

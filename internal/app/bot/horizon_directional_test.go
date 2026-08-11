@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,26 @@ func TestHorizonUsesSharedDirectionalFIFOAfterAstrodome(t *testing.T) {
 	}
 }
 
+func TestHorizonDirectionalRejectsWorkerScienceIdentityDrift(t *testing.T) {
+	jobs := newHorizonTestJobs(t, filepath.Join(t.TempDir(), "horizon-cache"), &horizonFakeSource{currentRun: horizonTestRunID, supported: true}, HorizonJobsConfig{})
+	request, _, err := jobs.canonicalButtonRequest(horizonTestButtonRequest(), languageEnglish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = jobs.runDirectional(context.Background(), directional.Execution{
+		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: directional.KindHorizon,
+		ScienceCacheKey: "different-worker-science-identity", Payload: payload, Workspace: t.TempDir(),
+	})
+	var coded directional.CodedError
+	if !errors.As(err, &coded) || coded.Code != "science_identity_mismatch" {
+		t.Fatalf("science identity drift error = %v", err)
+	}
+}
+
 func TestHorizonSharedDirectionalOwnerLimitIncludesAstrodome(t *testing.T) {
 	root := t.TempDir()
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
@@ -132,6 +153,47 @@ func TestHorizonSharedDirectionalOwnerLimitIncludesAstrodome(t *testing.T) {
 	}
 	if err := ticket.Cancel(); err != nil {
 		t.Fatalf("cancel Astrodome: %v", err)
+	}
+}
+
+func TestHorizonCancelUserCancelsSharedDirectionalTicket(t *testing.T) {
+	root := t.TempDir()
+	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
+	jobs := newHorizonTestJobs(t, filepath.Join(root, "horizon-cache"), source, HorizonJobsConfig{})
+	coordinator := newBotDirectionalCoordinator(t, filepath.Join(root, "directional-cache"))
+	started := make(chan struct{})
+	cancelled := make(chan error, 1)
+	runner := directional.RunnerFunc(func(ctx context.Context, _ directional.Execution) (directional.RunnerResult, error) {
+		close(started)
+		<-ctx.Done()
+		cancelled <- ctx.Err()
+		return directional.RunnerResult{}, ctx.Err()
+	})
+	if err := jobs.UseDirectionalCoordinatorWithRunner(coordinator, runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	startHorizonTestJobs(t, jobs)
+	messenger := newHorizonFakeMessenger()
+	if err := jobs.Deliver(context.Background(), "web", messenger, 42, 42, horizonTestButtonRequest(), "en"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("Horizon directional ticket did not start")
+	}
+	jobs.CancelUser("web", 42)
+	select {
+	case err := <-cancelled:
+		if err == nil {
+			t.Fatal("directional runner received a nil cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("web cancellation did not reach the shared directional runner")
 	}
 }
 

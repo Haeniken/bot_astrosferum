@@ -16,7 +16,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "shared-render-v19-reference-v-band-penalty-decomposition"
+const renderCacheVersion = "shared-render-v20-interactive-dataset"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, composition forecast.AtmosphericCompositionSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
@@ -39,6 +39,8 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 		"surface_period=" + firstSurface.UTC().Format(time.RFC3339) + "/" + lastSurface.UTC().Format(time.RFC3339),
 		"cloud_period=" + firstCloud.UTC().Format(time.RFC3339) + "/" + lastCloud.UTC().Format(time.RFC3339),
 		"algorithm=" + vertical.AlgorithmVersion,
+		"overall=" + forecast.OverallIndexAlgorithmVersion,
+		"cloud_obstruction=" + forecast.CloudObstructionAlgorithmVersion,
 		fmt.Sprintf("size=%dx%d", options.Width, options.Height),
 		"language=" + options.Language,
 		"render=" + render.Version,
@@ -75,6 +77,7 @@ func cachedRenderResult(directory string) render.Result {
 		DirectionDelta:   filepath.Join(directory, "wind-direction-delta.png"),
 		SeeingIndex:      filepath.Join(directory, "forecast-seeing-index.png"),
 		OverallIndex:     filepath.Join(directory, "overall-astronomy-index-hourly.png"),
+		Dataset:          filepath.Join(directory, "forecast.json"),
 	}
 }
 
@@ -117,7 +120,7 @@ func publishRenderCache(root, key, staging string) (render.Result, error) {
 }
 
 func renderResultPaths(result render.Result) []string {
-	return []string{result.Weather, result.OverallIndex, result.CloudObstruction, result.WindSpeed, result.VectorShear, result.DirectionDelta, result.SeeingIndex}
+	return []string{result.Weather, result.OverallIndex, result.CloudObstruction, result.WindSpeed, result.VectorShear, result.DirectionDelta, result.SeeingIndex, result.Dataset}
 }
 
 func pruneRenderCache(root string, maximumAge time.Duration, maximumEntries int) {

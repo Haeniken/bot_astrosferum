@@ -27,7 +27,7 @@ func TestRemoteRunnerExecutesInsideSharedWorkspace(t *testing.T) {
 	handler, err := NewWorkerHTTPHandler(WorkerHTTPConfig{
 		WorkspaceRoot: root, ServiceCredential: credential,
 		Runners: map[Kind]Runner{KindAstrodome: RunnerFunc(func(ctx context.Context, execution Execution) (RunnerResult, error) {
-			if execution.Workspace != workspace || execution.JobID != "job_abcdefghijklmnopqrstuvwxyz" || string(execution.Payload) != `{"point":1}` {
+			if execution.Workspace != workspace || execution.JobID != "job_abcdefghijklmnopqrstuvwxyz" || execution.ScienceCacheKey != "science-key" || string(execution.Payload) != `{"point":1}` {
 				t.Fatalf("unexpected execution: %+v", execution)
 			}
 			path := filepath.Join(execution.Workspace, "dataset.json")
@@ -47,7 +47,7 @@ func TestRemoteRunnerExecutesInsideSharedWorkspace(t *testing.T) {
 		t.Fatalf("NewRemoteRunner: %v", err)
 	}
 	result, err := remote.Run(context.Background(), Execution{
-		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindAstrodome, Source: source,
+		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindAstrodome, ScienceCacheKey: "science-key", Source: source,
 		Payload: json.RawMessage(`{"point":1}`), Workspace: workspace,
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestWorkerHTTPHandlerRejectsWorkspaceOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := workerExecutionRequest{
-		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindHorizon,
+		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindHorizon, ScienceCacheKey: "science-key",
 		Source:  SourceIdentity{Provider: "ICON-EU", RunID: "2026072806", GridProfile: "horizon", GeometryDigest: "digest"},
 		Payload: json.RawMessage(`{}`), Workspace: outside,
 	}
@@ -126,7 +126,7 @@ func TestWorkerHTTPHandlerLogsInternalRunnerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := workerExecutionRequest{
-		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindAstrodome,
+		JobID: "job_abcdefghijklmnopqrstuvwxyz", Kind: KindAstrodome, ScienceCacheKey: "science-key",
 		Source:  SourceIdentity{Provider: "icon-eu", RunID: "2026072812", GridProfile: "dense-v1", GeometryDigest: "digest"},
 		Payload: json.RawMessage(`{}`), Workspace: workspace,
 	}
@@ -226,7 +226,7 @@ func TestWorkerHTTPHandlerAllowsOnlyOneExecution(t *testing.T) {
 	source := SourceIdentity{Provider: "ICON-EU", RunID: "2026072806", GridProfile: "horizon", GeometryDigest: "digest"}
 	firstDone := make(chan error, 1)
 	go func() {
-		_, runErr := remote.Run(context.Background(), Execution{JobID: "job_abcdefghijklmnopqrstuvwx1", Kind: KindHorizon, Source: source, Payload: json.RawMessage(`{}`), Workspace: firstWorkspace})
+		_, runErr := remote.Run(context.Background(), Execution{JobID: "job_abcdefghijklmnopqrstuvwx1", Kind: KindHorizon, ScienceCacheKey: "science-key-1", Source: source, Payload: json.RawMessage(`{}`), Workspace: firstWorkspace})
 		firstDone <- runErr
 	}()
 	select {
@@ -234,7 +234,7 @@ func TestWorkerHTTPHandlerAllowsOnlyOneExecution(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first execution did not start")
 	}
-	_, secondErr := remote.Run(context.Background(), Execution{JobID: "job_abcdefghijklmnopqrstuvwx2", Kind: KindHorizon, Source: source, Payload: json.RawMessage(`{}`), Workspace: secondWorkspace})
+	_, secondErr := remote.Run(context.Background(), Execution{JobID: "job_abcdefghijklmnopqrstuvwx2", Kind: KindHorizon, ScienceCacheKey: "science-key-2", Source: source, Payload: json.RawMessage(`{}`), Workspace: secondWorkspace})
 	var coded FailureCoder
 	if !errors.As(secondErr, &coded) || coded.FailureCode() != "worker_busy" {
 		t.Fatalf("second error=%v", secondErr)
@@ -288,7 +288,7 @@ func TestWorkerHTTPHandlerSerializesHorizonAndAstrodome(t *testing.T) {
 	firstDone := make(chan error, 1)
 	go func() {
 		_, runErr := remote.Run(context.Background(), Execution{
-			JobID: "job_abcdefghijklmnopqrstuvwx1", Kind: KindHorizon, Source: source,
+			JobID: "job_abcdefghijklmnopqrstuvwx1", Kind: KindHorizon, ScienceCacheKey: "science-key-1", Source: source,
 			Payload: json.RawMessage(`{}`), Workspace: firstWorkspace,
 		})
 		firstDone <- runErr
@@ -299,7 +299,7 @@ func TestWorkerHTTPHandlerSerializesHorizonAndAstrodome(t *testing.T) {
 		t.Fatal("Horizon execution did not start")
 	}
 	_, secondErr := remote.Run(context.Background(), Execution{
-		JobID: "job_abcdefghijklmnopqrstuvwx2", Kind: KindAstrodome, Source: source,
+		JobID: "job_abcdefghijklmnopqrstuvwx2", Kind: KindAstrodome, ScienceCacheKey: "science-key-2", Source: source,
 		Payload: json.RawMessage(`{}`), Workspace: secondWorkspace,
 	})
 	var coded FailureCoder

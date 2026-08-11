@@ -275,6 +275,19 @@ func TestOverallPenaltyStackClosesAtTenAndExposesPrecipitationVeto(t *testing.T)
 	}
 }
 
+func TestOverallPenaltyStackRejectsAnyNegativeLoss(t *testing.T) {
+	frames := []forecast.OverallIndexFrame{{
+		ValidAt: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC),
+		Index:   10,
+		PenaltyContributions: []forecast.OverallPenaltyContribution{{
+			Key: forecast.OverallPenaltyCloudObstruction, LossFraction: -1e-13,
+		}},
+	}}
+	if _, _, err := overallStackValues(frames); err == nil {
+		t.Fatal("negative Overall loss was accepted by the static renderer")
+	}
+}
+
 func TestAllProducesFour1280x960PNGs(t *testing.T) {
 	output := t.TempDir()
 	result, err := All(output, forecast.SyntheticVerticalFixture(), Options{})

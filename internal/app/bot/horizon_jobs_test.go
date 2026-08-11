@@ -94,6 +94,23 @@ type horizonFakeMessenger struct {
 	changed  chan struct{}
 }
 
+type horizonDeliveryTestMessenger struct {
+	*horizonFakeMessenger
+	photoErr   error
+	completion chan error
+}
+
+func (messenger *horizonDeliveryTestMessenger) SendPhoto(ctx context.Context, chatID int64, path, caption string) error {
+	if messenger.photoErr != nil {
+		return messenger.photoErr
+	}
+	return messenger.horizonFakeMessenger.SendPhoto(ctx, chatID, path, caption)
+}
+
+func (messenger *horizonDeliveryTestMessenger) CompleteHorizon(err error) {
+	messenger.completion <- err
+}
+
 func newHorizonFakeMessenger() *horizonFakeMessenger {
 	return &horizonFakeMessenger{changed: make(chan struct{}, 64)}
 }
@@ -144,6 +161,37 @@ func (messenger *horizonFakeMessenger) snapshot() (messages, photos, answers []s
 	messenger.mu.Lock()
 	defer messenger.mu.Unlock()
 	return append([]string(nil), messenger.messages...), append([]string(nil), messenger.photos...), append([]string(nil), messenger.answers...)
+}
+
+func TestHorizonDeliveryFailureIsScopedToOneWaiter(t *testing.T) {
+	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
+	jobs := newHorizonTestJobs(t, t.TempDir(), source, HorizonJobsConfig{})
+	jobs.root = t.Context()
+	path := filepath.Join(t.TempDir(), "horizon.png")
+	if err := os.WriteFile(path, []byte("\x89PNG\r\n\x1a\ntest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := &horizonDeliveryTestMessenger{
+		horizonFakeMessenger: newHorizonFakeMessenger(), photoErr: errors.New("first platform failed"), completion: make(chan error, 1),
+	}
+	second := &horizonDeliveryTestMessenger{horizonFakeMessenger: newHorizonFakeMessenger(), completion: make(chan error, 1)}
+	jobs.performDelivery(horizonDelivery{
+		key: "delivery-test", path: path, runID: horizonTestRunID, timeZone: "UTC",
+		waiters: []horizonWaiter{
+			{identity: horizonUserIdentity{platform: "telegram", userID: 1}, chatID: 1, messenger: first, language: languageEnglish},
+			{identity: horizonUserIdentity{platform: "web", userID: 2}, chatID: 2, messenger: second, language: languageEnglish},
+		},
+	})
+	if err := <-first.completion; err == nil {
+		t.Fatal("first waiter delivery failure was not reported")
+	}
+	if err := <-second.completion; err != nil {
+		t.Fatalf("first waiter poisoned second waiter: %v", err)
+	}
+	_, photos, _ := second.snapshot()
+	if len(photos) != 1 {
+		t.Fatalf("second waiter photos = %d, want 1", len(photos))
+	}
 }
 
 func TestHorizonActionPayloadIsAuthenticatedCompactAndPersistent(t *testing.T) {
@@ -904,7 +952,7 @@ func newHorizonTestJobs(t *testing.T, root string, source *horizonFakeSource, ov
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return os.WriteFile(destination, []byte("test-png"), 0o640)
+		return os.WriteFile(destination, []byte("\x89PNG\r\n\x1a\ntest-png"), 0o640)
 	}, forecast.DefaultOverallIndexCalibration(), nil)
 	if err != nil {
 		t.Fatalf("NewHorizonJobs: %v", err)
@@ -912,7 +960,15 @@ func newHorizonTestJobs(t *testing.T, root string, source *horizonFakeSource, ov
 	jobs.compute = func(_ context.Context, snapshots []forecast.HorizonSnapshot, _ forecast.HorizonPlan, _ forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error) {
 		frames := make([]forecast.HorizonFrame, len(snapshots))
 		for index, snapshot := range snapshots {
-			frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: make([]forecast.HorizonResult, forecast.HorizonDirectionCount)}
+			results := make([]forecast.HorizonResult, forecast.HorizonDirectionCount)
+			for directionIndex, direction := range forecast.HorizonDirections() {
+				results[directionIndex] = forecast.HorizonResult{
+					ValidAt: snapshot.ValidAt, Direction: direction, AzimuthDegrees: float64(directionIndex) * 45,
+					GeometricElevationDegrees: forecast.HorizonGeometricElevationDegrees,
+					DataQuality:               forecast.HorizonDataUnavailable, LimitingFactor: forecast.HorizonFactorUnavailable,
+				}
+			}
+			frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
 		}
 		return frames, nil
 	}

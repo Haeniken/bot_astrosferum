@@ -21,13 +21,14 @@ import (
 
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
+	"bot_astrosferum/internal/render"
 )
 
 const (
 	HorizonActionID       ActionID = "horizon.v1"
 	HorizonProviderICONEU string   = "icon-eu"
 
-	horizonCacheSchema     = "horizon-cache-v1"
+	horizonCacheSchema     = "horizon-cache-v2-interactive"
 	horizonActionKeyFile   = ".horizon-action-key"
 	horizonActionTagBytes  = 8
 	horizonActionCoreParts = 4
@@ -64,6 +65,17 @@ type HorizonMessenger interface {
 	SendMessage(context.Context, int64, string, bool) error
 	SendPhoto(context.Context, int64, string, string) error
 	AnswerAction(context.Context, string, string) error
+}
+
+// HorizonCompletionMessenger is implemented by non-platform callers that
+// need an explicit terminal signal instead of inferring it from localized
+// status messages. Telegram and VK adapters do not need to implement it.
+type HorizonCompletionMessenger interface {
+	CompleteHorizon(error)
+}
+
+type HorizonDatasetMessenger interface {
+	SendHorizonDataset(context.Context, []byte) error
 }
 
 // HorizonRenderInput contains only already-fetched and already-computed data.
@@ -132,6 +144,7 @@ type horizonJob struct {
 type horizonDelivery struct {
 	key       string
 	path      string
+	dataset   []byte
 	runID     string
 	timeZone  string
 	waiters   []horizonWaiter
@@ -176,6 +189,7 @@ type HorizonJobs struct {
 	wait               sync.WaitGroup
 	closeOne           sync.Once
 	directional        *directional.Coordinator
+	directionalTickets map[horizonUserIdentity]*directional.Ticket
 }
 
 func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer HorizonRenderFunc, calibration forecast.OverallIndexCalibration, logf func(string, ...any)) (*HorizonJobs, error) {
@@ -229,8 +243,25 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 		delivery:           make(chan horizonDelivery, deliveryCapacity),
 		cacheDeliverySlots: make(chan struct{}, deliveryCapacity/2),
 		jobs:               make(map[string]*horizonJob), active: make(map[horizonUserIdentity]string),
-		recent: make(map[horizonUserIdentity]horizonRecentClick),
+		recent:             make(map[horizonUserIdentity]horizonRecentClick),
+		directionalTickets: make(map[horizonUserIdentity]*directional.Ticket),
 	}, nil
+}
+
+// CancelUser cancels the actual shared directional ticket for one active
+// caller. Platform update contexts never call this method; it exists for the
+// owner-scoped website DELETE/timeout path.
+func (jobs *HorizonJobs) CancelUser(platform string, userID int64) {
+	if jobs == nil || !horizonPlatformPattern.MatchString(platform) || userID <= 0 {
+		return
+	}
+	identity := horizonUserIdentity{platform: platform, userID: userID}
+	jobs.mu.Lock()
+	ticket := jobs.directionalTickets[identity]
+	jobs.mu.Unlock()
+	if ticket != nil {
+		_ = ticket.Cancel()
+	}
 }
 
 // Start binds all work to the process/root lifetime rather than to a
@@ -370,6 +401,7 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 	if !jobs.isRunning() {
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Анализ горизонта сейчас недоступен.", "Horizon analysis is currently unavailable."))
+		completeHorizonMessenger(messenger, ErrHorizonUnsupported)
 		return nil
 	}
 
@@ -378,12 +410,14 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Сейчас не удалось проверить актуальный ICON-EU run. Попробуйте позже.",
 			"The current ICON-EU run could not be checked. Please try again later."))
+		completeHorizonMessenger(messenger, err)
 		return nil
 	}
 	if currentRun != request.RunID {
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Кнопка относится к устаревшему run. Запросите обычный прогноз снова.",
 			"This button belongs to an older run. Request the regular forecast again."))
+		completeHorizonMessenger(messenger, ErrHorizonStaleAction)
 		return nil
 	}
 	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
@@ -391,6 +425,7 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Для этой точки анализ горизонта ICON-EU недоступен.",
 			"ICON-EU horizon analysis is unavailable for this location."))
+		completeHorizonMessenger(messenger, ErrHorizonUnsupported)
 		return nil
 	}
 	request.Location.TimeZone = jobs.resolveTimeZone(request.Location)
@@ -398,6 +433,7 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 	if err != nil {
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
+		completeHorizonMessenger(messenger, err)
 		return nil
 	}
 	waiter := horizonWaiter{
@@ -413,10 +449,12 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 				jobs.sendStatus(messenger, waiter.chatID, language.text(
 					"Очередь отправки занята. Повторите запрос чуть позже.",
 					"The delivery queue is busy. Please try again shortly."))
+				completeHorizonMessenger(messenger, ErrHorizonQueueFull)
 			}
 		} else {
 			jobs.sendStatus(messenger, waiter.chatID, language.text(
 				"Этот запрос уже обрабатывается.", "This request is already being processed."))
+			completeHorizonMessenger(messenger, ErrHorizonUserBusy)
 		}
 		return nil
 	}
@@ -435,13 +473,16 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 		jobs.sendStatus(messenger, waiter.chatID, language.text(
 			"У вас уже выполняется анализ горизонта. Дождитесь результата.",
 			"You already have a horizon analysis in progress. Please wait for it."))
+		completeHorizonMessenger(messenger, enqueueErr)
 	case errors.Is(enqueueErr, ErrHorizonQueueFull):
 		jobs.sendStatus(messenger, waiter.chatID, language.text(
 			"Очередь анализа горизонта заполнена. Попробуйте позже.",
 			"The horizon-analysis queue is full. Please try again later."))
+		completeHorizonMessenger(messenger, enqueueErr)
 	case enqueueErr != nil:
 		jobs.sendStatus(messenger, waiter.chatID, language.text(
 			"Анализ горизонта сейчас недоступен.", "Horizon analysis is currently unavailable."))
+		completeHorizonMessenger(messenger, enqueueErr)
 	case joined:
 		jobs.sendStatus(messenger, waiter.chatID, language.text(
 			"Такой расчёт уже выполняется; результат будет отправлен и вам.",
@@ -843,12 +884,22 @@ func (jobs *HorizonJobs) process(job *horizonJob) {
 		jobs.deliverJob(job, "", err)
 		return
 	}
-	path, err := jobs.cache.publish(job.key, jobs.now(), func(destination string) error {
+	path, err := jobs.cache.publishBundle(job.key, jobs.now(), func(destination, datasetDestination string) error {
 		if renderErr := jobs.render(ctx, destination, HorizonRenderInput{
 			Location: job.request.Location, Provider: "ICON-EU",
 			RunID: job.request.RunID, Grid: "ICON-EU 0.0625°", Frames: frames,
 		}, job.request.Language.renderCode()); renderErr != nil {
 			return renderErr
+		}
+		dataset, datasetErr := render.PrepareHorizonInteractiveDataset(render.HorizonInput{
+			Location: job.request.Location, Provider: "ICON-EU", RunID: job.request.RunID,
+			Grid: "ICON-EU 0.0625°", Frames: frames,
+		}, job.key, job.request.ObserverSurfaceElevationM, jobs.calibration)
+		if datasetErr != nil {
+			return datasetErr
+		}
+		if datasetErr := render.SaveHorizonInteractiveDataset(datasetDestination, dataset); datasetErr != nil {
+			return datasetErr
 		}
 		return ctx.Err()
 	})
@@ -897,17 +948,22 @@ func (jobs *HorizonJobs) deliverJob(job *horizonJob, path string, jobErr error) 
 	}
 	jobs.mu.Unlock()
 	leased := false
+	var dataset []byte
 	if jobErr == nil {
-		var leaseErr error
-		path, leaseErr = jobs.cache.lease(path)
-		if leaseErr != nil {
-			jobErr = leaseErr
+		if filepath.Base(path) == horizonCacheImage {
+			dataset, jobErr = os.ReadFile(filepath.Join(filepath.Dir(path), horizonCacheDataset))
+			if jobErr == nil {
+				path, jobErr = jobs.cache.lease(path)
+			}
 		} else {
-			leased = true
+			var cleanup func()
+			path, dataset, cleanup, jobErr = readHorizonBundle(path, jobs.cache.root)
+			_ = cleanup
 		}
+		leased = jobErr == nil
 	}
 	delivery := horizonDelivery{
-		key: job.key, path: path, runID: job.request.RunID,
+		key: job.key, path: path, dataset: dataset, runID: job.request.RunID,
 		timeZone: job.request.Location.TimeZone, waiters: waiters, jobErr: jobErr, leased: leased,
 	}
 	select {
@@ -939,6 +995,11 @@ func (jobs *HorizonJobs) scheduleCachedDelivery(waiter horizonWaiter, key, path,
 	default:
 		return false
 	}
+	dataset, err := os.ReadFile(filepath.Join(filepath.Dir(path), horizonCacheDataset))
+	if err != nil {
+		<-jobs.cacheDeliverySlots
+		return false
+	}
 	lease, err := jobs.cache.lease(path)
 	if err != nil {
 		<-jobs.cacheDeliverySlots
@@ -953,7 +1014,7 @@ func (jobs *HorizonJobs) scheduleCachedDelivery(waiter horizonWaiter, key, path,
 	}
 	select {
 	case jobs.delivery <- horizonDelivery{
-		key: key, path: lease, runID: runID, timeZone: timeZone,
+		key: key, path: lease, dataset: dataset, runID: runID, timeZone: timeZone,
 		waiters: []horizonWaiter{waiter}, leased: true, cacheSlot: true,
 	}:
 		return true
@@ -985,30 +1046,31 @@ func (jobs *HorizonJobs) performDelivery(delivery horizonDelivery) {
 	}
 	batchContext, cancelBatch := context.WithTimeout(jobs.root, horizonDeliveryBatch)
 	defer cancelBatch()
-	deliveryError := delivery.jobErr
+	sourceError := delivery.jobErr
 	for _, waiter := range delivery.waiters {
 		if batchContext.Err() != nil {
 			jobs.logf("horizon delivery batch exceeded its aggregate time limit")
 			break
 		}
-		if deliveryError == nil {
+		waiterError := sourceError
+		if waiterError == nil {
 			currentRun, err := jobs.source.CurrentRunID()
 			if err != nil || currentRun != delivery.runID {
-				deliveryError = ErrHorizonStaleAction
+				waiterError = ErrHorizonStaleAction
 				jobs.logf("horizon result rejected immediately before delivery because the current run could not be confirmed")
 			}
 		}
 		ctx, cancel := context.WithTimeout(batchContext, horizonDeliveryTimeout)
-		if deliveryError != nil {
+		if waiterError != nil {
 			text := waiter.language.text(
 				"Не удалось рассчитать условия у горизонта. Обычный прогноз остаётся доступен.",
 				"Horizon conditions could not be calculated. The regular forecast remains available.")
 			switch {
-			case errors.Is(deliveryError, ErrHorizonStaleAction):
+			case errors.Is(waiterError, ErrHorizonStaleAction):
 				text = waiter.language.text(
 					"Расчёт относится к устаревшему run. Запросите обычный прогноз снова.",
 					"This calculation belongs to an older run. Request the regular forecast again.")
-			case errors.Is(deliveryError, context.DeadlineExceeded), errors.Is(deliveryError, context.Canceled):
+			case errors.Is(waiterError, context.DeadlineExceeded), errors.Is(waiterError, context.Canceled):
 				text = waiter.language.text(
 					"Расчёт условий у горизонта превысил лимит времени. Попробуйте позже.",
 					"The horizon calculation exceeded its time limit. Please try again later.")
@@ -1016,14 +1078,30 @@ func (jobs *HorizonJobs) performDelivery(delivery horizonDelivery) {
 			if err := waiter.messenger.SendMessage(ctx, waiter.chatID, text, false); err != nil {
 				jobs.logf("horizon failure notification failed on %s", waiter.identity.platform)
 			}
-		} else if err := waiter.messenger.SendPhoto(ctx, waiter.chatID, delivery.path, horizonCaption(
-			delivery.runID, delivery.timeZone, jobs.now(), jobs.config.MaxStaleAge, waiter.language,
-		)); err != nil {
-			jobs.logf("horizon result delivery failed on %s", waiter.identity.platform)
+			completeHorizonMessenger(waiter.messenger, waiterError)
+		} else {
+			if sink, ok := waiter.messenger.(HorizonDatasetMessenger); ok {
+				waiterError = sink.SendHorizonDataset(ctx, delivery.dataset)
+			}
+			if waiterError == nil {
+				waiterError = waiter.messenger.SendPhoto(ctx, waiter.chatID, delivery.path, horizonCaption(
+					delivery.runID, delivery.timeZone, jobs.now(), jobs.config.MaxStaleAge, waiter.language,
+				))
+			}
+			if waiterError != nil {
+				jobs.logf("horizon result delivery failed on %s", waiter.identity.platform)
+			}
+			completeHorizonMessenger(waiter.messenger, waiterError)
 		}
 		cancel()
 	}
 	jobs.finishJob(delivery.key, delivery.waiters)
+}
+
+func completeHorizonMessenger(messenger HorizonMessenger, err error) {
+	if completion, ok := messenger.(HorizonCompletionMessenger); ok {
+		completion.CompleteHorizon(err)
+	}
 }
 
 func (jobs *HorizonJobs) finishJob(key string, waiters []horizonWaiter) {

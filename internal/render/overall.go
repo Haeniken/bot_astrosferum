@@ -209,10 +209,13 @@ func overallStackValues(frames []forecast.OverallIndexFrame) (plotter.Values, ma
 				return nil, nil, fmt.Errorf("overall frame %d repeats penalty %q", index, contribution.Key)
 			}
 			seen[contribution.Key] = struct{}{}
-			if math.IsNaN(contribution.LossFraction) || math.IsInf(contribution.LossFraction, 0) || contribution.LossFraction < -1e-12 {
+			if math.IsNaN(contribution.LossFraction) || math.IsInf(contribution.LossFraction, 0) || contribution.LossFraction < 0 {
 				return nil, nil, fmt.Errorf("overall frame %d has invalid %q loss %.6g", index, contribution.Key, contribution.LossFraction)
 			}
-			value := math.Max(0, contribution.LossFraction) * 9
+			value, err := forecast.OverallPenaltyPoints(contribution.LossFraction)
+			if err != nil {
+				return nil, nil, fmt.Errorf("overall frame %d has invalid %q loss %.6g: %w", index, contribution.Key, contribution.LossFraction, err)
+			}
 			values[index] = value
 			loss += contribution.LossFraction
 		}

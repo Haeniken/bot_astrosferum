@@ -42,6 +42,7 @@ type directionalJob struct {
 	id              string
 	kind            Kind
 	scienceDigest   string
+	scienceCacheKey string
 	source          SourceIdentity
 	payload         json.RawMessage
 	owners          map[string]struct{}
@@ -242,7 +243,7 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 			return nil, err
 		}
 		job := &directionalJob{
-			id: jobID, kind: request.Kind, scienceDigest: scienceDigest, source: request.Source,
+			id: jobID, kind: request.Kind, scienceDigest: scienceDigest, scienceCacheKey: request.ScienceCacheKey, source: request.Source,
 			owners: make(map[string]struct{}), idempotencyKeys: make(map[string]string),
 			state: StateReady, createdAt: now, updatedAt: now, finishedAt: now,
 			result: cached, done: make(chan struct{}),
@@ -270,7 +271,7 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		return nil, err
 	}
 	job := &directionalJob{
-		id: jobID, kind: request.Kind, scienceDigest: scienceDigest, source: request.Source,
+		id: jobID, kind: request.Kind, scienceDigest: scienceDigest, scienceCacheKey: request.ScienceCacheKey, source: request.Source,
 		payload: append(json.RawMessage(nil), request.Payload...),
 		owners:  make(map[string]struct{}), idempotencyKeys: make(map[string]string),
 		state: StateQueued, createdAt: now, updatedAt: now, done: make(chan struct{}),
@@ -466,7 +467,7 @@ func (coordinator *Coordinator) execute(ctx context.Context, runner Runner, job 
 	var runnerResult RunnerResult
 	if err == nil {
 		runnerResult, err = runner.Run(ctx, Execution{
-			JobID: job.id, Kind: job.kind, Source: job.source,
+			JobID: job.id, Kind: job.kind, ScienceCacheKey: job.scienceCacheKey, Source: job.source,
 			Payload: append(json.RawMessage(nil), job.payload...), Workspace: workspace,
 		})
 	}

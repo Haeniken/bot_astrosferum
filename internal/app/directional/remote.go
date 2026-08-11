@@ -33,11 +33,12 @@ type RemoteRunner struct {
 }
 
 type workerExecutionRequest struct {
-	JobID     string          `json:"job_id"`
-	Kind      Kind            `json:"kind"`
-	Source    SourceIdentity  `json:"source"`
-	Payload   json.RawMessage `json:"payload"`
-	Workspace string          `json:"workspace"`
+	JobID           string          `json:"job_id"`
+	Kind            Kind            `json:"kind"`
+	ScienceCacheKey string          `json:"science_cache_key"`
+	Source          SourceIdentity  `json:"source"`
+	Payload         json.RawMessage `json:"payload"`
+	Workspace       string          `json:"workspace"`
 }
 
 type workerExecutionResponse struct {
@@ -234,7 +235,7 @@ func (handler *WorkerHTTPHandler) ServeHTTP(w http.ResponseWriter, request *http
 	}
 	if err := validateRequest(Request{
 		Kind: kind, OwnerID: "internal-worker", IdempotencyKey: payload.JobID,
-		ScienceCacheKey: payload.JobID, Source: payload.Source, Payload: payload.Payload,
+		ScienceCacheKey: payload.ScienceCacheKey, Source: payload.Source, Payload: payload.Payload,
 	}); err != nil {
 		writeWorkerProblem(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -252,7 +253,7 @@ func (handler *WorkerHTTPHandler) ServeHTTP(w http.ResponseWriter, request *http
 		return
 	}
 	result, err := runner.Run(request.Context(), Execution{
-		JobID: payload.JobID, Kind: payload.Kind, Source: payload.Source,
+		JobID: payload.JobID, Kind: payload.Kind, ScienceCacheKey: payload.ScienceCacheKey, Source: payload.Source,
 		Payload: append(json.RawMessage(nil), payload.Payload...), Workspace: workspace,
 	})
 	if err != nil {

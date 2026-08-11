@@ -36,6 +36,21 @@ import (
 
 const version = "0.1.0-dev"
 
+type accountResultDiscardMessenger struct{}
+
+func (accountResultDiscardMessenger) SendMessage(context.Context, int64, string, bool) error {
+	return nil
+}
+func (accountResultDiscardMessenger) SendPhoto(context.Context, int64, string, string) error {
+	return nil
+}
+func (accountResultDiscardMessenger) SendDocument(context.Context, int64, string, string) error {
+	return nil
+}
+func (accountResultDiscardMessenger) AnswerAction(context.Context, string, string) error {
+	return nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -461,11 +476,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	horizonAccountCapacity := 1
+	horizonAccountTimeout := time.Duration(0)
 	if cfg.HorizonAnalysis.Enabled {
 		horizonAccountCapacity = cfg.HorizonAnalysis.QueueSize + cfg.HorizonAnalysis.Concurrency
+		if cfg.HorizonAnalysis.JobTimeout.Duration > 0 {
+			horizonAccountTimeout = cfg.HorizonAnalysis.JobTimeout.Duration + 5*time.Minute
+		}
 	}
-	accountDeliveries, err := bot.NewAccountDeliveryDispatcher(
-		ctx, cfg.App.RequestTimeout.Duration, cfg.App.Workers, horizonAccountCapacity, logf,
+	accountResults, err := bot.NewAccountResultDispatcher(
+		ctx, cfg.App.RequestTimeout.Duration, horizonAccountTimeout, 96*time.Hour,
+		filepath.Join(cfg.Paths.Data, "cache", "account-results"),
+		cfg.App.Workers, horizonAccountCapacity, logf,
 	)
 	if err != nil {
 		return err
@@ -511,20 +532,18 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}
 	}
 	var directionalService *directionalRuntime
-	if cfg.HorizonAnalysis.Enabled || astrodomeOperational {
-		directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, accountDeliveries, logf)
-		if err != nil {
-			return err
-		}
-		if err := directionalService.Start(ctx); err != nil {
-			return err
-		}
-		defer func() {
-			if closeErr := directionalService.Close(); closeErr != nil {
-				logf("directional runtime shutdown failed: %v", closeErr)
-			}
-		}()
+	directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, accountResults, logf)
+	if err != nil {
+		return err
 	}
+	if err := directionalService.Start(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := directionalService.Close(); closeErr != nil {
+			logf("directional runtime shutdown failed: %v", closeErr)
+		}
+	}()
 	database, err := pgstore.Open(ctx, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name, cfg.Database.User, cfg.Database.Password, cfg.Database.MaxConns)
 	if err != nil {
 		return err
@@ -588,6 +607,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}
 		return nil
 	}
+	accountHandler, err := bot.NewHandler(accountResultDiscardMessenger{})
+	if err != nil {
+		return err
+	}
+	if err := configureHandler(accountHandler, "web", nil, "account-renders"); err != nil {
+		return err
+	}
+	if err := accountResults.SetHandler(accountHandler); err != nil {
+		return err
+	}
 	type platformAdapter struct {
 		name string
 		run  func(context.Context) error
@@ -607,9 +636,6 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		if err := configureHandler(handler, "telegram", cfg.Platforms.Telegram.AdminIDs, "telegram-renders"); err != nil {
-			return err
-		}
-		if err := accountDeliveries.SetTelegramHandler(handler); err != nil {
 			return err
 		}
 		adapters = append(adapters, platformAdapter{name: "Telegram", run: func(runContext context.Context) error {

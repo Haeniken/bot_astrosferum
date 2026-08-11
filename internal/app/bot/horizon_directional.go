@@ -13,6 +13,7 @@ import (
 
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
+	"bot_astrosferum/internal/render"
 )
 
 const horizonDirectionalGridProfile = "horizon-8x10deg-v1"
@@ -69,6 +70,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		jobs.mu.Unlock()
 		jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
 			"Анализ горизонта сейчас недоступен.", "Horizon analysis is currently unavailable."))
+		completeHorizonMessenger(waiter.messenger, ErrHorizonUnsupported)
 		return nil
 	}
 	jobs.pruneRecentLocked(jobs.now())
@@ -82,6 +84,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 				"Этот запрос уже обрабатывается.", "This request is already being processed.")
 		}
 		jobs.sendStatus(waiter.messenger, waiter.chatID, message)
+		completeHorizonMessenger(waiter.messenger, ErrHorizonUserBusy)
 		return nil
 	}
 	jobs.active[waiter.identity] = job.key
@@ -93,6 +96,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
 		jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
 			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
+		completeHorizonMessenger(waiter.messenger, err)
 		return nil
 	}
 	geometryDigest, err := horizonPlanDigest(job.plan)
@@ -100,6 +104,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
 		jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
 			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
+		completeHorizonMessenger(waiter.messenger, err)
 		return nil
 	}
 	ticket, err := coordinator.Submit(ctx, directional.Request{
@@ -126,6 +131,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 			jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
 				"Анализ горизонта сейчас недоступен.", "Horizon analysis is currently unavailable."))
 		}
+		completeHorizonMessenger(waiter.messenger, err)
 		return nil
 	}
 
@@ -135,9 +141,11 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		jobs.mu.Unlock()
 		_ = ticket.Cancel()
 		jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
+		completeHorizonMessenger(waiter.messenger, context.Canceled)
 		return nil
 	}
 	root := jobs.root
+	jobs.directionalTickets[waiter.identity] = ticket
 	jobs.wait.Add(1)
 	jobs.mu.Unlock()
 	go jobs.awaitDirectional(root, ticket, job, waiter)
@@ -172,6 +180,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 
 func (jobs *HorizonJobs) awaitDirectional(root context.Context, ticket *directional.Ticket, job *horizonJob, waiter horizonWaiter) {
 	defer jobs.wait.Done()
+	defer jobs.clearDirectionalTicket(waiter.identity, ticket)
 	result, err := ticket.Wait(root)
 	if err != nil {
 		if root.Err() != nil {
@@ -184,6 +193,14 @@ func (jobs *HorizonJobs) awaitDirectional(root context.Context, ticket *directio
 		return
 	}
 	jobs.deliverJob(job, result.Path, nil)
+}
+
+func (jobs *HorizonJobs) clearDirectionalTicket(identity horizonUserIdentity, ticket *directional.Ticket) {
+	jobs.mu.Lock()
+	defer jobs.mu.Unlock()
+	if jobs.directionalTickets[identity] == ticket {
+		delete(jobs.directionalTickets, identity)
+	}
 }
 
 func (jobs *HorizonJobs) releaseDirectionalWaiter(identity horizonUserIdentity, key string, recent bool) {
@@ -205,6 +222,15 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 	}
 	if err := validateHorizonRequest(request); err != nil {
 		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_payload", Err: err}
+	}
+	artifactKey, err := horizonCacheKey(request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
+	if err != nil {
+		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_payload", Err: err}
+	}
+	if execution.ScienceCacheKey != artifactKey {
+		return directional.RunnerResult{}, directional.CodedError{
+			Code: "science_identity_mismatch", Err: errors.New("horizon worker configuration differs from the pinned science cache identity"),
+		}
 	}
 	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
 	if err != nil {
@@ -242,11 +268,27 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 	if err := ctx.Err(); err != nil {
 		return directional.RunnerResult{}, err
 	}
-	destination := filepath.Join(execution.Workspace, "horizon.png")
-	if err := jobs.render(ctx, destination, HorizonRenderInput{
+	imageDestination := filepath.Join(execution.Workspace, horizonCacheImage)
+	renderInput := HorizonRenderInput{
 		Location: request.Location, Provider: execution.Source.Provider,
 		RunID: request.RunID, Grid: "ICON-EU 0.0625°", Frames: frames,
-	}, request.Language.renderCode()); err != nil {
+	}
+	if err := jobs.render(ctx, imageDestination, renderInput, request.Language.renderCode()); err != nil {
+		return directional.RunnerResult{}, err
+	}
+	dataset, err := render.PrepareHorizonInteractiveDataset(render.HorizonInput{
+		Location: renderInput.Location, Provider: renderInput.Provider, RunID: renderInput.RunID,
+		Grid: renderInput.Grid, Frames: renderInput.Frames,
+	}, artifactKey, request.ObserverSurfaceElevationM, jobs.calibration)
+	if err != nil {
+		return directional.RunnerResult{}, err
+	}
+	datasetDestination := filepath.Join(execution.Workspace, horizonCacheDataset)
+	if err := render.SaveHorizonInteractiveDataset(datasetDestination, dataset); err != nil {
+		return directional.RunnerResult{}, err
+	}
+	destination := filepath.Join(execution.Workspace, "horizon.bundle")
+	if err := writeHorizonBundle(destination, imageDestination, datasetDestination); err != nil {
 		return directional.RunnerResult{}, err
 	}
 	if err := ctx.Err(); err != nil {

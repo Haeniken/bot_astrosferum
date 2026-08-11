@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
+
+	"bot_astrosferum/internal/forecast"
 )
 
 const (
@@ -22,6 +25,7 @@ var (
 	ErrOwnerBusy           = errors.New("directional owner already has an active job")
 	ErrUnavailable         = errors.New("directional analysis is unavailable")
 	ErrDisabled            = errors.New("directional analysis is disabled")
+	ErrAccountUnavailable  = errors.New("account analysis is unavailable")
 )
 
 type Kind string
@@ -62,11 +66,12 @@ type SourceIdentity struct {
 // Execution gives a runner one private workspace. DatasetPath returned by the
 // runner must resolve to a regular file below this directory.
 type Execution struct {
-	JobID     string
-	Kind      Kind
-	Source    SourceIdentity
-	Payload   json.RawMessage
-	Workspace string
+	JobID           string
+	Kind            Kind
+	ScienceCacheKey string
+	Source          SourceIdentity
+	Payload         json.RawMessage
+	Workspace       string
 }
 
 // RunnerResult describes a completed temporary dataset. The coordinator owns
@@ -235,6 +240,76 @@ type AstrodomeBackend interface {
 
 type WorkerHealth interface {
 	Health(context.Context) error
+}
+
+type AccountJobKind string
+
+const (
+	AccountJobForecast AccountJobKind = "forecast"
+	AccountJobHorizon  AccountJobKind = "horizon"
+)
+
+type AccountJobAdmission struct {
+	TelegramUserID int64   `json:"telegram_user_id"`
+	Latitude       float64 `json:"latitude"`
+	Longitude      float64 `json:"longitude"`
+	Language       string  `json:"language"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+func (admission AccountJobAdmission) Validate() error {
+	if admission.TelegramUserID <= 0 || (admission.Language != "ru" && admission.Language != "en") || !validAccountJobToken(admission.IdempotencyKey) {
+		return errors.New("invalid account job admission")
+	}
+	if err := forecast.ValidateCoordinates(admission.Latitude, admission.Longitude); err != nil {
+		return errors.New("invalid account job admission")
+	}
+	return nil
+}
+
+func validAccountJobToken(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+type AccountJobFile struct {
+	Name      string `json:"name"`
+	Caption   string `json:"caption"`
+	MediaType string `json:"media_type"`
+	Bytes     int64  `json:"bytes"`
+	ETag      string `json:"etag"`
+}
+
+type AccountJobStatus struct {
+	ID          string           `json:"id"`
+	Kind        AccountJobKind   `json:"kind"`
+	State       State            `json:"state"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	Summary     string           `json:"summary,omitempty"`
+	Files       []AccountJobFile `json:"files,omitempty"`
+	FailureCode string           `json:"failure_code,omitempty"`
+}
+
+type AccountJobOutput struct {
+	Body      io.ReadCloser
+	Bytes     int64
+	MediaType string
+	ETag      string
+}
+
+type AccountJobBackend interface {
+	AdmitAccountJob(context.Context, AccountJobKind, AccountJobAdmission) (AccountJobStatus, error)
+	AccountJobStatus(context.Context, int64, string) (AccountJobStatus, error)
+	OpenAccountJobFile(context.Context, int64, string, string) (AccountJobOutput, error)
+	CancelAccountJob(context.Context, int64, string) error
 }
 
 // JSONPayload is a convenience for adapters whose registered runner expects

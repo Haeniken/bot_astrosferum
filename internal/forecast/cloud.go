@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// CloudObstructionAlgorithmVersion identifies the model-level blocked-sky
+// calculation independently from any renderer or transport.
+const CloudObstructionAlgorithmVersion = "effective-cloud-obstruction-v1"
+
 type CloudLevel struct {
 	ModelLevel      int     `json:"model_level"`
 	PressureHPA     float64 `json:"pressure_hpa"`

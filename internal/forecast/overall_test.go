@@ -2,8 +2,45 @@ package forecast
 
 import (
 	"math"
+	"math/rand"
+	"regexp"
 	"testing"
 )
+
+func TestOverallCalibrationFingerprintIsStableAndSensitive(t *testing.T) {
+	calibration := DefaultOverallIndexCalibration()
+	first, err := OverallCalibrationSHA256(calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OverallCalibrationSHA256(calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(first) {
+		t.Fatalf("calibration fingerprint = %q / %q", first, second)
+	}
+	calibration.CloudWeight += 0.01
+	changed, err := OverallCalibrationSHA256(calibration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == first {
+		t.Fatal("calibration fingerprint did not change with calibration")
+	}
+}
+
+func TestOverallPenaltyPointsUsesOverallScale(t *testing.T) {
+	points, err := OverallPenaltyPoints(1.0 / 3.0)
+	if err != nil || math.Float64bits(points) != math.Float64bits(3) {
+		t.Fatalf("penalty points = %v, %v", points, err)
+	}
+	for _, invalid := range []float64{-0.1, 1.1, math.NaN(), math.Inf(1)} {
+		if _, err := OverallPenaltyPoints(invalid); err == nil {
+			t.Fatalf("invalid loss %v was accepted", invalid)
+		}
+	}
+}
 
 func TestOverallIndexIsHourlyAndCloudsActAsVeto(t *testing.T) {
 	vertical := SyntheticVerticalFixture()
@@ -287,6 +324,42 @@ func TestShapleyMultiplicativeLossIsSymmetricAndOrderIndependent(t *testing.T) {
 		if math.Abs(contribution.LossFraction-penaltyContributionByKey(reverseContributions, contribution.Key)) > 1e-12 {
 			t.Fatalf("factor order changed contribution for %q: forward=%+v reverse=%+v", contribution.Key, forwardContributions, reverseContributions)
 		}
+	}
+}
+
+func TestOverallPenaltyPointClosureProperty(t *testing.T) {
+	const (
+		seed  = int64(20260811)
+		cases = 100_000
+	)
+	random := rand.New(rand.NewSource(seed))
+	maximumError := 0.0
+	for sample := range cases {
+		factors := make([]OverallPenaltyFactor, 5)
+		for index := range factors {
+			factors[index] = OverallPenaltyFactor{Key: string(rune('a' + index)), Factor: random.Float64()}
+		}
+		contributions, loss, err := ShapleyMultiplicativeLoss(factors)
+		if err != nil {
+			t.Fatalf("sample %d: %v", sample, err)
+		}
+		closure := 1 + 9*(1-loss)
+		for _, contribution := range contributions {
+			points, pointsErr := OverallPenaltyPoints(contribution.LossFraction)
+			if pointsErr != nil {
+				t.Fatalf("sample %d contribution %q: %v", sample, contribution.Key, pointsErr)
+			}
+			closure += points
+		}
+		errorValue := math.Abs(closure - 10)
+		maximumError = math.Max(maximumError, errorValue)
+		if errorValue > 1e-12 {
+			t.Fatalf("sample %d closure error %.17g exceeds 1e-12", sample, errorValue)
+		}
+	}
+	t.Logf("seed=%d cases=%d maximum closure error=%.17g", seed, cases, maximumError)
+	if maximumError >= 1e-13 {
+		t.Fatalf("measured maximum closure error %.17g does not support the documented <1e-13 bound", maximumError)
 	}
 }
 

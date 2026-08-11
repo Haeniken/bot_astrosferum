@@ -14,6 +14,7 @@ import (
 
 const (
 	horizonCacheImage    = "horizon.png"
+	horizonCacheDataset  = "horizon.json"
 	horizonCacheManifest = "manifest.json"
 	horizonCacheLease    = ".lease-"
 )
@@ -63,6 +64,15 @@ func (cache *horizonCache) load(key string, now time.Time) (string, bool) {
 }
 
 func (cache *horizonCache) publish(key string, now time.Time, render func(string) error) (string, error) {
+	return cache.publishBundle(key, now, func(image, dataset string) error {
+		if err := render(image); err != nil {
+			return err
+		}
+		return os.WriteFile(dataset, []byte("{}\n"), 0o640)
+	})
+}
+
+func (cache *horizonCache) publishBundle(key string, now time.Time, render func(string, string) error) (string, error) {
 	if !validHorizonCacheKey(key) {
 		return "", errors.New("invalid horizon cache key")
 	}
@@ -80,12 +90,17 @@ func (cache *horizonCache) publish(key string, now time.Time, render func(string
 		_ = os.RemoveAll(staging)
 	}()
 	imagePath := filepath.Join(staging, horizonCacheImage)
-	if err := render(imagePath); err != nil {
+	datasetPath := filepath.Join(staging, horizonCacheDataset)
+	if err := render(imagePath, datasetPath); err != nil {
 		return "", err
 	}
 	info, err := os.Stat(imagePath)
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
 		return "", errors.New("horizon renderer did not produce a non-empty regular image")
+	}
+	datasetInfo, err := os.Stat(datasetPath)
+	if err != nil || !datasetInfo.Mode().IsRegular() || datasetInfo.Size() <= 0 {
+		return "", errors.New("horizon renderer did not produce a non-empty regular dataset")
 	}
 	manifest := horizonCacheManifestData{Schema: horizonCacheSchema, Key: key, CreatedAt: now.UTC()}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
@@ -164,6 +179,10 @@ func (cache *horizonCache) loadLocked(key string, now time.Time, touch bool) (st
 	path := filepath.Join(directory, horizonCacheImage)
 	image, err := os.Stat(path)
 	if err != nil || !image.Mode().IsRegular() || image.Size() <= 0 {
+		return "", false
+	}
+	dataset, err := os.Stat(filepath.Join(directory, horizonCacheDataset))
+	if err != nil || !dataset.Mode().IsRegular() || dataset.Size() <= 0 {
 		return "", false
 	}
 	if touch {

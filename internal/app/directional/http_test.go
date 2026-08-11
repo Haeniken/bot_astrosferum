@@ -29,13 +29,38 @@ type testWorkerHealth struct{ err error }
 
 func (health testWorkerHealth) Health(context.Context) error { return health.err }
 
-type testDeliveryBackend struct {
-	kind      DeliveryKind
-	admission DeliveryAdmission
+type testAccountJobBackend struct {
+	kind      AccountJobKind
+	admission AccountJobAdmission
 }
 
-func (backend *testDeliveryBackend) AdmitDelivery(_ context.Context, kind DeliveryKind, admission DeliveryAdmission) error {
+func (backend *testAccountJobBackend) AdmitAccountJob(_ context.Context, kind AccountJobKind, admission AccountJobAdmission) (AccountJobStatus, error) {
 	backend.kind, backend.admission = kind, admission
+	return AccountJobStatus{ID: strings.Repeat("a", 32), Kind: kind, State: StateReady, Files: []AccountJobFile{{
+		Name: "horizon.png", MediaType: "image/png", Bytes: 3, ETag: `"etag"`,
+	}}}, nil
+}
+
+func (*testAccountJobBackend) AccountJobStatus(_ context.Context, owner int64, jobID string) (AccountJobStatus, error) {
+	if owner != 42 || jobID != strings.Repeat("a", 32) {
+		return AccountJobStatus{}, ErrNotFound
+	}
+	return AccountJobStatus{ID: jobID, Kind: AccountJobHorizon, State: StateReady, Files: []AccountJobFile{{
+		Name: "horizon.png", MediaType: "image/png", Bytes: 3, ETag: `"etag"`,
+	}}}, nil
+}
+
+func (*testAccountJobBackend) OpenAccountJobFile(_ context.Context, owner int64, jobID, name string) (AccountJobOutput, error) {
+	if owner != 42 || jobID != strings.Repeat("a", 32) || name != "horizon.png" {
+		return AccountJobOutput{}, ErrNotFound
+	}
+	return AccountJobOutput{Body: io.NopCloser(strings.NewReader("png")), Bytes: 3, MediaType: "image/png", ETag: `"etag"`}, nil
+}
+
+func (*testAccountJobBackend) CancelAccountJob(_ context.Context, owner int64, jobID string) error {
+	if owner != 42 || jobID != strings.Repeat("a", 32) {
+		return ErrNotFound
+	}
 	return nil
 }
 
@@ -108,7 +133,7 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	defer server.Close()
 	response := internalRequest(t, server.Client(), credential, 42, http.MethodGet,
 		server.URL+"/internal/v1/directional/astrodome/availability", nil, "")
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	var availability AstrodomeAvailability
 	if err := json.NewDecoder(response.Body).Decode(&availability); err != nil || response.StatusCode != http.StatusOK ||
 		!availability.Enabled || !availability.Available || !availability.WorkerAvailable || !availability.Stale ||
@@ -126,7 +151,7 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	}
 	response = internalRequest(t, server.Client(), credential, 42, http.MethodPost,
 		server.URL+"/internal/v1/directional/astrodome/jobs", body, "application/json")
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	var status AstrodomeJobStatus
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil || response.StatusCode != http.StatusAccepted || status.ID == "" {
 		t.Fatalf("admission = %+v, status=%d, error=%v", status, response.StatusCode, err)
@@ -137,7 +162,7 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	}
 	response = internalRequest(t, server.Client(), credential, 42, http.MethodGet,
 		server.URL+"/internal/v1/directional/astrodome/jobs/"+status.ID, nil, "")
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil || response.StatusCode != http.StatusOK || status.State != "ready" || status.Provider != "icon-eu" || status.RunID != "2026072800" ||
 		status.GridProfile != "dense-v1" || status.GeometryDigest != "sha256:"+strings.Repeat("a", 64) || status.DatasetBytes != result.Bytes {
 		t.Fatalf("ready status = %+v, HTTP=%d, error=%v", status, response.StatusCode, err)
@@ -193,42 +218,52 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	}
 }
 
-func TestHTTPHandlerAuthenticatesAndValidatesAccountDelivery(t *testing.T) {
+func TestHTTPHandlerAuthenticatesAndValidatesAccountResults(t *testing.T) {
 	credential := []byte(strings.Repeat("s", 32))
 	coordinator := newTestCoordinator(t, t.TempDir(), 4, 16, time.Hour, time.Now)
 	registerBoth(t, coordinator, RunnerFunc(func(context.Context, Execution) (RunnerResult, error) {
 		return RunnerResult{}, errors.New("not used")
 	}))
-	backend := &testDeliveryBackend{}
+	backend := &testAccountJobBackend{}
 	handler, err := NewHTTPHandler(HTTPConfig{
 		Coordinator: coordinator, AstrodomeBackend: &testAstrodomeBackend{}, WorkerHealth: testWorkerHealth{},
-		DeliveryBackend: backend, ServiceCredential: credential,
+		AccountJobs: backend, ServiceCredential: credential,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://internal/internal/v1/account/deliveries/horizon",
-		strings.NewReader(`{"telegram_user_id":42,"latitude":59.9,"longitude":30.2,"language":"ru"}`))
+		"http://internal/internal/v1/account/jobs/horizon",
+		strings.NewReader(`{"telegram_user_id":42,"latitude":59.9,"longitude":30.2,"language":"ru","idempotency_key":"0123456789abcdef0123456789abcdef"}`))
 	request.Header.Set(ServiceCredentialHeader, string(credential))
 	request.Header.Set(UserIDHeader, "42")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || backend.kind != DeliveryHorizon || backend.admission.TelegramUserID != 42 {
-		t.Fatalf("delivery response = %d %q, backend=%+v", response.Code, response.Body.String(), backend)
+	if response.Code != http.StatusAccepted || backend.kind != AccountJobHorizon || backend.admission.TelegramUserID != 42 {
+		t.Fatalf("job response = %d %q, backend=%+v", response.Code, response.Body.String(), backend)
+	}
+
+	request = httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://internal/internal/v1/account/jobs/"+strings.Repeat("a", 32)+"/files/horizon.png", nil)
+	request.Header.Set(ServiceCredentialHeader, string(credential))
+	request.Header.Set(UserIDHeader, "42")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "png" || response.Header().Get("Content-Type") != "image/png" || response.Header().Get("ETag") != `"etag"` {
+		t.Fatalf("file response = %d %q headers=%v", response.Code, response.Body.String(), response.Header())
 	}
 
 	request = httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://internal/internal/v1/account/deliveries/horizon",
-		strings.NewReader(`{"telegram_user_id":43,"latitude":59.9,"longitude":30.2,"language":"ru"}`))
+		"http://internal/internal/v1/account/jobs/horizon",
+		strings.NewReader(`{"telegram_user_id":43,"latitude":59.9,"longitude":30.2,"language":"ru","idempotency_key":"0123456789abcdef0123456789abcdef"}`))
 	request.Header.Set(ServiceCredentialHeader, string(credential))
 	request.Header.Set(UserIDHeader, "42")
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
-		t.Fatalf("cross-user delivery response = %d %q", response.Code, response.Body.String())
+		t.Fatalf("cross-user job response = %d %q", response.Code, response.Body.String())
 	}
 }
 

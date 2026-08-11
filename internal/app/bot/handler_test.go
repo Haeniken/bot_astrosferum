@@ -68,6 +68,31 @@ type fakeMessenger struct {
 	documents []string
 }
 
+type structuredForecastMessenger struct {
+	dataset   []byte
+	photos    int
+	documents int
+}
+
+func (*structuredForecastMessenger) SendMessage(context.Context, int64, string, bool) error {
+	return nil
+}
+func (messenger *structuredForecastMessenger) SendPhoto(context.Context, int64, string, string) error {
+	messenger.photos++
+	return errors.New("website forecast must not render or send PNG photos")
+}
+func (messenger *structuredForecastMessenger) SendDocument(context.Context, int64, string, string) error {
+	messenger.documents++
+	return errors.New("website forecast must not render or send PNG documents")
+}
+func (messenger *structuredForecastMessenger) SendForecastDataset(_ context.Context, path string) error {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		messenger.dataset = data
+	}
+	return err
+}
+
 type contextCompositionProvider struct{}
 
 func (contextCompositionProvider) AtmosphericComposition(ctx context.Context, _ forecast.Location, _ []time.Time) (forecast.AtmosphericCompositionSeries, error) {
@@ -552,6 +577,27 @@ func TestHandlerGlobalForecastCompletesWithoutExposingOrCallingHorizon(t *testin
 	supportsCalls, currentCalls, seriesCalls := source.horizonCalls()
 	if supportsCalls != 0 || currentCalls != 0 || seriesCalls != 0 {
 		t.Fatalf("ICON Global forecast touched Horizon source: supports=%d current=%d series=%d", supportsCalls, currentCalls, seriesCalls)
+	}
+}
+
+func TestStructuredWebsiteForecastSkipsPNGRasterizationAndDelivery(t *testing.T) {
+	messenger := &structuredForecastMessenger{}
+	handler, err := NewHandler(messenger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := currentGlobalForecastFixture()
+	if err := handler.EnableForecast(provider, t.TempDir(), render.Options{Width: 3200, Height: 960, Language: "en"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.replyToLocation(t.Context(), 501, 501, 59.9386, 30.3141, languageEnglish); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.dataset) == 0 || !strings.Contains(string(messenger.dataset), `"schema_version":"forecast-interactive-v1"`) {
+		t.Fatalf("structured website dataset = %q", messenger.dataset)
+	}
+	if messenger.photos != 0 || messenger.documents != 0 {
+		t.Fatalf("website path attempted PNG delivery: photos=%d documents=%d", messenger.photos, messenger.documents)
 	}
 }
 

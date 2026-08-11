@@ -14,15 +14,18 @@ import (
 )
 
 type controlledRunner struct {
-	started chan string
-	release chan struct{}
-	active  atomic.Int32
-	maximum atomic.Int32
-	calls   atomic.Int32
+	started     chan string
+	scienceKeys chan string
+	release     chan struct{}
+	active      atomic.Int32
+	maximum     atomic.Int32
+	calls       atomic.Int32
 }
 
 func newControlledRunner() *controlledRunner {
-	return &controlledRunner{started: make(chan string, 16), release: make(chan struct{}, 16)}
+	return &controlledRunner{
+		started: make(chan string, 16), scienceKeys: make(chan string, 16), release: make(chan struct{}, 16),
+	}
 }
 
 func (runner *controlledRunner) Run(ctx context.Context, execution Execution) (RunnerResult, error) {
@@ -38,11 +41,35 @@ func (runner *controlledRunner) Run(ctx context.Context, execution Execution) (R
 		return RunnerResult{}, ctx.Err()
 	}
 	select {
+	case runner.scienceKeys <- execution.ScienceCacheKey:
+	case <-ctx.Done():
+		return RunnerResult{}, ctx.Err()
+	}
+	select {
 	case <-runner.release:
 	case <-ctx.Done():
 		return RunnerResult{}, ctx.Err()
 	}
 	return writeRunnerDataset(execution, `{"ok":true}`)
+}
+
+func TestCoordinatorPinsScienceCacheKeyIntoExecution(t *testing.T) {
+	runner := newControlledRunner()
+	coordinator := newTestCoordinator(t, t.TempDir(), 1, 4, time.Hour, time.Now)
+	registerBoth(t, coordinator, runner)
+	startCoordinator(t, coordinator)
+
+	ticket := submitTest(t, coordinator, KindHorizon, "owner", "idempotency", "exact-science-cache-key", "payload")
+	if got := receiveString(t, runner.started); got != "payload" {
+		t.Fatalf("runner payload = %q", got)
+	}
+	if got := receiveString(t, runner.scienceKeys); got != "exact-science-cache-key" {
+		t.Fatalf("runner science cache key = %q", got)
+	}
+	runner.release <- struct{}{}
+	if _, err := ticket.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCoordinatorMixedKindsStrictFIFOAndSingleActive(t *testing.T) {

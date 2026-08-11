@@ -72,6 +72,12 @@ type Messenger interface {
 	SendDocument(ctx context.Context, chatID int64, path, caption string) error
 }
 
+// ForecastDatasetMessenger is implemented only by the website result sink.
+// Platform adapters continue receiving the original PNG files.
+type ForecastDatasetMessenger interface {
+	SendForecastDataset(context.Context, string) error
+}
+
 type KeyboardMessenger interface {
 	SendMessageWithKeyboard(context.Context, int64, string, Keyboard) error
 }
@@ -550,15 +556,58 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	renderStarted := time.Now()
 	requestRenderOptions := handler.renderOptions
 	requestRenderOptions.Language = language.renderCode()
+	var overallFrames []forecast.OverallIndexFrame
+	var interactiveDataset render.ForecastInteractiveDataset
+	var upperAirDiagnostics forecast.Diagnostics
+	var cloudDiagnostics forecast.CloudDiagnostics
+	var cloudObstruction [][]float64
+	_, structuredOnly := handler.messenger.(ForecastDatasetMessenger)
 	renderCacheHit := false
 	cacheKey := ""
 	var charts render.Result
-	if handler.renderCacheRoot != "" && hasWeather && hasCloud {
+	if hasWeather && hasCloud {
 		cacheKey = forecastRenderCacheKey(series, surfaceSeries, cloudSeries, compositionSeries, sky, requestRenderOptions, handler.overallCalibration)
-		charts, renderCacheHit = loadRenderCache(handler.renderCacheRoot, cacheKey)
-		hasOverall = renderCacheHit
+		if handler.renderCacheRoot != "" {
+			charts, renderCacheHit = loadRenderCache(handler.renderCacheRoot, cacheKey)
+			hasOverall = renderCacheHit
+		}
 	}
 	if !renderCacheHit {
+		if hasWeather && hasCloud {
+			overallFrames, err = forecast.ComputeHourlyOverallIndex(series, surfaceSeries, cloudSeries, handler.overallCalibration)
+			if err != nil {
+				handler.logf("forecast request %d overall index calculation failed: %v", requestID, err)
+			} else {
+				if referenceError := AttachReferenceVBand(overallFrames, surfaceSeries, compositionSeries, sky); referenceError != nil {
+					handler.logf("forecast request %d Reference V-band calculation failed: %v", requestID, referenceError)
+				}
+				hasOverall = true
+				interactiveDataset, upperAirDiagnostics, cloudDiagnostics, cloudObstruction, err = render.PrepareForecastInteractiveDataset(
+					series, surfaceSeries, cloudSeries, sky, overallFrames, handler.overallCalibration,
+				)
+				if err != nil {
+					handler.logf("forecast request %d interactive dataset preparation failed: %v", requestID, err)
+				} else {
+					interactiveDataset.ArtifactKey = cacheKey
+				}
+			}
+		}
+		if len(upperAirDiagnostics.Times) == 0 {
+			upperAirDiagnostics, err = forecast.ComputeDiagnostics(series)
+			if err != nil {
+				return handler.sendUserMessage(ctx, chatID, language.text("Не удалось рассчитать высотные характеристики.", "Could not calculate the upper-air diagnostics."), true, language)
+			}
+		}
+		if hasCloud && len(cloudDiagnostics.Times) == 0 {
+			cloudDiagnostics, err = forecast.ComputeCloudDiagnostics(cloudSeries)
+			if err == nil {
+				cloudObstruction, err = forecast.ComputeCloudObstruction(cloudDiagnostics, handler.overallCalibration)
+			}
+			if err != nil {
+				handler.logf("forecast request %d cloud obstruction calculation failed: %v", requestID, err)
+				hasCloud = false
+			}
+		}
 		root := handler.renderRoot
 		if handler.renderCacheRoot != "" && hasWeather && hasCloud {
 			root = handler.renderCacheRoot
@@ -571,45 +620,53 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось подготовить временный каталог графиков.", "Could not prepare the temporary chart directory."), true, language)
 		}
 		defer func() { _ = os.RemoveAll(requestDirectory) }()
-		charts, err = render.All(requestDirectory, series, requestRenderOptions)
-		if err != nil {
-			return handler.sendUserMessage(ctx, chatID, language.text("Не удалось построить графики прогноза.", "Could not render the forecast charts."), true, language)
-		}
-		if hasWeather {
-			charts.Weather = filepath.Join(requestDirectory, "weather-hourly.png")
-			if err := render.Weather(charts.Weather, surfaceSeries, sky, requestRenderOptions); err != nil {
-				charts.Weather, hasWeather = "", false
+		if !structuredOnly {
+			charts, err = render.AllDiagnostics(requestDirectory, series, upperAirDiagnostics, requestRenderOptions)
+			if err != nil {
+				return handler.sendUserMessage(ctx, chatID, language.text("Не удалось построить графики прогноза.", "Could not render the forecast charts."), true, language)
 			}
-		}
-		if hasWeather && hasCloud {
-			overallFrames, overallError := forecast.ComputeHourlyOverallIndex(series, surfaceSeries, cloudSeries, handler.overallCalibration)
-			if overallError != nil {
-				handler.logf("forecast request %d overall index calculation failed: %v", requestID, overallError)
-			} else {
-				if referenceError := AttachReferenceVBand(overallFrames, surfaceSeries, compositionSeries, sky); referenceError != nil {
-					handler.logf("forecast request %d Reference V-band calculation failed: %v", requestID, referenceError)
+			if hasWeather {
+				charts.Weather = filepath.Join(requestDirectory, "weather-hourly.png")
+				if err := render.Weather(charts.Weather, surfaceSeries, sky, requestRenderOptions); err != nil {
+					charts.Weather, hasWeather = "", false
 				}
+			}
+			if hasWeather && hasCloud && hasOverall {
 				charts.OverallIndex = filepath.Join(requestDirectory, "overall-astronomy-index-hourly.png")
-				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: language.renderCode()}); renderError == nil {
-					hasOverall = true
-				} else {
+				if renderError := render.OverallIndex(charts.OverallIndex, series, overallFrames, sky, render.Options{Width: render.OverallWidth, Height: render.OverallHeight, Language: language.renderCode()}); renderError != nil {
 					handler.logf("forecast request %d overall index render failed: %v", requestID, renderError)
+					hasOverall = false
+				}
+			}
+			if hasCloud {
+				charts.CloudObstruction = filepath.Join(requestDirectory, "cloud-obstruction-height-hourly.png")
+				if err := render.CloudObstructionDiagnostics(charts.CloudObstruction, cloudSeries, cloudDiagnostics, cloudObstruction, render.Options{Width: 3200, Height: 1100, Language: language.renderCode()}); err != nil {
+					charts.CloudObstruction, hasCloud = "", false
 				}
 			}
 		}
-		if hasCloud {
-			charts.CloudObstruction = filepath.Join(requestDirectory, "cloud-obstruction-height-hourly.png")
-			if err := render.CloudObstruction(charts.CloudObstruction, cloudSeries, handler.overallCalibration, render.Options{Width: 3200, Height: 1100, Language: language.renderCode()}); err != nil {
-				charts.CloudObstruction, hasCloud = "", false
+		if hasWeather && hasCloud && hasOverall && interactiveDataset.SchemaVersion == render.ForecastInteractiveSchema {
+			charts.Dataset = filepath.Join(requestDirectory, "forecast.json")
+			if err := render.SaveForecastInteractiveDataset(charts.Dataset, interactiveDataset); err != nil {
+				handler.logf("forecast request %d interactive dataset publication failed: %v", requestID, err)
+				charts.Dataset = ""
 			}
 		}
-		if handler.renderCacheRoot != "" && hasWeather && hasCloud && hasOverall {
+		if !structuredOnly && handler.renderCacheRoot != "" && hasWeather && hasCloud && hasOverall && charts.Dataset != "" {
 			published, publishError := publishRenderCache(handler.renderCacheRoot, cacheKey, requestDirectory)
 			if publishError == nil {
 				charts = published
 			} else {
 				handler.logf("forecast request %d render cache publish failed: %v", requestID, publishError)
 			}
+		}
+	}
+	if sink, ok := handler.messenger.(ForecastDatasetMessenger); ok {
+		if charts.Dataset == "" {
+			return errors.New("interactive forecast dataset is unavailable")
+		}
+		if err := sink.SendForecastDataset(ctx, charts.Dataset); err != nil {
+			return err
 		}
 	}
 	renderDuration := time.Since(renderStarted)
@@ -666,6 +723,13 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	if err := handler.sendHTMLUserMessage(ctx, chatID, summary, true, language); err != nil {
 		return err
+	}
+	if structuredOnly {
+		handler.logf("forecast request %d complete data=%s structured=%s render_cache_hit=%t total=%s",
+			requestID, dataDuration.Round(time.Millisecond), renderDuration.Round(time.Millisecond), renderCacheHit,
+			time.Since(requestStarted).Round(time.Millisecond))
+		successful = true
+		return nil
 	}
 	type chartDelivery struct {
 		path, caption string

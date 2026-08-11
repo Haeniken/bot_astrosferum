@@ -39,7 +39,7 @@ type directionalRuntime struct {
 	closeErr    error
 }
 
-func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, deliveries directional.DeliveryBackend, logf func(string, ...any)) (*directionalRuntime, error) {
+func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, accountJobs directional.AccountJobBackend, logf func(string, ...any)) (*directionalRuntime, error) {
 	credential, err := directional.ReadServiceCredentialFile(cfg.Directional.CredentialFile)
 	if err != nil {
 		return nil, fmt.Errorf("read directional service credential: %w", err)
@@ -106,7 +106,7 @@ func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *
 	}
 	handler, err := directional.NewHTTPHandler(directional.HTTPConfig{
 		Coordinator: coordinator, AstrodomeBackend: astrodomeBackend, WorkerHealth: remoteRunner,
-		DeliveryBackend: deliveries, ServiceCredential: credential,
+		AccountJobs: accountJobs, ServiceCredential: credential,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize directional HTTP gateway: %w", err)

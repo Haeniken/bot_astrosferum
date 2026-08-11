@@ -1,6 +1,9 @@
 package forecast
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -11,7 +14,12 @@ import (
 // an hourly surface frame that makes that hour operationally unsuitable. The
 // threshold is deliberately a detection threshold, not a continuous penalty:
 // precipitation can wet exposed optics regardless of its intensity.
-const DefaultOverallPrecipitationDetectMM = 0.05
+const (
+	DefaultOverallPrecipitationDetectMM = 0.05
+	// OverallIndexAlgorithmVersion identifies the scientific interpretation of
+	// OverallIndexFrame independently from any renderer or transport.
+	OverallIndexAlgorithmVersion = "overall-astronomy-index-v1"
+)
 
 const (
 	minimumOverallTurbulenceProfileCoverage = 0.90
@@ -181,6 +189,32 @@ func (calibration OverallIndexCalibration) Validate() error {
 		return fmt.Errorf("cloud effective radii are outside supported physical ranges")
 	}
 	return nil
+}
+
+// OverallCalibrationSHA256 returns the canonical JSON fingerprint carried by
+// persisted presentation contracts. JSON field order follows the declared Go
+// struct, so the digest is stable across processes and does not depend on a
+// diagnostic fmt representation.
+func OverallCalibrationSHA256(calibration OverallIndexCalibration) (string, error) {
+	if err := calibration.Validate(); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(calibration)
+	if err != nil {
+		return "", fmt.Errorf("marshal overall calibration: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// OverallPenaltyPoints maps one dimensionless Shapley loss contribution onto
+// the displayed 1..10 Overall scale. It is shared by static and interactive
+// renderers so the two presentations cannot drift.
+func OverallPenaltyPoints(lossFraction float64) (float64, error) {
+	if !finite(lossFraction) || lossFraction < 0 || lossFraction > 1 {
+		return 0, fmt.Errorf("overall penalty loss must be finite and between 0 and 1")
+	}
+	return 9 * lossFraction, nil
 }
 
 type OverallIndexFrame struct {

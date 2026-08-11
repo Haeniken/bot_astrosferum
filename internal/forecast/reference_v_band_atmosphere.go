@@ -61,8 +61,8 @@ type ReferenceVBandDiagnostic struct {
 	PrecipitableWaterMM            float64              `json:"precipitable_water_mm"`
 	SurfacePressureHPA             float64              `json:"surface_pressure_hpa,omitempty"`
 	SurfacePressureProvenance      string               `json:"surface_pressure_provenance,omitempty"`
-	AerosolOpticalDepth550         float64              `json:"aerosol_optical_depth_550"`
-	TotalColumnOzoneDU             float64              `json:"total_column_ozone_du"`
+	AerosolOpticalDepth550         *float64             `json:"aerosol_optical_depth_550"`
+	TotalColumnOzoneDU             *float64             `json:"total_column_ozone_du"`
 	MoonAltitudeDegrees            float64              `json:"moon_altitude_degrees"`
 	MoonPhaseAngleDegrees          float64              `json:"moon_phase_angle_degrees"`
 	CompositionProvider            string               `json:"composition_provider,omitempty"`
@@ -225,8 +225,10 @@ func ComputeReferenceVBandAtmosphere(
 		if sky.MoonGeometryAvailable {
 			diagnostic.SkyBrightnessMagArcsec2 = skyMagnitude
 		}
-		diagnostic.AerosolOpticalDepth550 = composition.AerosolOpticalDepth550
-		diagnostic.TotalColumnOzoneDU = composition.TotalColumnOzoneDU
+		aerosolOpticalDepth550 := composition.AerosolOpticalDepth550
+		totalColumnOzoneDU := composition.TotalColumnOzoneDU
+		diagnostic.AerosolOpticalDepth550 = &aerosolOpticalDepth550
+		diagnostic.TotalColumnOzoneDU = &totalColumnOzoneDU
 		diagnostic.CompositionProvider = composition.Provider
 		diagnostic.CompositionRunID = composition.RunID
 		diagnostic.CompositionBaseTime = composition.BaseTime
