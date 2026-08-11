@@ -28,7 +28,6 @@ type Config struct {
 	Render          RenderConfig          `yaml:"render"`
 	Platforms       PlatformsConfig       `yaml:"platforms"`
 	Database        DatabaseConfig        `yaml:"database"`
-	Web             WebConfig             `yaml:"web"`
 }
 
 // DirectionalConfig owns the single FIFO and active-slot limit shared by
@@ -183,25 +182,6 @@ type PlatformConfig struct {
 	AdminIDs  []int64 `yaml:"admin_ids"`
 }
 
-// WebConfig contains no secret values. Every credential is mounted as a
-// mode-0600 file by the separate web deployment and read only by serve-web.
-type WebConfig struct {
-	Enabled                   bool     `yaml:"enabled"`
-	Listen                    string   `yaml:"listen"`
-	PublicOrigin              string   `yaml:"public_origin"`
-	OIDCClientID              string   `yaml:"oidc_client_id"`
-	OIDCClientSecretFile      string   `yaml:"oidc_client_secret_file"`
-	CSRFKeyFile               string   `yaml:"csrf_key_file"`
-	EdgeCredentialFile        string   `yaml:"edge_credential_file"`
-	DirectionalGatewayURL     string   `yaml:"directional_gateway_url"`
-	DirectionalCredentialFile string   `yaml:"directional_credential_file"`
-	TransactionTTL            Duration `yaml:"transaction_ttl"`
-	SessionTTL                Duration `yaml:"session_ttl"`
-	DatabaseUser              string   `yaml:"database_user"`
-	DatabasePasswordFile      string   `yaml:"database_password_file"`
-	DatabaseMaxConns          int32    `yaml:"database_max_conns"`
-}
-
 func Defaults() Config {
 	return Config{
 		App: AppConfig{
@@ -276,15 +256,6 @@ func Defaults() Config {
 		},
 		Render:   RenderConfig{Version: "render-v16-overall-penalty-decomposition", Width: 1280, Height: 960},
 		Database: DatabaseConfig{Host: "postgres", Port: 5432, Name: "bot_astrosferum", User: "bot_astrosferum", MaxConns: 10},
-		Web: WebConfig{
-			Listen: ":8080", PublicOrigin: "https://astrosferum.com",
-			OIDCClientSecretFile: "/run/secrets/telegram_oidc_client_secret",
-			CSRFKeyFile:          "/run/secrets/web_csrf_key", EdgeCredentialFile: "/run/secrets/edge_credential",
-			DirectionalGatewayURL:     "http://bot_astrosferum:18083",
-			DirectionalCredentialFile: "/run/secrets/directional_credential",
-			TransactionTTL:            Duration{10 * time.Minute}, SessionTTL: Duration{30 * 24 * time.Hour},
-			DatabaseUser: "bot_astrosferum_web", DatabasePasswordFile: "/run/secrets/web_db_password", DatabaseMaxConns: 5,
-		},
 	}
 }
 
@@ -393,33 +364,6 @@ func (c *Config) applyEnvironment() error {
 			return fmt.Errorf("parse ASTRO_GEOS_CF_ENABLED: %w", err)
 		}
 		c.Providers.GEOSCF.Enabled = parsed
-	}
-	if value, exists := os.LookupEnv("ASTRO_WEB_ENABLED"); exists {
-		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-		if err != nil {
-			return fmt.Errorf("parse ASTRO_WEB_ENABLED: %w", err)
-		}
-		c.Web.Enabled = parsed
-	}
-	webStrings := []struct {
-		name   string
-		target *string
-	}{
-		{name: "ASTRO_WEB_LISTEN", target: &c.Web.Listen},
-		{name: "ASTRO_WEB_PUBLIC_ORIGIN", target: &c.Web.PublicOrigin},
-		{name: "ASTRO_WEB_OIDC_CLIENT_ID", target: &c.Web.OIDCClientID},
-		{name: "ASTRO_WEB_OIDC_CLIENT_SECRET_FILE", target: &c.Web.OIDCClientSecretFile},
-		{name: "ASTRO_WEB_CSRF_KEY_FILE", target: &c.Web.CSRFKeyFile},
-		{name: "ASTRO_WEB_EDGE_CREDENTIAL_FILE", target: &c.Web.EdgeCredentialFile},
-		{name: "ASTRO_WEB_DIRECTIONAL_GATEWAY_URL", target: &c.Web.DirectionalGatewayURL},
-		{name: "ASTRO_WEB_DIRECTIONAL_CREDENTIAL_FILE", target: &c.Web.DirectionalCredentialFile},
-		{name: "ASTRO_WEB_DB_USER", target: &c.Web.DatabaseUser},
-		{name: "ASTRO_WEB_DB_PASSWORD_FILE", target: &c.Web.DatabasePasswordFile},
-	}
-	for _, override := range webStrings {
-		if value, exists := os.LookupEnv(override.name); exists {
-			*override.target = strings.TrimSpace(value)
-		}
 	}
 	overrides := []struct {
 		name   string
@@ -763,43 +707,6 @@ func (c Config) Validate() error {
 	if c.Database.MaxConns < 1 || c.Database.MaxConns > 50 {
 		problems = append(problems, "database.max_conns must be between 1 and 50")
 	}
-	if c.Web.Enabled {
-		if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
-			problems = append(problems, "web.listen must be a host:port listener")
-		}
-		publicOrigin, err := url.Parse(c.Web.PublicOrigin)
-		if err != nil || publicOrigin.Scheme != "https" || publicOrigin.Host == "" || publicOrigin.Path != "" || publicOrigin.RawQuery != "" || publicOrigin.Fragment != "" {
-			problems = append(problems, "web.public_origin must be an HTTPS origin")
-		}
-		if clientID, err := strconv.ParseInt(strings.TrimSpace(c.Web.OIDCClientID), 10, 64); err != nil || clientID <= 0 {
-			problems = append(problems, "web.oidc_client_id must be a positive Telegram bot ID")
-		}
-		for name, path := range map[string]string{
-			"oidc_client_secret_file":     c.Web.OIDCClientSecretFile,
-			"csrf_key_file":               c.Web.CSRFKeyFile,
-			"edge_credential_file":        c.Web.EdgeCredentialFile,
-			"directional_credential_file": c.Web.DirectionalCredentialFile,
-			"database_password_file":      c.Web.DatabasePasswordFile,
-		} {
-			if strings.TrimSpace(path) == "" {
-				problems = append(problems, fmt.Sprintf("web.%s is required when enabled", name))
-			}
-		}
-		gatewayURL, err := url.Parse(c.Web.DirectionalGatewayURL)
-		if err != nil || gatewayURL.Scheme != "http" || gatewayURL.Host == "" || gatewayURL.RawQuery != "" || gatewayURL.Fragment != "" {
-			problems = append(problems, "web.directional_gateway_url must be an internal HTTP URL")
-		}
-		if c.Web.TransactionTTL.Duration <= 0 || c.Web.TransactionTTL.Duration > 30*time.Minute {
-			problems = append(problems, "web.transaction_ttl must be between 0 and 30m")
-		}
-		if c.Web.SessionTTL.Duration <= 0 || c.Web.SessionTTL.Duration > 90*24*time.Hour {
-			problems = append(problems, "web.session_ttl must be between 0 and 2160h")
-		}
-		if strings.TrimSpace(c.Web.DatabaseUser) == "" || c.Web.DatabaseMaxConns < 1 || c.Web.DatabaseMaxConns > 10 {
-			problems = append(problems, "web database_user is required and database_max_conns must be between 1 and 10")
-		}
-	}
-
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid config: %s", strings.Join(problems, "; "))
 	}

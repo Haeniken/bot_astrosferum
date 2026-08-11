@@ -70,12 +70,31 @@ immediately before each send, including cache hits. See
 [Current implementation status](docs/implementation-status.en.md) for the
 implemented contract and operational validation gates.
 
+The bilingual website is maintained independently in
+[site-astrosferum](https://github.com/Haeniken/site-astrosferum). This repository
+owns the scientific Astrodome calculation, queues, caches, and an authenticated
+internal account API; it does not contain OIDC, browser UI, web sessions, site
+preferences, or the public deployment. The dependency is one-way: the site may
+call the bot API, while Telegram/VK forecasts, PostgreSQL, model synchronization,
+Horizon, and Astrodome calculation continue to work when the site is absent.
+
+Astrodome renders up to 72 native hourly directional datasets from the explicit
+`10°` calculation boundary to one azimuth-independent zenith node. Every
+direction is computed from interpolated native ICON-EU primitives followed by a
+complete physical recalculation; finished seeing, `tau0`, cloud transmission,
+Overall, and data quality are never interpolated. The current production writer
+is production-v2/v29/v23. See [Architecture](docs/architecture.en.md), the
+[scientific method](docs/scientific-method.en.md), and the separate
+[site repository](https://github.com/Haeniken/site-astrosferum).
+
 - [Архитектура на русском](docs/architecture.ru.md)
 - [Architecture in English](docs/architecture.en.md)
 - [Научная методика, формулы и воспроизводимость](docs/scientific-method.ru.md)
 - [Scientific method, formulas, and reproducibility](docs/scientific-method.en.md)
 - [Текущий статус реализации](docs/implementation-status.ru.md)
 - [Current implementation status](docs/implementation-status.en.md)
+- [Configuration reference](docs/configuration.en.md)
+- [Independent website and deployment](https://github.com/Haeniken/site-astrosferum)
 - [Privacy notice](PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
@@ -90,7 +109,7 @@ synthetic `render-sample` command need substantially fewer resources.
 |---|---:|---:|
 | CPU | 4 x86-64 cores | 8–12 x86-64 cores |
 | RAM | 32 GiB | 48–64 GiB |
-| Free SSD space | 200 GiB | 300 GiB or more on NVMe |
+| Free SSD space | 300 GiB | 550 GiB or more on NVMe |
 | Software | 64-bit Linux, Docker Engine, Docker Compose v2 | Current stable Docker on a supported Linux distribution |
 
 Building the production image requires outbound HTTPS access to GHCR, Docker
@@ -113,7 +132,23 @@ runs, PostgreSQL, point/render caches, and light-pollution tiles. Outbound DNS
 and HTTPS access to DWD, NASA GEOS-CF, Telegram, VK, and the configured atlas sources is
 required; neither platform's long polling needs an inbound application port.
 
-The repository contains no model runs or credentials. Runtime data and bind mounts live only below `/opt/docker/bot_astrosferum` on the production host.
+The optional Astrodome deployment adds an isolated directional worker shared
+with Horizon. The initial, deliberately conservative candidate gives that
+worker four CPUs, a `24 GB` cgroup hard limit, and `GOMEMLIMIT=12GiB`. It also
+enforces a `400 GiB` project-footprint ceiling and a `150 GiB` free-space
+reserve before dome admission. These are rollout guardrails, not measured
+minimum requirements: do not reduce them or publish a smaller production
+profile until cold/warm full-dome, concurrent model-sync, memory-pressure, and
+ordinary-forecast latency benchmarks pass. The shared active-slot limit is
+`ASTRO_DIRECTIONAL_CONCURRENCY=1` by default; increasing it can multiply the
+full-dome resident footprint and requires repeating those resource tests. The
+optional website is deployed from the independent `site-astrosferum`
+repository and does not download or retain another ICON model store.
+
+The repository contains no model runs or credentials. Bot runtime data,
+PostgreSQL, and bind mounts live below `/opt/docker/bot-astrosferum`. The
+independent website uses `/opt/docker/site-astrosferum` and may be stopped or
+removed without disabling the bot.
 
 Platform tokens are separate ignored files: `secrets/telegram_token` and
 `secrets/vk_token`, both mode `0600`. Enabling VK also requires the numeric
@@ -128,7 +163,7 @@ and YAML effects and recommended values.
 Useful commands on the target host:
 
 ```sh
-cd /opt/docker/bot_astrosferum
+cd /opt/docker/bot-astrosferum
 docker compose up -d --build
 docker compose logs -f bot_astrosferum
 docker compose run --rm bot_astrosferum doctor --config /app/config/config.yaml
@@ -142,7 +177,9 @@ docker compose run --rm bot_astrosferum light-pollution --lat 55.7558 --lon 37.6
 `render-horizon` is an operational verification command. It requires Horizon
 to be enabled and a complete current ICON-EU run whose full directional
 footprint is supported; end-user availability additionally depends on the
-enabled platform adapter and action path.
+enabled platform adapter and action path. It waits on the same process-shared
+execution lease as the directional worker and therefore cannot overlap a
+Horizon or Astrodome job.
 
 `/start` in Telegram or VK explains coordinate input and the charts. Native Telegram locations, VK geo attachments, plain `latitude, longitude` text, and `/forecast latitude longitude` are accepted. The adapters use independent long-polling supervisors: a temporary outage of one platform does not stop the other. Points inside the ICON-EU domain use ICON-EU; every other world coordinate uses the latest complete DWD ICON Global run. Both routes provide the same seven chart types, including native model-level cloud obstruction and lower-atmosphere TKE. DWD publishes Global TKE only through `+48 h`, so its hybrid Overall chart honestly ends there while weather, cloud obstruction, and pressure-level diagnostics continue through the main horizon. Global also lacks the direct `VIS` field used for fog diagnosis and the transparency proxy.
 

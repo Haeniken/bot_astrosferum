@@ -259,57 +259,6 @@ func TestAstrodomeResidentLimitEnvironmentOverride(t *testing.T) {
 	}
 }
 
-func TestWebConfigurationIsDisabledByDefaultAndStrictWhenEnabled(t *testing.T) {
-	cfg := Defaults()
-	if cfg.Web.Enabled {
-		t.Fatal("web unexpectedly enabled by default")
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("disabled default web config rejected: %v", err)
-	}
-	cfg.Web.Enabled = true
-	cfg.Web.OIDCClientID = "123456"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("valid enabled web config rejected: %v", err)
-	}
-	checks := []func(*WebConfig){
-		func(value *WebConfig) { value.Listen = "8080" },
-		func(value *WebConfig) { value.PublicOrigin = "http://astrosferum.com" },
-		func(value *WebConfig) { value.OIDCClientID = "bot" },
-		func(value *WebConfig) { value.CSRFKeyFile = "" },
-		func(value *WebConfig) { value.DirectionalGatewayURL = "https://public.example" },
-		func(value *WebConfig) { value.TransactionTTL = Duration{31 * time.Minute} },
-		func(value *WebConfig) { value.SessionTTL = Duration{91 * 24 * time.Hour} },
-		func(value *WebConfig) { value.DatabaseMaxConns = 11 },
-	}
-	for index, mutate := range checks {
-		candidate := cfg
-		mutate(&candidate.Web)
-		if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), "web") {
-			t.Fatalf("invalid web config case %d error = %v", index, err)
-		}
-	}
-}
-
-func TestWebEnvironmentOverrides(t *testing.T) {
-	t.Setenv("ASTRO_WEB_ENABLED", "true")
-	t.Setenv("ASTRO_WEB_LISTEN", ":9080")
-	t.Setenv("ASTRO_WEB_PUBLIC_ORIGIN", "https://astrosferum.com")
-	t.Setenv("ASTRO_WEB_OIDC_CLIENT_ID", "123456")
-	t.Setenv("ASTRO_WEB_DB_USER", "astrosferum_web_test")
-	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.Web.Enabled || cfg.Web.Listen != ":9080" || cfg.Web.OIDCClientID != "123456" || cfg.Web.DatabaseUser != "astrosferum_web_test" {
-		t.Fatalf("web environment overrides not applied: %+v", cfg.Web)
-	}
-	t.Setenv("ASTRO_WEB_ENABLED", "not-a-boolean")
-	if _, err := Load(filepath.Join("..", "..", "config", "config.example.yaml")); err == nil || !strings.Contains(err.Error(), "ASTRO_WEB_ENABLED") {
-		t.Fatalf("invalid ASTRO_WEB_ENABLED error = %v", err)
-	}
-}
-
 func TestForecastConcurrencyEnvironmentOverride(t *testing.T) {
 	t.Setenv("ASTRO_FORECAST_CONCURRENCY", "3")
 	t.Setenv("ASTRO_HORIZON_CONCURRENCY", "2")

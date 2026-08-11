@@ -155,26 +155,6 @@ database:
   user: bot_astrosferum
   max_conns: 10
 
-# Public website runs as a separate process/compose project. Secret values are
-# never placed in YAML or .env; only mode-0600 file paths are configured here.
-# The directional credential is one shared file mounted by web, bot, and worker;
-# authentication still uses separate headers on the two internal hops.
-web:
-  enabled: false
-  listen: :8080
-  public_origin: https://astrosferum.com
-  oidc_client_id: "" # positive Telegram bot ID after BotFather OIDC setup
-  oidc_client_secret_file: /run/secrets/telegram_oidc_client_secret
-  csrf_key_file: /run/secrets/web_csrf_key
-  edge_credential_file: /run/secrets/edge_credential
-  directional_gateway_url: http://bot_astrosferum:18083
-  directional_credential_file: /run/secrets/directional_credential
-  transaction_ttl: 10m
-  session_ttl: 720h
-  database_user: bot_astrosferum_web
-  database_password_file: /run/secrets/web_db_password
-  database_max_conns: 5
-
 platforms:
   telegram:
     enabled: true

@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-07-26
-Stage: Stage 3 live ICON → Telegram and VK; optional ICON-EU Horizon analysis implemented
+Date: 2026-08-09
+Stage: Stage 3 live ICON → Telegram and VK; Horizon live; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v29/v23 current; v28/v22 full-run retained as the measured baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -17,7 +17,7 @@ Deployment target: operator-managed host
 - Telegram accepts native locations and VK accepts geo attachments; both accept `59.9386, 30.3141` and `/forecast 59.9386 30.3141`;
 - both thin platform adapters depend on the common `internal/app/bot` handler and never import each other; VK Group Long Poll is enabled at startup, messages and native geo are normalized to the common request, while texts, keyboards, PNG photos, and lossless document uploads are translated back to VK API calls;
 - Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;
-- ordinary forecasts share one cross-platform calculation limit and report a queue position after both configured slots are occupied; Horizon retains its independent bounded queue and independently configurable worker count;
+- ordinary forecasts share one cross-platform calculation limit and report a queue position after both configured slots are occupied; Horizon and Astrodome share one bounded directional FIFO and a separately configured isolated-worker concurrency (`1` recommended until benchmarked);
 - VK photo/document uploads validate the handshake and retry at most twice with `1 s`/`2 s` backoff and a fresh upload URL; this handles transient `pu.vk.ru` `405` or incomplete upload responses without unbounded retries;
 - sequential media deliveries in each VK request have a minimum `150 ms` interval without a global lock; parallel VK requests and Telegram delivery are unchanged;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
@@ -86,7 +86,7 @@ Deployment target: operator-managed host
 - the text block gets a point light-pollution estimate from Light Pollution Atlas 2024: bilinear LPI/SQM at approximately `30″` plus an honestly labelled approximate Bortle value; light pollution is not part of the Overall Index;
 - heat-map values are now 8 pt semibold, with slightly larger axes and bar labels;
 - the old wind-only index remains a separate diagnostic chart; direction delta becomes `0°` below `2 m/s`, while `NaN` means missing data only;
-- the container runs as `1000:1000` with a read-only root filesystem and bind mounts only below `/opt/docker/bot_astrosferum`;
+- the container runs as `1000:1000` with a read-only root filesystem and bot/worker bind mounts only below `/opt/docker/bot-astrosferum`;
 - `go test ./...`, `go vet ./...`, and `doctor` pass.
 
 Freshness and bilingual rendering were deployed on 2026-07-21: the production binary generated seven non-empty PNG files for each of `ru` and `en`, temporary verification directories were removed, the main container remained `running` with `restart_count=0`, and PostgreSQL remained `healthy`.
@@ -113,7 +113,8 @@ implementation consists of:
   callback events; platform adapters contain no Horizon formula; the
   composition root now constructs one shared Horizon service and attaches its
   button/action handlers to both enabled platforms;
-- one shared bounded heavy-job queue with independently configurable workers, per-user admission,
+- one shared bounded heavy-job queue with the configured directional active-slot
+  limit, per-user admission,
   identical-key fan-out, timeout/cancellation, signed compact actions, and a
   separate bounded two-worker delivery path with bounded cache-hit admission;
 - an atomic bounded disk cache with startup, periodic, and post-publication
@@ -126,8 +127,10 @@ implementation consists of:
 - ICON-EU-only footprint checks and full immutable `f000..f072` acquisition:
   exact hourly surface/cloud/TKE/MH/visibility, same-run linear interpolation
   of raw three-hour pressure `U/V/T/Z`, and batched CDO extraction of
-  deduplicated model cells with the separate `horizon_analysis.cdo_workers`
-  subprocess limit;
+  deduplicated model cells. One request-scoped `gennn` nearest-neighbour
+  weights file is reused read-only through `remap` for every field/step; the
+  shared `horizon_analysis.cdo_workers` limit is eight subprocesses for both
+  Horizon and Astrodome preload;
 - a 73-frame calculation contract that recomputes HMNSP/TKE, `Cn2`, seeing,
   `tau0`, and the index for every hour rather than interpolating nonlinear
   outputs, using the same complete calibration as Overall; that calibration is
@@ -172,6 +175,219 @@ case, health and startup logs, ordinary and Horizon smoke tests, ordinary
 forecast latency during concurrent Horizon work, and the administrator report.
 Failure of any mandatory gate requires rollback or a failure report instead of
 a success notification.
+
+## Astrodome — controlled rollout and public reference live, full-run measured
+
+The ICON-EU-only directional atmospheric web product is deployed with controlled calculation access as
+one asynchronous dataset of up to 72 consecutive native hourly frames from the explicit 10° calculation boundary
+to a single azimuth-independent zenith. Completed code includes:
+
+- versioned `production-v2` (eight `10..80°` rings × 16 azimuths plus one
+  zenith = 129 nodes/frame, 9,288 node-hours over 72 frames) and
+  `sparse-storage-v1` (97 nodes/frame, 6,984 node-hours) grids, canonical
+  ordering, geometry descriptors/digests, spherical Voronoi cells, and strict
+  browser contracts. The former 353-node `dense-v1` profile is historical and
+  archive-only;
+- ICON-sphere straight geometry and full Ciddor moist-air refraction with a
+  coupled adaptive Dormand–Prince 5(4) ECEF ray and event closure. Refraction
+  v3 requires two converged forward production passes; the reverse pass is
+  reserved for reference/strict regression and release verification;
+- `astrodome-science-kernel-v29` /
+  `astrodome-science-path-v23`: 0.2-mm physical/horizontal root localisation,
+  0.4-mm distinct-root proximity detection with fail-closed handling, a 0.5-mm
+  side guard, a 0.2-mm proof scale, the unchanged 1-mm position/coordinate
+  evaluation ceiling, a versioned limited midpoint result at or below
+  `0.002366025404… m` only for a three-probe single-partition short panel,
+  independent GL2/GL1, GL3/GL2, and GL5/GL3 below their respective
+  `0.004436491673…`, `0.010658690662…`, and `0.117032584345… m` upper
+  boundaries, and no extrapolatory Q5/Q3;
+  dense point evaluation uses componentwise absolute-monomial scales with an
+  audited `gamma128` and outward L2 envelope, while the broader Bernstein
+  derivative/acceleration bounds retain `gamma1024`;
+  endpoint-aware ordinary strict floors are `0.001000000000001… m` for two
+  physical endpoints without a certified-short proof,
+  `0.0005000000000005… m` for one physical endpoint,
+  and `0.01 m` for two numerical endpoints; the evidence-aware short-panel
+  path uses its certified open-safe span. Midpoint-panel lengths plus the union
+  of accepted endpoint slivers are capped at exactly 1 m; an accepted result is
+  `limited`, has zero quadrature-convergence quality, and carries
+  `short_path_approximation`. Bit-identical simultaneous event
+  coordinates alone form one geometric breakpoint, with the sorted event-ID
+  union retained; bit-distinct coordinates are never merged.
+  All retained rule pairs have fixed positive weights and sample only inside
+  the certified panel. No value outside the endpoint guards is used to infer a
+  missing interval. Production uses the accumulated embedded selected-rule
+  estimator; the independent
+  half-tolerance repeat with its one-time fine-pass split is reserved for
+  regression, calibration, and release verification. Neither allowance is a
+  rigorous enclosure;
+- one-sided endpoint-sliver derivative certificates are limited to HHL,
+  full-level, cloud-tier, and raw bilinear PBL predicates. Their complete
+  outward-rounded one-sided residual enclosure accepts a sliver only when zero
+  is excluded; this covers bounded motion both away from and toward zero
+  without evaluating the ambiguously owned endpoint. If neither proof excludes
+  a root, path v23 records only that omitted sliver in the one-metre limited
+  budget; it must still certify every interior WMO breakpoint before quadrature,
+  and any kernel partition mismatch fails closed;
+- exact per-sample evaluation errors: 1 mm is only the rejection ceiling;
+  ECEF predicates use the actual dense-position bound, bilinear fields use
+  field-specific coordinate uncertainty, physical height residuals sum their
+  actual ray/operand terms, and 200 hPa propagates native H/P coordinate and
+  arithmetic intervals;
+- the path-v23 monotone-root contractor preserves the ancestor existence and
+  uniqueness proof, then intersects a separate root enclosure with
+  outward-rounded safeguarded interval-Newton images at endpoints and midpoint.
+  An insufficient midpoint contraction is followed by paired off-centre probes
+  on both sides of the central window; a residual interval containing zero is
+  never given its nominal sign, and an irreducible information floor remains
+  fail-closed. Acceptance still requires both root radii to be at most 0.2 mm;
+  the 0.4-mm distinct-root threshold and 0.5-mm side guard are unchanged;
+- mixed PBL cells are partitioned at strictly isolated native `MH-500 m` and
+  `MH-2000 m` decisions before a smooth clamp branch is solved; the upper
+  `HSURF+2000 m`/low-cloud identity is registered only once;
+- four-dimensional reconstruction of native ICON-EU primitives. Spatial and
+  temporal interpolation happens before every nonlinear formula; no finished
+  seeing, `tau0`, cloud transmission, Overall, or quality value is
+  interpolated. Native full-level pressure must strictly increase from model
+  top toward the surface, native `PS` must exceed the lowest full-level
+  pressure, and reconstructed pressure must satisfy `dP/dz < 0`; any violation
+  fails closed before refraction or science integration;
+- certified CLC upper envelopes over the four raw stencil columns, native
+  temporal-bracket endpoints, and exact active adjacent full-level pair (or
+  one top/bottom extension level). Convex reconstruction and an outward
+  binary64 allowance bound each atomic interval; vertical-support identity is
+  part of the partition signature/cache key, and missing provider certificates
+  or sampled changes fail closed. The envelope does not maximize over an
+  entire tier or column;
+- separate nominal and conservative cloud transmissions. Each exact cell/tier
+  block accumulates its own liquid/ice optical depth and embedded error; the
+  conservative value uses the CLC envelope plus `tau_block + error_block` and
+  is the only cloud value used by directional Overall;
+- joint line-of-sight integration of `Cn2`, transverse-wind-weighted `Cn2`,
+  slant water vapour, and phase-resolved cloud extinction, followed by the
+  common bounded Overall mapping and precipitation veto;
+- one configured Overall/cloud calibration shared by ordinary Overall,
+  Horizon, and Astrodome. Calculation-request schema v3 and every current
+  dataset retain the SHA-256 of the complete validated Astrodome calibration;
+  a configuration change invalidates the cache by construction and a
+  bot/worker mismatch fails closed;
+- complete dome manifest/acquisition/volume contracts, run identity and
+  leases, resumable augmentation of a matching immutable base run, storage
+  admission, and atomic compressed result publication;
+- request-scoped native-column preload that verifies the GRIB source grid,
+  creates CDO `gennn` targets only for exact native indices, persists the
+  source-plan digest, and inspects the generated SCRIP file to require exactly
+  one link per target, the expected source and destination addresses, and a
+  weight whose binary64 value is exactly one. Every remapped GRIB message is
+  required to have the same regular-grid geometry and scanning order as the
+  proven HHL source. The plan is reused through `remap` for all fields/steps and runs under the
+  shared eight-worker CDO limit also used by Horizon. Ordinary ICON-EU
+  `grib_get` outputs remain protected by the existing provider-versioned point
+  caches;
+- one bounded FIFO shared by Horizon and Astrodome with
+  `ASTRO_DIRECTIONAL_CONCURRENCY` active heavy jobs (`1` recommended until
+  benchmarked), plus an isolated directional worker that reads models
+  read-only; process-shared, context-aware slot leases also cap accidental
+  extra worker replicas and the operator-only `render-horizon` path;
+- in the independent private `site-astrosferum` repository, a thin web process with Telegram OpenID Connect, server-side sessions,
+  CSRF/Origin checks, least-privilege saved-point reads, job ownership,
+  asynchronous job/status/dataset APIs, and matching bot-side access checks;
+- localized `/en` and `/ru` public landing pages, a private account dashboard,
+  and separate ordinary-forecast, Horizon, and Astrodome tools; Telegram sign-in
+  is owned by the landing page and the whole site remains `noindex` plus
+  `robots.txt: Disallow /`;
+- owner-scoped ordinary-forecast and Horizon web admissions that reuse the
+  Telegram handler, existing forecast queue, render/Horizon caches, shared
+  directional FIFO, and Telegram delivery rather than duplicating calculation
+  or keeping a second result archive; admission succeeds only after a Telegram
+  acknowledgement, and outstanding web work is bounded by a narrow admission
+  layer sized from the configured worker/queue limits;
+- an authenticated `ru`/`en` web-language preference stored in PostgreSQL and
+  synchronized across active sessions while retaining explicit localized URLs;
+- no VK ID login or linking yet: the configured VK community token is not a VK
+  ID application credential, so unsafe identity emulation is deliberately absent;
+- gzip visualization archives with an ordinary 96-hour TTL, plus one explicit
+  non-expiring `admin_fixture` visible read-only to signed-out visitors and to
+  every configured Telegram administrator, but not to authenticated non-admins. The
+  fixture and saved-result decoder accept only v29/v23 with a supported pinned
+  profile; production web output is `production-v2`. An older payload is
+  rejected until a successful current same-coordinate result replaces the
+  shared fixture when exact integer cross multiplication proves a smaller or
+  equal `unavailable / total` fraction; only a strictly worse result does not
+  replace it;
+- a dependency-free WebGL2 inside-dome view, Canvas 2D and accessible-table
+  fallbacks, fixed quantitative legends, keyboard/touch controls, and strict
+  fail-closed dataset validation; the star layer stays behind the mesh, the
+  non-data context shows an ordinary `0°` label without a separate horizon
+  line, twilight sky below the `10°` calculation boundary, and decorative
+  terrain; `0°` and `10°` use the ordinary elevation-grid treatment, only one
+  selected-cell inspector is visible in both normal and fullscreen layouts,
+  the same hourly timeline remains interactive in fullscreen without
+  duplicating its selected frame and auto-reveals from the lower pointer zone
+  or keyboard focus, its eight requested field explanations are available in `ru`/`en`, and
+  view/fullscreen controls clear the compass;
+- a bot-owned isolated worker and internal account API here; the separate site
+  Compose and pinned-TLS nginx templates live in `site-astrosferum` and deploy
+  to `/opt/docker/site-astrosferum`.
+
+The rollout switch is implemented as calculation access control, not as a worker kill
+switch: `ASTRO_ASTRODOME_ENABLED=true` permits every authenticated Telegram
+OIDC user; `false` restricts access to `ASTRO_TELEGRAM_ADMIN_IDS`; `false`
+with an empty list denies everyone. Web and bot both enforce the rule. Access
+mode never forces sparse geometry. Anonymous users can only read the permanent
+fixture and cannot access points or job operations. Both calculation modes use
+the profile selected by `DiskBudget`; dense storage maps to `production-v2`, while
+`sparse-storage-v1` remains the declared storage fallback.
+
+On immutable ICON-EU run `2026080812` (manifest SHA-256
+`85d94a87e24a5eba4775baf4e46a4151c8c30021f51af6c54299cdbbabc5482e`), the
+  historical production-v2/v28/v22 baseline covered all 72 native hours
+`f002..f073` and all 129 nodes, or 9,288 node-hours. It completed in 33 min
+14 s after a 357.118-s preload of 2,863 source columns; peak container memory
+was 15,127,642,112 bytes. Exactly 9,284 nodes were available. Four nodes
+(f005/56, f007/9, f025/40, and f026/40) failed closed with
+`integration_nonconvergence`: their physical spans were
+`0.45534076..2.12574664 mm`, below the shortest applicable positive-weight
+GL2/GL1 rule. No extrapolatory Q5/Q3 result was published, and there were no
+data, CDO/remap, refraction, cloud, or Overall failures. The strict diagnostic
+therefore exited non-zero by design, while the product contract represents
+these isolated cells as unavailable. The report SHA-256 is
+`00977e620d60029e3e3f23f4aeb31352d614c9e75af6fa9cb8050f1830afdb31` and the
+executed test-binary SHA-256 is
+`7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`.
+
+This v28/v22 measurement and the older v25/v26 measurements remain diagnostic
+provenance; they do not describe the current v29/v23 writer.
+
+The independent angular-discretization diagnostic on the same run evaluated
+five native hours (`f002`, `f020`, `f038`, `f056`, `f073`) on the union of
+production-v2, dense-v1, and a 513-node uniform-32 reference: 789 distinct
+directions per hour, with no calculation or availability mismatch. Against
+the reference's piecewise-constant nearest-support comparison, production-v2
+had a maximum Overall delta of `4.495704`, a worst hourly area-weighted P95 of
+`0.821550`, and at most `8.565771%` of the cap above a `0.5`-point delta. In the
+reference-cell-centre `<20°` subset (cells covering `10..17.5°`) its worst
+hourly P95 reached `3.457452`. Dense-v1 reduced
+the corresponding maxima to `1.744252`, `0.794451`, `7.393201%`, and
+`0.455779`. The report SHA-256 is
+`3811f777a2c7ca471838d276bbb3acf974ac182587ef9c58fb257d1db8b31466`.
+This is a measured sensitivity result, not a convergence certificate: no
+scientifically sourced angular-grid acceptance threshold was fixed before the
+run, and the production-v2 low-elevation discretization is visibly material.
+
+The following work is still pending and must not be reported as completed:
+
+- define and validate angular-discretization acceptance criteria on multiple
+  sites/runs; the five-hour result above does not establish that
+  production-v2 is scientifically sufficient;
+- cold/warm 129-node CPU, RSS/cgroup, PSI, disk-peak, and gzip-payload
+  benchmarks on the production host, including simultaneous model sync;
+- ordinary-forecast and live Horizon latency non-regression while the
+  directional worker is busy, plus worker OOM/timeout/rollback checks;
+- end-to-end browser, Telegram OIDC, edge/origin restriction, security-log,
+  and cache-invalidation smoke tests;
+- observational validation against turbulence, all-sky cloud, GNSS/radiosonde
+  water-vapour, visibility, and precipitation references.
 
 ## Production Overall change
 
@@ -241,8 +457,8 @@ Published run `2026071912`:
 - messages: 1,000;
 - published size: approximately 1.0 GiB;
 - sync duration: 46 seconds with four workers;
-- runtime: `/opt/docker/bot_astrosferum/data/models/icon-eu/runs/2026071912`;
-- current: `/opt/docker/bot_astrosferum/data/models/icon-eu/current`.
+- runtime: `/opt/docker/bot-astrosferum/data/models/icon-eu/runs/2026071912`;
+- current: `/opt/docker/bot-astrosferum/data/models/icon-eu/current`.
 
 Last verified live state before the new deployment: extraction and all seven PNG files from the old version passed again on production run `2026072100` for an anonymized historical control case on 2026-07-21. The atomic publication contains 79×16 surface fields (`surface-hourly-v16`, 1.2 GiB) and 79×19×4 model-layer fields plus HHL (`cloud-hourly-v2`, 2.4 GiB); superseded versioned directories were removed after switching. The old cloud-physics check gave `99.90%` transmission and Overall `9.98` at 2026-07-22 09:00 UTC with `CLCT=72.8%`, `TQI=0.000015 kg/m²`, and `τ=0.00105`; at 02:00, `CLCT=100%` and `τ=2.78` gave `6.20%` transmission and Overall `1.03`. The first case is now a regression input for the unresolved-CLC floor, not the desired result. Old-version output is `3200×1080` weather, `3200×960` overall, `3200×1100` cloud obstruction, and four `1280×960` charts.
 
@@ -262,7 +478,12 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 ## Next vertical slice
 
-1. Accumulate observational verification data for the existing forecast methods and monitor both platform adapters in production.
+1. Run the production Astrodome cold/warm benchmark and full current-run
+   scientific contract check.
+2. Maintain Telegram OIDC, the pinned Alice→Dragon origin, browser smoke,
+   canary, and rollback procedures in the private site repository.
+3. Continue accumulating observational verification data for every forecast
+   method and monitor both platform adapters in production.
 
 Production `seeing-hybrid-tke-mh-hmnsp99-v7` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.
