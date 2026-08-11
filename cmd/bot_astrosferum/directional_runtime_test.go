@@ -29,7 +29,7 @@ func TestDirectionalRuntimeStartDoesNotProbeRemoteWorker(t *testing.T) {
 	cfg.Providers.ICONEU.MaxStaleAge = config.Duration{Duration: 24 * time.Hour}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	runtime, err := newDirectionalRuntime(ctx, cfg, nil, nil)
+	runtime, err := newDirectionalRuntime(ctx, cfg, nil, nil, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("newDirectionalRuntime: %v", err)

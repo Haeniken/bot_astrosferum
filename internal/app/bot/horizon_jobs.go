@@ -345,28 +345,50 @@ func (jobs *HorizonJobs) handleAction(ctx context.Context, platform string, mess
 	if err := messenger.AnswerAction(ctx, invocation.Token, language.text("Проверяю запрос…", "Checking request…")); err != nil {
 		jobs.logf("horizon callback acknowledgement failed on %s", platform)
 	}
+	return jobs.deliverRequest(ctx, platform, messenger, userID, invocation.Chat.ID, request)
+}
+
+// Deliver submits the same pinned Horizon calculation used by the signed bot
+// action, but from another authenticated application surface such as the web
+// account. It deliberately reuses the same cache, per-user admission checks,
+// shared directional FIFO, renderer, and Telegram delivery path.
+func (jobs *HorizonJobs) Deliver(ctx context.Context, platform string, messenger HorizonMessenger, userID, chatID int64, input HorizonButtonRequest, languageCode string) error {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if !horizonPlatformPattern.MatchString(platform) || messenger == nil || userID <= 0 || chatID <= 0 {
+		return errors.New("valid Horizon delivery platform, messenger, and user are required")
+	}
+	language := languageFromCode(languageCode)
+	request, _, err := jobs.canonicalButtonRequest(input, language)
+	if err != nil {
+		return err
+	}
+	return jobs.deliverRequest(ctx, platform, messenger, userID, chatID, request)
+}
+
+func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, messenger HorizonMessenger, userID, chatID int64, request horizonRequest) error {
+	language := request.Language
 	if !jobs.isRunning() {
-		jobs.sendStatus(messenger, invocation.Chat.ID, language.text(
+		jobs.sendStatus(messenger, chatID, language.text(
 			"Анализ горизонта сейчас недоступен.", "Horizon analysis is currently unavailable."))
 		return nil
 	}
 
 	currentRun, err := jobs.source.CurrentRunID()
 	if err != nil {
-		jobs.sendStatus(messenger, invocation.Chat.ID, language.text(
+		jobs.sendStatus(messenger, chatID, language.text(
 			"Сейчас не удалось проверить актуальный ICON-EU run. Попробуйте позже.",
 			"The current ICON-EU run could not be checked. Please try again later."))
 		return nil
 	}
 	if currentRun != request.RunID {
-		jobs.sendStatus(messenger, invocation.Chat.ID, language.text(
+		jobs.sendStatus(messenger, chatID, language.text(
 			"Кнопка относится к устаревшему run. Запросите обычный прогноз снова.",
 			"This button belongs to an older run. Request the regular forecast again."))
 		return nil
 	}
 	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
 	if err != nil || !jobs.source.Supports(plan) {
-		jobs.sendStatus(messenger, invocation.Chat.ID, language.text(
+		jobs.sendStatus(messenger, chatID, language.text(
 			"Для этой точки анализ горизонта ICON-EU недоступен.",
 			"ICON-EU horizon analysis is unavailable for this location."))
 		return nil
@@ -374,13 +396,13 @@ func (jobs *HorizonJobs) handleAction(ctx context.Context, platform string, mess
 	request.Location.TimeZone = jobs.resolveTimeZone(request.Location)
 	key, err := horizonCacheKey(request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
 	if err != nil {
-		jobs.sendStatus(messenger, invocation.Chat.ID, language.text(
+		jobs.sendStatus(messenger, chatID, language.text(
 			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
 		return nil
 	}
 	waiter := horizonWaiter{
 		identity: horizonUserIdentity{platform: platform, userID: userID},
-		chatID:   invocation.Chat.ID, messenger: messenger, language: language,
+		chatID:   chatID, messenger: messenger, language: language,
 	}
 	if path, ok := jobs.cache.load(key, jobs.now()); ok {
 		if jobs.reserveCached(waiter.identity, key) {

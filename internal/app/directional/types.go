@@ -190,9 +190,9 @@ func (err CodedError) Error() string {
 func (err CodedError) Unwrap() error       { return err.Err }
 func (err CodedError) FailureCode() string { return err.Code }
 
-// Astrodome internal HTTP DTOs intentionally mirror astroweb's gateway
-// contract. Admission retains Go's default exported field names because that
-// is what gateway_client.go currently emits.
+// Astrodome internal HTTP DTOs define the stable first-party account API.
+// Admission retains Go's default exported field names for compatibility with
+// the independently versioned site client.
 type SavedPoint struct {
 	ID        int64   `json:"id"`
 	Name      string  `json:"name"`

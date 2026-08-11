@@ -39,7 +39,7 @@ type directionalRuntime struct {
 	closeErr    error
 }
 
-func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, logf func(string, ...any)) (*directionalRuntime, error) {
+func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, deliveries directional.DeliveryBackend, logf func(string, ...any)) (*directionalRuntime, error) {
 	credential, err := directional.ReadServiceCredentialFile(cfg.Directional.CredentialFile)
 	if err != nil {
 		return nil, fmt.Errorf("read directional service credential: %w", err)
@@ -106,7 +106,7 @@ func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *
 	}
 	handler, err := directional.NewHTTPHandler(directional.HTTPConfig{
 		Coordinator: coordinator, AstrodomeBackend: astrodomeBackend, WorkerHealth: remoteRunner,
-		ServiceCredential: credential,
+		DeliveryBackend: deliveries, ServiceCredential: credential,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize directional HTTP gateway: %w", err)
@@ -225,7 +225,6 @@ func newAstrodomeDiskBudget(cfg config.Config) (*model.DiskBudget, error) {
 		CacheRoots: []string{
 			filepath.Join(cfg.Paths.Data, "cache", "directional"),
 			filepath.Join(cfg.Paths.Data, "cache", "horizon"),
-			filepath.Join(cfg.Paths.Data, "web", "astrodome"),
 		},
 		TemporaryRoots: []string{
 			filepath.Join(cfg.Paths.Temp, "astrodome"),

@@ -460,6 +460,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	horizonAccountCapacity := 1
+	if cfg.HorizonAnalysis.Enabled {
+		horizonAccountCapacity = cfg.HorizonAnalysis.QueueSize + cfg.HorizonAnalysis.Concurrency
+	}
+	accountDeliveries, err := bot.NewAccountDeliveryDispatcher(
+		ctx, cfg.App.RequestTimeout.Duration, cfg.App.Workers, horizonAccountCapacity, logf,
+	)
+	if err != nil {
+		return err
+	}
 	// The flag controls the public rollout. Administrators must retain a fully
 	// operational preview path while public access is disabled.
 	astrodomeOperational := cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
@@ -502,7 +512,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	var directionalService *directionalRuntime
 	if cfg.HorizonAnalysis.Enabled || astrodomeOperational {
-		directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, logf)
+		directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, accountDeliveries, logf)
 		if err != nil {
 			return err
 		}
@@ -597,6 +607,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		if err := configureHandler(handler, "telegram", cfg.Platforms.Telegram.AdminIDs, "telegram-renders"); err != nil {
+			return err
+		}
+		if err := accountDeliveries.SetTelegramHandler(handler); err != nil {
 			return err
 		}
 		adapters = append(adapters, platformAdapter{name: "Telegram", run: func(runContext context.Context) error {
