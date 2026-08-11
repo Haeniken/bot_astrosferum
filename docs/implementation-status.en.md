@@ -19,7 +19,7 @@ Deployment target: operator-managed host
 - Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;
 - ordinary forecasts share one cross-platform calculation limit and report a queue position after both configured slots are occupied; Horizon and Astrodome share one bounded directional FIFO and a separately configured isolated-worker concurrency (`1` recommended until benchmarked);
 - VK photo/document uploads validate the handshake and retry at most twice with `1 s`/`2 s` backoff and a fresh upload URL; this handles transient `pu.vk.ru` `405` or incomplete upload responses without unbounded retries;
-- sequential media deliveries in each VK request have a minimum `150 ms` interval without a global lock; parallel VK requests and Telegram delivery are unchanged;
+- sequential outgoing messages in each VK request have a minimum `250 ms` interval without a global lock; parallel VK requests and Telegram delivery are unchanged;
 - `/start` and `/help` explain requesting and interpreting all seven charts;
 - the user summary reports the selected model, run ID, and model-run age against configurable `max_stale_age`; this threshold only controls the `⚠️ stale run` warning and never pins cached data. Point and render cache identities contain the run ID, so a newly published run is an automatic cache miss;
 - Telegram language follows `User.language_code`: only `ru*` receives Russian, while every other or missing code receives English; help, statuses, errors, buttons, captions, the weather table, and all PNG titles/axes/legends are localized, and render-cache identity includes the language;
@@ -296,12 +296,31 @@ to a single azimuth-independent zenith. Completed code includes:
   and separate ordinary-forecast, Horizon, and Astrodome tools; Telegram sign-in
   is owned by the landing page and the whole site remains `noindex` plus
   `robots.txt: Disallow /`;
-- owner-scoped ordinary-forecast and Horizon web admissions that reuse the
-  Telegram handler, existing forecast queue, render/Horizon caches, shared
-  directional FIFO, and Telegram delivery rather than duplicating calculation
-  or keeping a second result archive; admission succeeds only after a Telegram
-  acknowledgement, and outstanding web work is bounded by a narrow admission
-  layer sized from the configured worker/queue limits;
+- owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
+  forecast queue, render/Horizon caches, calibration, shared directional FIFO,
+  statistics, and prepared scientific values without duplicating calculation;
+  the bot publishes `forecast-interactive-v1` and `horizon-interactive-v1` JSON
+  into a bounded 96-hour owner-scoped result store, while the site polls status
+  and draws interactive charts without sending a Telegram or VK message;
+- the ordinary interactive contract preserves separate native timelines:
+  an independent hourly weather/cloud/Overall axis and an independent
+  three-hour pressure-level diagnostics axis, with no resampling between them;
+  Go serializes the additive Overall penalty points and the browser only draws
+  them. The payload pins `overall-astronomy-index-v1`,
+  `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
+  website-only cache miss skips PNG rasterization. The separate Johnson-V diagnostic exposes NASA GEOS-CF provenance when
+  composition is available and never becomes an implicit Overall penalty;
+- the Horizon interactive payload pins its exact cache artifact, ICON HHL
+  observer-surface elevation, ICON-EU provider/run/grid, Horizon science
+  version, canonical Overall-calibration digest, and the native `f000..f072`
+  hourly axis; continuous server-derived solar-phase intervals cover
+  `f000−30 min .. f072+30 min`, and the worker must match the coordinator's
+  pinned science cache key before publication. Canonical terrain-primary unavailable cells remain visible and
+  fail closed rather than invalidating the full result;
+- shared saved points can be selected, created, or deleted on the website up to
+  the existing limit of ten; a forecast may also use validated transient
+  coordinates entered directly, received from an explicit browser-geolocation
+  action, or selected on the bundled offline map;
 - an authenticated `ru`/`en` web-language preference stored in PostgreSQL and
   synchronized across active sessions while retaining explicit localized URLs;
 - no VK ID login or linking yet: the configured VK community token is not a VK
@@ -315,7 +334,7 @@ to a single azimuth-independent zenith. Completed code includes:
   shared fixture when exact integer cross multiplication proves a smaller or
   equal `unavailable / total` fraction; only a strictly worse result does not
   replace it;
-- a dependency-free WebGL2 inside-dome view, Canvas 2D and accessible-table
+- a self-contained WebGL2 inside-dome view, Canvas 2D and accessible-table
   fallbacks, fixed quantitative legends, keyboard/touch controls, and strict
   fail-closed dataset validation; the star layer stays behind the mesh, the
   non-data context shows an ordinary `0°` label without a separate horizon

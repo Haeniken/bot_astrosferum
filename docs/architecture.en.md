@@ -9,7 +9,7 @@ by the independent `site-astrosferum` repository. The current production writer 
 production-v2 with science-kernel v29/path v23; the immutable v28/v22 full run
 remains the preceding measured baseline. Repeated cold/warm resource and
 observational gates remain open before public rollout.
-External sources last checked: 2026-07-28; last revision: 2026-08-09
+External sources last checked: 2026-07-28; last revision: 2026-08-11
 Deployment target: operator-managed host
 Deployment directory: `/opt/docker/bot-astrosferum`
 
@@ -992,8 +992,8 @@ VK media upload uses at most three attempts. Each failed attempt waits `1 s`,
 then `2 s`, and requests a fresh platform upload URL before retrying. Incomplete
 upload responses are rejected before `photos.saveMessagesPhoto`/`docs.save`;
 the retry loop remains bounded by the request context and never applies to
-arbitrary external hosts. Successful VK media deliveries are paced at a
-minimum `150 ms` interval within one sequential forecast delivery. There is no
+arbitrary external hosts. Successful VK outgoing messages are paced at a
+minimum `250 ms` interval within one sequential request. There is no
 shared lock, so concurrent VK requests do not block each other; the delay
 exists only in the VK adapter and does not affect Telegram.
 
@@ -1469,7 +1469,7 @@ filenames or logs. A cache hit is valid only for the exact immutable run and
 calculation contract.
 
 The scientific marker is `horizon-spherical-los-tke-hmnsp99-v7`; the application
-cache schema is `horizon-cache-v1`. Changing either a formula or the
+cache schema is `horizon-cache-v2-interactive`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 
 PNG and metadata are published by staging plus atomic rename. Retention is
@@ -1887,13 +1887,13 @@ server-side session; it does not trust a browser-supplied Telegram user ID.
 The OIDC flow binds `state`, nonce, PKCE, redirect origin, and the expected bot
 client, then validates the signed ID token. Session cookies are
 `Secure`, `HttpOnly`, and `SameSite=Lax`; state-changing routes also require
-same-origin CSRF protection. Saved points are read through a dedicated
-least-privilege PostgreSQL role. Job/status/dataset endpoints enforce ownership
+same-origin CSRF protection. Saved points are read, created, and deleted through
+a dedicated least-privilege PostgreSQL role. Job/status/dataset endpoints enforce ownership
 and return `404` for another user's opaque identifier.
 
 The site has explicit locale URLs for the public home (`/en`, `/ru`), account
-dashboard (`/{lang}/account`), Telegram-delivered ordinary forecast and Horizon
-requests (`/{lang}/account/forecast`, `/{lang}/account/horizon`), and the
+dashboard (`/{lang}/account`), browser-rendered ordinary forecast and Horizon
+results (`/{lang}/account/forecast`, `/{lang}/account/horizon`), and the
 interactive Astrodome (`/{lang}/account/sky-conditions`). The root is a stable
 `x-default` and always redirects temporarily to `/en`; each visible language
 control is an ordinary link between the two equivalent URLs. The URL
@@ -1919,23 +1919,53 @@ therefore remains disabled until a separately registered VK ID application,
 verified authorization-code flow, and unique provider-subject binding are
 available.
 
-The ordinary-forecast and Horizon account pages are thin delivery controls,
-not second science implementations. A CSRF-protected owner-scoped request is
-forwarded through the authenticated internal gateway to the configured
-Telegram handler. Ordinary delivery enters the same `ForecastQueue`, data
-providers, render cache, persistence path, and seven-chart messenger workflow
-as a bot request. Horizon resolves the current ICON-EU run and model-surface
-height under that same model-work queue, then enters the same per-user checks, cache, shared directional FIFO,
-renderer, and Telegram delivery path as the signed bot action. Results are sent
-to Telegram; the browser receives an admission acknowledgement only after the
-bot has successfully confirmed the request in that user's Telegram
-conversation. Queue progress, the result, or an error is reported there. The
-dispatcher bounds outstanding web-originated work with a narrow admission
-layer sized from the configured platform-worker and Horizon queue/concurrency
-limits and rejects overlapping duplicate
-admissions of the same kind per user; the existing Horizon per-user guard
-remains authoritative for the full job. Web delivery is fail-closed when the
-Telegram platform is disabled.
+The ordinary-forecast and Horizon account pages are presentation clients, not
+second science implementations. A CSRF-protected owner-scoped request is
+forwarded through the authenticated internal gateway to a platform-neutral
+result dispatcher. Ordinary jobs enter the same `ForecastQueue`, providers,
+calibration, persistence/statistics path, and scientific preparation as bot
+requests; an existing complete render-cache entry can supply its byte-identical
+JSON, while a website-only miss deliberately skips PNG rasterization. Horizon resolves the current ICON-EU run and
+model-surface height under the same model-work queue, then uses the same
+per-user checks, Horizon cache, shared directional FIFO, and renderer as the
+signed bot action. The bot serializes those already prepared values as
+versioned `forecast-interactive-v1` or `horizon-interactive-v1` JSON; the
+browser never reimplements a formula or interpolates a finished result. The
+weather/cloud/Overall axis is an independent native hourly axis, while the
+pressure-profile wind/shear/seeing products retain a separate independent
+native three-hour axis; neither is resampled from the other. Additive Overall
+penalty points are serialized by Go, not reconstructed in JavaScript.
+`forecast-interactive-v1` also pins `algorithms.overall` as
+`overall-astronomy-index-v1`, `algorithms.cloud_obstruction` as
+`effective-cloud-obstruction-v1`, and carries
+`algorithms.overall_calibration_sha256`; the browser validates this provenance
+before drawing. The separate Johnson-V diagnostic retains
+NASA GEOS-CF AOD550/total-column-ozone provenance and is not reinterpreted as
+an Overall factor.
+`horizon-interactive-v1` pins the Horizon cache `artifact_key`, observer
+model-surface elevation, ICON-EU provider/run/grid, Horizon science version,
+and the canonical Overall-calibration SHA-256. Its first frame is model `f000`
+and the 73 serialized frames keep the exact hourly source axis. Continuous
+server-derived solar-phase intervals cover `f000−30 min .. f072+30 min` and
+come from the same five-minute boundary solver as the static chart. The
+coordinator passes the exact science cache key through the worker protocol;
+the worker must recompute an equal key before it can publish a result. Browser code
+may convert a supplied confidence fraction to percent for display, but does
+not derive scientific confidence or quality.
+Non-finite internal placeholders become JSON `null`, never zero, and the axes
+retain UTC instants plus the coordinate's IANA time zone. The dispatcher
+publishes owner-scoped status and file endpoints and retains terminal results
+for exactly 96 hours. Every status, cancellation, and file request repeats the
+owner check; another owner receives `404`. Telegram and VK continue to receive
+the existing lossless PNG output.
+
+The result dispatcher has separate bounded admission for ordinary Forecast and
+Horizon jobs, rejects overlapping jobs of the same kind for one owner, and
+then defers to the existing forecast and directional queues. It does not create
+a second model downloader, formula path, or renderer. The web facade has a
+discarding base messenger and per-job capture messenger, so a website request
+cannot contact Telegram or VK. Platform adapters keep their independent
+delivery workflows and the bot continues to operate when the site is absent.
 
 The rollout switch has deliberately narrow semantics:
 
@@ -1949,7 +1979,7 @@ the same rule; disagreement fails closed.
 
 ### 30.5. External browser renderer and edge
 
-The dependency-free client validates the dataset cardinality, ordering,
+The self-contained client validates the dataset cardinality, ordering,
 versions, geometry digest, finite values, nullable states, and timestamps
 before drawing anything. WebGL2 is the primary inside-dome view; Canvas 2D and
 an HTML table are equivalent fallbacks. Cells use the exact node value and a

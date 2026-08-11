@@ -20,7 +20,7 @@ Platform tokens deliberately do not belong in `.env`: keep them in
 | `ASTRO_TELEGRAM_ADMIN_IDS` | No | Comma-separated numeric IDs, or empty | Grants the Telegram `/admin` and statistics UI. It does not filter statistics: every configured admin sees the combined Telegram + VK totals. |
 | `ASTRO_VK_ADMIN_IDS` | No | Comma-separated numeric VK user IDs, or empty | Grants the VK admin/statistics UI. Use numeric user IDs, not screen names; the report is the same combined Telegram + VK report. |
 | `ASTRO_LIGHT_POLLUTION_ATLAS_YEAR` | No | `2024` | Pins the operator-verified annual Light Pollution Atlas dataset; it is not advanced automatically. Change only after verifying and provisioning a supported dataset. |
-| `ASTRO_FORECAST_CONCURRENCY` | No | `2` | Shared maximum number of ordinary forecast calculations running at once across Telegram and VK. Further requests wait and receive their queue position. |
+| `ASTRO_FORECAST_CONCURRENCY` | No | `2` | Shared maximum number of ordinary forecast calculations running at once across Telegram, VK, and the website. Further requests wait in the same queue. |
 | `ASTRO_ICON_DOWNLOAD_LIMIT_MBIT` | No | Unset | Aggregate decimal-Mbit/s limit shared by simultaneous ICON-EU and ICON Global downloads. Unset, empty, or `0` means unlimited. |
 | `ASTRO_GEOS_CF_ENABLED` | No | `true` | Enables the independent NASA GEOS-CF AOD550/ozone enrichment used only by the night-time Reference V-band diagnostic. A disabled, stale, slow, or unavailable source removes the ring but never fails or changes the primary ICON Overall forecast. |
 
@@ -184,7 +184,13 @@ No `ASTRO_WEB_*` setting is read by this bot.
 
 This deployment continues to own PostgreSQL and the scientific runtime. It
 exposes only an authenticated internal account API through the existing
-directional gateway and credential. The site may use a dedicated
+directional gateway and credential. Ordinary Forecast and Horizon website jobs
+return owner-scoped status and a versioned interactive JSON dataset retained
+for 96 hours; they reuse the configured queues, preserve the prepared
+scientific values exactly, skip PNG rasterization on a website-only cache miss,
+and do not send platform messages. Forecast JSON pins
+`overall-astronomy-index-v1`, `effective-cloud-obstruction-v1`, and the SHA-256
+of the complete Overall calibration used for that result. The site may use a dedicated
 least-privilege PostgreSQL role, but stopping or removing it must not affect
 Telegram, VK, model synchronization, ordinary forecasts, Horizon, or
 Astrodome calculation. Site access policy must be consistent with
