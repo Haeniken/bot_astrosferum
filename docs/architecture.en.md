@@ -1544,7 +1544,7 @@ quality. Straight-ray and full Ciddor-refraction paths are separately
 versioned; the latter integrates the coupled ECEF ray equation through the
 reconstructed three-dimensional refractive-index field. Detailed equations
 and numerical tolerances are in
-[the scientific method](scientific-method.en.md#8-directional-atmospheric-astrodome).
+[the Astrodome physical-model part of the scientific method](scientific-method-astrodome-physics.en.md).
 
 Physical breakpoints are first-class path inputs, not incidental products of
 adaptive quadrature. The current identities are
