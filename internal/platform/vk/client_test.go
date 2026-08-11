@@ -209,12 +209,12 @@ func TestEncodeKeyboardFitsTenSavedLocations(t *testing.T) {
 	}
 }
 
-func TestMediaDeliveryDelayDoesNotSerializeConcurrentRequests(t *testing.T) {
-	client := &Client{mediaDelay: 20 * time.Millisecond}
+func TestMessageDeliveryDelayDoesNotSerializeConcurrentRequests(t *testing.T) {
+	client := &Client{messageDelay: 20 * time.Millisecond}
 	started := time.Now()
 	done := make(chan error, 2)
 	for range 2 {
-		go func() { done <- client.waitMediaDelay(context.Background()) }()
+		go func() { done <- client.waitMessageDelay(context.Background()) }()
 	}
 	for range 2 {
 		if err := <-done; err != nil {
@@ -222,7 +222,17 @@ func TestMediaDeliveryDelayDoesNotSerializeConcurrentRequests(t *testing.T) {
 		}
 	}
 	if elapsed := time.Since(started); elapsed < 15*time.Millisecond || elapsed >= 35*time.Millisecond {
-		t.Fatalf("concurrent media delay = %s, want one independent 20ms interval", elapsed)
+		t.Fatalf("concurrent message delay = %s, want one independent 20ms interval", elapsed)
+	}
+}
+
+func TestNewClientUsesQuarterSecondMessagePacing(t *testing.T) {
+	client, err := NewClient("test-token", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.messageDelay != 250*time.Millisecond {
+		t.Fatalf("VK message delay = %s, want 250ms", client.messageDelay)
 	}
 }
 
@@ -388,7 +398,7 @@ func testClient(serverURL string) *Client {
 	client.apiEndpoint = serverURL + "/method/"
 	client.apiHTTP = http.DefaultClient
 	client.longPollHTTP = http.DefaultClient
-	client.mediaDelay = time.Nanosecond
+	client.messageDelay = time.Nanosecond
 	return client
 }
 

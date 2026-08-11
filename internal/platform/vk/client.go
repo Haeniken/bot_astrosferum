@@ -31,7 +31,7 @@ type Client struct {
 	apiHTTP      *http.Client
 	longPollHTTP *http.Client
 	retryDelay   time.Duration
-	mediaDelay   time.Duration
+	messageDelay time.Duration
 	randomID     atomic.Uint32
 }
 
@@ -77,7 +77,7 @@ func NewClient(token string, groupID int64) (*Client, error) {
 		apiHTTP:      newHTTPClient(transport, 60*time.Second),
 		longPollHTTP: newHTTPClient(transport, 35*time.Second),
 		retryDelay:   time.Second,
-		mediaDelay:   150 * time.Millisecond,
+		messageDelay: 250 * time.Millisecond,
 	}
 	client.randomID.Store(uint32(time.Now().UnixNano()) & 0x7fffffff)
 	return client, nil
@@ -131,7 +131,7 @@ func (client *Client) SendMessage(ctx context.Context, peerID int64, text string
 	if locationButton {
 		return client.SendMessageWithKeyboard(ctx, peerID, text, bot.DefaultKeyboard())
 	}
-	return client.send(ctx, peerID, text, "", nil)
+	return client.sendWithDelay(ctx, peerID, text, "", nil)
 }
 
 func (client *Client) SendMessageWithKeyboard(ctx context.Context, peerID int64, text string, keyboard bot.Keyboard) error {
@@ -139,7 +139,7 @@ func (client *Client) SendMessageWithKeyboard(ctx context.Context, peerID int64,
 	if err != nil {
 		return err
 	}
-	return client.send(ctx, peerID, text, "", encoded)
+	return client.sendWithDelay(ctx, peerID, text, "", encoded)
 }
 
 func (client *Client) SendHTMLMessageWithKeyboard(ctx context.Context, peerID int64, text string, keyboard bot.Keyboard) error {
@@ -151,7 +151,7 @@ func (client *Client) SendMessageWithActions(ctx context.Context, peerID int64, 
 	if err != nil {
 		return err
 	}
-	return client.send(ctx, peerID, plainText(text), "", encoded)
+	return client.sendWithDelay(ctx, peerID, plainText(text), "", encoded)
 }
 
 func (client *Client) AnswerAction(ctx context.Context, token, text string) error {
@@ -184,10 +184,7 @@ func (client *Client) SendPhoto(ctx context.Context, peerID int64, path, caption
 	if err != nil {
 		return err
 	}
-	if err := client.send(ctx, peerID, plainText(caption), attachment, nil); err != nil {
-		return err
-	}
-	return client.waitMediaDelay(ctx)
+	return client.sendWithDelay(ctx, peerID, plainText(caption), attachment, nil)
 }
 
 func (client *Client) SendDocument(ctx context.Context, peerID int64, path, caption string) error {
@@ -197,16 +194,20 @@ func (client *Client) SendDocument(ctx context.Context, peerID int64, path, capt
 	if err != nil {
 		return err
 	}
-	if err := client.send(ctx, peerID, plainText(caption), attachment, nil); err != nil {
-		return err
-	}
-	return client.waitMediaDelay(ctx)
+	return client.sendWithDelay(ctx, peerID, plainText(caption), attachment, nil)
 }
 
-func (client *Client) waitMediaDelay(ctx context.Context) error {
-	delay := client.mediaDelay
+func (client *Client) sendWithDelay(ctx context.Context, peerID int64, text, attachment string, keyboard json.RawMessage) error {
+	if err := client.send(ctx, peerID, text, attachment, keyboard); err != nil {
+		return err
+	}
+	return client.waitMessageDelay(ctx)
+}
+
+func (client *Client) waitMessageDelay(ctx context.Context) error {
+	delay := client.messageDelay
 	if delay <= 0 {
-		delay = 150 * time.Millisecond
+		delay = 250 * time.Millisecond
 	}
 	timer := time.NewTimer(delay)
 	select {
