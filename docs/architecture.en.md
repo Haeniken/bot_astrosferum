@@ -1929,13 +1929,16 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v1` or `horizon-interactive-v1` JSON; the
+versioned `forecast-interactive-v2` or `horizon-interactive-v1` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
-weather/cloud/Overall axis is an independent native hourly axis, while the
-pressure-profile wind/shear/seeing products retain a separate independent
-native three-hour axis; neither is resampled from the other. Additive Overall
+weather and cloud retain one exact native hourly axis, Overall retains a
+narrower exact subset of that axis when pressure-profile support ends earlier, while
+the pressure-profile wind/shear/seeing products retain a native three-hour
+axis; none is resampled from another. Overall may cover a narrower exact subset
+when the current surface/cloud window extends beyond pressure-profile support.
+Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
-`forecast-interactive-v1` also pins `algorithms.overall` as
+`forecast-interactive-v2` also pins `algorithms.overall` as
 `overall-astronomy-index-v1`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
 `algorithms.overall_calibration_sha256`; the browser validates this provenance

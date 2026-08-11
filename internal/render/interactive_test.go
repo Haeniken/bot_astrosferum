@@ -97,6 +97,47 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 	if got := dataset.PenaltyPoints[0].Contributions[0].Points; math.Float64bits(got) != math.Float64bits(9.0/15.0) {
 		t.Fatalf("server-derived Overall penalty points = %v", got)
 	}
+	shortOverall := overall[1:71]
+	shortDataset, _, _, _, err := PrepareForecastInteractiveDataset(
+		vertical, surface, cloud, sky, shortOverall, forecast.DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatalf("prepare narrower physical Overall overlap: %v", err)
+	}
+	if len(shortDataset.Weather.Hours) != 73 || len(shortDataset.Cloud.TimesUTC) != 73 || len(shortDataset.Overall) != 70 ||
+		!shortDataset.Overall[0].ValidAt.Equal(surface.Frames[1].ValidAt) ||
+		!shortDataset.Overall[len(shortDataset.Overall)-1].ValidAt.Equal(surface.Frames[70].ValidAt) {
+		t.Fatalf("independent interactive axes = weather %d cloud %d Overall %d",
+			len(shortDataset.Weather.Hours), len(shortDataset.Cloud.TimesUTC), len(shortDataset.Overall))
+	}
+	gapSurface := surface
+	gapSurface.Frames = append(append([]forecast.SurfaceFrame(nil), surface.Frames[:10]...), surface.Frames[11:]...)
+	gapCloud := cloud
+	gapCloud.Frames = append(append([]forecast.CloudFrame(nil), cloud.Frames[:10]...), cloud.Frames[11:]...)
+	gapOverall := append(append([]forecast.OverallIndexFrame(nil), overall[:10]...), overall[11:]...)
+	for name, input := range map[string]struct {
+		surface forecast.SurfaceSeries
+		cloud   forecast.CloudSeries
+		overall []forecast.OverallIndexFrame
+	}{
+		"surface": {surface: gapSurface, cloud: cloud, overall: overall},
+		"cloud":   {surface: surface, cloud: gapCloud, overall: overall},
+		"Overall": {surface: surface, cloud: cloud, overall: gapOverall},
+	} {
+		if _, _, _, _, err := PrepareForecastInteractiveDataset(
+			vertical, input.surface, input.cloud, sky, input.overall, forecast.DefaultOverallIndexCalibration(),
+		); err == nil {
+			t.Fatalf("%s hourly gap was accepted", name)
+		}
+	}
+	gapVertical := vertical
+	gapVertical.Frames = append([]forecast.VerticalFrame(nil), vertical.Frames...)
+	gapVertical.Frames[1].ValidAt = gapVertical.Frames[1].ValidAt.Add(time.Hour)
+	if _, _, _, _, err := PrepareForecastInteractiveDataset(
+		gapVertical, surface, cloud, sky, overall, forecast.DefaultOverallIndexCalibration(),
+	); err == nil || !strings.Contains(err.Error(), "not three-hourly") {
+		t.Fatalf("upper-air cadence error = %v", err)
+	}
 	encoded, err := json.Marshal(dataset)
 	if err != nil {
 		t.Fatal(err)

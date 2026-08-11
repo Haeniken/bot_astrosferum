@@ -135,7 +135,7 @@ func TestAccountResultDispatcherBoundsWorkAndCancelsByOwner(t *testing.T) {
 func TestAccountResultCaptureCopiesStructuredDatasetWithoutChangingBytes(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "forecast.json")
-	payload := "{\"schema_version\":\"forecast-interactive-v1\"}\n"
+	payload := "{\"schema_version\":\"forecast-interactive-v2\"}\n"
 	if err := os.WriteFile(source, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestAccountResultOpenRejectsSameSizeCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := filepath.Join(t.TempDir(), "forecast.json")
-	if err := os.WriteFile(source, []byte("{\"schema_version\":\"forecast-interactive-v1\"}\n"), 0o600); err != nil {
+	if err := os.WriteFile(source, []byte("{\"schema_version\":\"forecast-interactive-v2\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	capture := newAccountResultCapture(directory, nil)

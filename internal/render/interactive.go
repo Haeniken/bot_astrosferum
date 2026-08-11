@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const ForecastInteractiveSchema = "forecast-interactive-v1"
+const ForecastInteractiveSchema = "forecast-interactive-v2"
 
 // ForecastInteractiveDataset contains the exact prepared values behind the
 // seven ordinary forecast charts. It is presentation data, not a second
@@ -133,15 +133,52 @@ func PrepareForecastInteractiveDataset(
 	if err != nil {
 		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil, err
 	}
-	if len(surface.Frames) < 2 || len(overall) != len(surface.Frames) ||
-		len(diagnostics.Times) < 2 || len(cloudDiagnostics.Times) != len(surface.Frames) {
+	if len(surface.Frames) < 2 || len(overall) < 2 ||
+		len(diagnostics.Times) < 2 || len(cloudDiagnostics.Times) < 2 {
 		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
 			fmt.Errorf("interactive forecast inputs have inconsistent axes")
 	}
-	for index, frame := range surface.Frames {
-		if !frame.ValidAt.Equal(overall[index].ValidAt) || !frame.ValidAt.Equal(cloudDiagnostics.Times[index]) {
+	for index := 1; index < len(diagnostics.Times); index++ {
+		if diagnostics.Times[index].Sub(diagnostics.Times[index-1]) != 3*time.Hour {
 			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
-				fmt.Errorf("interactive hourly forecast time axis differs at frame %d", index)
+				fmt.Errorf("interactive upper-air time axis is not three-hourly at frame %d", index)
+		}
+	}
+	surfaceTimes := make(map[int64]struct{}, len(surface.Frames))
+	for index, frame := range surface.Frames {
+		if index > 0 && frame.ValidAt.Sub(surface.Frames[index-1].ValidAt) != time.Hour {
+			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+				fmt.Errorf("interactive surface time axis is not hourly at frame %d", index)
+		}
+		surfaceTimes[frame.ValidAt.UnixNano()] = struct{}{}
+	}
+	cloudTimes := make(map[int64]struct{}, len(cloudDiagnostics.Times))
+	for index, validAt := range cloudDiagnostics.Times {
+		if index > 0 && validAt.Sub(cloudDiagnostics.Times[index-1]) != time.Hour {
+			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+				fmt.Errorf("interactive cloud time axis is not hourly at frame %d", index)
+		}
+		cloudTimes[validAt.UnixNano()] = struct{}{}
+	}
+	if len(cloudDiagnostics.Times) != len(surface.Frames) {
+		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+			fmt.Errorf("interactive surface and cloud axes have different lengths")
+	}
+	for index, validAt := range cloudDiagnostics.Times {
+		if !validAt.Equal(surface.Frames[index].ValidAt) {
+			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+				fmt.Errorf("interactive surface and cloud time axes differ at frame %d", index)
+		}
+	}
+	upperAirStart := diagnostics.Times[0]
+	upperAirEnd := diagnostics.Times[len(diagnostics.Times)-1]
+	for index, frame := range overall {
+		_, inSurface := surfaceTimes[frame.ValidAt.UnixNano()]
+		_, inCloud := cloudTimes[frame.ValidAt.UnixNano()]
+		if (index > 0 && frame.ValidAt.Sub(overall[index-1].ValidAt) != time.Hour) || !inSurface || !inCloud ||
+			frame.ValidAt.Before(upperAirStart) || frame.ValidAt.After(upperAirEnd) {
+			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+				fmt.Errorf("interactive Overall time %s is outside the hourly source axes", frame.ValidAt.Format(time.RFC3339))
 		}
 	}
 	penaltyPoints := make([]ForecastInteractivePenaltyFrame, len(overall))

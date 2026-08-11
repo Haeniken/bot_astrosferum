@@ -299,12 +299,14 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v1` and `horizon-interactive-v1` JSON
+  the bot publishes `forecast-interactive-v2` and `horizon-interactive-v1` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:
-  an independent hourly weather/cloud/Overall axis and an independent
-  three-hour pressure-level diagnostics axis, with no resampling between them;
+  one exact hourly weather/cloud axis, its possibly narrower exact Overall
+  subset, and an independent three-hour pressure-level diagnostics axis, with
+  no resampling between them; Overall never extends outside pressure-profile
+  support;
   Go serializes the additive Overall penalty points and the browser only draws
   them. The payload pins `overall-astronomy-index-v1`,
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
