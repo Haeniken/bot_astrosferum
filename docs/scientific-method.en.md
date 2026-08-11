@@ -4,33 +4,46 @@
 **ORCID:** [0009-0005-5804-5011](https://orcid.org/0009-0005-5804-5011)\
 **Project:** Astrosferum\
 **Document type:** Research-software methodology and calculation note\
-**Version:** 1.0\
-**Revision date:** 26 July 2026
+**Version:** 2.0\
+**Revision date:** 9 August 2026
 
-Status: research-software method and calculation note, revised 26 July 2026.
+Status: research-software method and calculation note, revised 9 August 2026.
 This document is the canonical description of sources, units, formulas,
 control calculations, validation, uncertainty, and configurable engineering
-decisions in `bot_astrosferum`.
+decisions in `bot-astrosferum`.
 
 The directional Horizon method described in section 7 is an implemented
 user-facing capability. It is enabled by configuration, is deliberately
 limited to ICON-EU, and follows the same reproducibility and current-run
 requirements as the ordinary forecast.
 
+The directional atmospheric Astrodome method in section 8 is implemented for
+ICON-EU in this repository. Its presentation and saved-visualization catalogue
+are deployed from the independent private `site-astrosferum` repository.
+Production-v2/v29/v23
+is the current writer; the complete v28/v22 numerical measurement recorded below
+is an explicitly historical baseline;
+multi-cycle resource, release, and observational validation remain separate
+gates and do not change the formula contract.
+
 ## Document map
 
 - Sections 1–2 define scientific status, outputs, and provenance.
-- Section 3 is the canonical formula ledger: every numbered equation used by
-  the implementation appears there with its research or project provenance.
+- Section 3 is the canonical formula ledger for the ordinary point forecast;
+  sections 7 and 8 add the numbered directional equations with their research
+  or project provenance.
 - Section 4 connects the canonical equations to implementation details,
   calibration parameters, and control calculations.
 - Section 5 defines reproducibility, validation, and responsible use.
 - Section 6 records the measured data-source contracts.
 - Section 7 specifies the optional directional Horizon method.
+- Section 8 specifies the directional atmospheric Astrodome geometry, primitive
+  reconstruction, refraction, line-of-sight physics, numerical method, and
+  limitations.
 
 ## 1. Scope and scientific status
 
-`bot_astrosferum` is research-oriented scientific software. It acquires
+`bot-astrosferum` is research-oriented scientific software. It acquires
 numerical weather-prediction data, applies documented physical and engineering
 models, and produces reproducible diagnostics for observational astronomy and
 astrophotography.
@@ -90,7 +103,7 @@ measured contracts, and acquisition verification are consolidated in
 This is the complete calculation chain used by the current implementation.
 Equations marked **published** are transcribed from the linked research;
 equations marked **project rule** are explicit, configurable engineering
-choices made by `bot_astrosferum`. The latter must not be presented as
+choices made by `bot-astrosferum`. The latter must not be presented as
 peer-reviewed physical laws.
 
 ### 3.1. Physical optical-turbulence model
@@ -315,10 +328,10 @@ C_h&=\frac{\sum_{i\in\mathrm{valid}}
 \int_{z_i}^{z_{i+1}}h^{5/3}\,dh}
 {\int_0^{z_{\mathrm{top}}}h^{5/3}\,dh},\\
 \mathrm{profile\ quality}=\mathrm{complete}
-&\iff C_z\ge0.99\ \land\ C_h\ge0.99\ \land\
+&\iff C_z\ge0.99\ \land\ C_h\ge0.99\ \land\\
 z_{\mathrm{top}}\ge18\ \mathrm{km\ AGL},\\
 \mathrm{Overall\ profile\ gate}=\mathrm{pass}
-&\iff C_z\ge0.90\ \land\ C_h\ge0.90\ \land\
+&\iff C_z\ge0.90\ \land\ C_h\ge0.90\ \land\\
 z_{\mathrm{top}}\ge15\ \mathrm{km\ AGL}.
 \end{aligned}\tag{F5c}
 ```
@@ -618,6 +631,22 @@ L&=1-\prod_{i\in N}f_i=\sum_{i\in N}\phi_i,\\
 \mathrm{Overall}+\sum_{i\in N}9\phi_i&=10.
 \end{aligned}\tag{F12a}
 ```
+
+The serialized authoritative `penalty_loss_fraction` is evaluated as
+`1-product(f_i)`, not by re-summing its floating-point Shapley attribution.
+The latter closes to the same mathematical value within roundoff but, at an
+exact veto, its binary64 sum can lie a few ulps above one. The payload
+therefore preserves both the bounded physical loss in `[0,1]` and the
+unmodified attribution values; their closure is checked with the documented
+serialization-consistency tolerances: `2e-6` for factor/product/Shapley loss
+and `2e-5` for the reconstructed `1…10` Overall value. These project validation
+limits are neither observational uncertainties nor permission to publish a
+loss outside `[0,1]`.
+This writer correction retains dataset schema 1 and the same scientific
+meaning, but `astrodome-dataset-writer-v2` participates in the calculation
+cache key so a payload produced by the defective writer cannot be reused.
+An archived payload outside the declared unit interval is rejected rather than
+silently clamped or reinterpreted.
 
 Thus the lower part of every column is retained suitability and the colored
 segments above it are an order-independent allocation of exactly
@@ -1386,7 +1415,7 @@ Status: original Stage 0 spike updated with the current data contract;
 `surface-hourly-v17`/`cloud-hourly-v4` is published in production
 Initial measurement date: 2026-07-19; updated 2026-07-22
 Host: the production host
-Runtime directory: `/opt/docker/bot_astrosferum/data/verification`
+Runtime directory: `/opt/docker/bot-astrosferum/data/verification`
 
 ### 6.1. Conclusion
 
@@ -1577,7 +1606,31 @@ level for the weather product. Reference V does not reuse it: the same-run,
 same-hour lowest native model-level `P/T` and full/surface `HHL` geometry form
 station pressure through [F12c].
 
-`TOT_PREC` accumulates from model initialization, so user-facing `mm/h` values are non-negative differences between adjacent hourly forecast times. The response uses a rolling window of up to 72 future hours without interpolating or inventing unavailable times. The `T−Td` spread is only used to advise about possible dew and equipment protection; dew does not penalize seeing or practical time ranking.
+`TOT_PREC` accumulates from model initialization, so user-facing `mm/h`
+values are derived only from adjacent hourly forecast times. The two GRIB
+messages can use different packing resolutions. For each message the provider
+therefore reads the ecCodes `packingError`, which bounds the unknown native
+value by
+
+```math
+\widehat P_k-e_k<P_k\leq\widehat P_k+e_k .
+```
+
+Positive or negative de-accumulated values satisfying
+
+```math
+\left|\widehat P_k-\widehat P_{k-1}\right|\leq e_k+e_{k-1}
+```
+
+are indistinguishable from zero and are set to zero. A decrease below
+`-(e_k+e_{k-1})` fails validation instead of being hidden. Bilinear
+interpolation does not enlarge the bound because its non-negative weights sum
+to one. This follows the official
+[ECMWF ecCodes guidance for small spurious values in start-of-forecast accumulations](https://confluence.ecmwf.int/display/UDOC/Why+are+there+sometimes+small+negative+precipitation+accumulations+-+ecCodes+GRIB+FAQ).
+The response uses a rolling window of up to 72 future hours without
+interpolating or inventing unavailable times. The `T−Td` spread is only used
+to advise about possible dew and equipment protection; dew does not penalize
+seeing or practical time ranking.
 
 ### 6.3. ICON Global
 
@@ -1664,7 +1717,7 @@ On 2026-07-19, discovery metadata are available from the DWD Global Discovery Ca
 
 Observed limitation: HTTPS on `wis2box.mecom.ru:443` timed out from the production host after eight seconds, while the HTTP endpoint returned `200`. The advertised origin metadata and MQTT URI are not TLS-protected. The shadow adapter should therefore prefer a TLS WIS 2.0 Global Broker from the discovery catalogue instead of the origin endpoint; the public URI credentials are not project secrets.
 
-Metadata files remain server-only under `/opt/docker/bot_astrosferum/data/verification/icon-ru-wis-spike/`. Object naming, message sizes, and redelivery semantics still require capturing a real broker notification after a run is published.
+Metadata files remain server-only under `/opt/docker/bot-astrosferum/data/verification/icon-ru-wis-spike/`. Object naming, message sizes, and redelivery semantics still require capturing a real broker notification after a run is published.
 
 ### 6.5. NASA GEOS-CF atmospheric composition
 
@@ -1697,7 +1750,7 @@ substitution of climatology.
 2. `iconglobal.Sync` follows the same atomic lifecycle while retaining full native-grid bundles; its point store applies official DWD grid geometry through CDO.
 3. The coverage router selects ICON-EU inside its domain and ICON Global elsewhere; both normalize their outputs to the same forecast types before rendering.
 4. `iconruwis` is not implemented; the WIS spike remains a candidate for a future isolated shadow adapter and cannot affect a user response.
-5. Raw `.bz2`, runs, cache, verification, and temporary files live only in `/opt/docker/bot_astrosferum/data` and are excluded from Git and the Docker build context.
+5. Raw `.bz2`, runs, cache, verification, and temporary files live only in `/opt/docker/bot-astrosferum/data` and are excluded from Git and the Docker build context.
 6. A complete 72-hour run is never downloaded locally and is not started on the server without a free-space check.
 
 
@@ -2149,8 +2202,8 @@ c_{\mathrm{ICON}}=\max\!\left(0.65,
 ```
 
 The bottom-strip category is driven primarily by the decline in
-`C_{\mathrm{lead}}` with forecast lead time. Data are labelled good for the
-coarse model when `C_{\mathrm{lead}}\ge0.85`, usable when
+`C_{\mathrm{lead}}` with forecast lead time. Data are labelled good when
+`C_{\mathrm{lead}}\ge0.85`, usable when
 `0.75\le C_{\mathrm{lead}}<0.85`, and limited when
 `C_{\mathrm{lead}}<0.75`. Composite `Confidence` is a conservative lower
 bound: a value below `0.60` always downgrades the category to limited
@@ -2193,3 +2246,2139 @@ rather than extrapolating beyond the selected data contract. The observer-local
 visibility input is a DWD diagnostic, not a direct optical-transmission
 measurement; see the
 [DWD visibility-method change note](https://www.dwd.de/DE/fachnutzer/forschung_lehre/numerische_wettervorhersage/nwv_aenderungen/_functions/DownloadBox_modellaenderungen/icon_d2/pdf_2024/pdf_icon_d2_23_04_2024.pdf?__blob=publicationFile&v=3).
+
+## 8. Directional atmospheric Astrodome
+
+### 8.1. Scope, sampling, and the non-interpolation rule
+
+Astrodome extends the directional model diagnostic over the sky above an explicit
+`10°` calculation boundary. It is available only from one complete, immutable
+ICON-EU run and contains up to 72 consecutive native whole-hour frames. A fresh
+run normally provides all 72; an ageing run stops before the first native
+hourly cadence gap. Elevations
+below 10° are absent. Zenith is calculated once per frame with `azimuth=null`;
+assigning arbitrary bearings to the same physical direction is forbidden.
+
+The three-dimensional browser may draw a contextual shell outside that data
+domain: a labelled geometric horizon at `0°`, a twilight-coloured sky band
+between `0°` and the `10°` calculation boundary, and a decorative terrain
+panorama below `0°`. These elements contain no forecast nodes, are never
+pickable as data, and do not interpolate or alter seeing, `tau0`, cloud
+transmission, water vapour, data quality, or Overall. The terrain image is a
+presentation asset, not ICON topography or an obstruction profile.
+
+Dense storage selects `production-v2`: eight rings at
+`10/20/30/40/50/60/70/80°`, each with 16 azimuths. The versioned storage
+fallback `sparse-storage-v1` has 16 azimuths at
+`10/20/30/45/60/75°`. Each adds one common zenith:
+
+```math
+\begin{aligned}
+N_{\mathrm{production\text{-}v2,hour}}&=8\cdot16+1=129,
+&N_{\mathrm{production\text{-}v2,total}}&=72\cdot129=9288,\\
+N_{\mathrm{sparse,hour}}&=6\cdot16+1=97,
+&N_{\mathrm{sparse,total}}&=72\cdot97=6984.
+\end{aligned}
+\tag{A1}
+```
+
+The profile is fixed before calculation and carried with
+`astrosferum-grid-geometry-v1`, `spherical-voronoi-v1`, and a SHA-256 digest of
+the canonical geometry descriptor. The former `dense-v1` 353-node geometry is
+retained only for historical archives and calibration; it is not admitted for
+a current production calculation.
+
+For every nonlinear derived quantity `F`, the implementation computes
+
+```math
+F\!\left(\mathcal I_{\mathrm{raw}}
+[P,T,q_v,q_l,q_i,\mathrm{CLC},U,V,W,\mathrm{TKE},\mathrm{HHL}]\right)
+\quad\text{and never}\quad
+\mathcal I\!\left[F(\cdot)\right].
+\tag{A2}
+```
+
+Seeing, `tau0`, cloud transmission, Horizon/Sky/Overall indices, Shapley
+contributions, and deterministic quality are therefore never spatially or
+temporally interpolated.
+
+### 8.2. ICON reference-sphere geometry
+
+The calculation uses DWD ICON's reference sphere
+`R_{\mathrm{ICON}}=6371229 m`. For elevation `e` and geographic azimuth `A`
+clockwise from north, the local East–North–Up direction is
+
+```math
+\boldsymbol t_{\mathrm{ENU}}=
+\begin{bmatrix}
+\cos e\,\sin A\\
+\cos e\,\cos A\\
+\sin e
+\end{bmatrix}.
+\tag{A3}
+```
+
+After transformation to ECEF, the separately versioned straight compatibility
+mode `astrodome-icon-sphere-straight-ray-v2` is
+
+```math
+\boldsymbol r(s)=\boldsymbol r_0+s\boldsymbol t_0,\qquad
+h(s)=\lVert\boldsymbol r(s)\rVert-R_{\mathrm{ICON}}.
+\tag{A4}
+```
+
+For a concentric target height `H`, let
+
+```math
+b=\boldsymbol r_0\mathbin{\boldsymbol\cdot}\boldsymbol t_0,\qquad
+c=\lVert\boldsymbol r_0\rVert^2-(R_{\mathrm{ICON}}+H)^2.
+```
+
+The forward intersection is evaluated without subtracting two nearly
+Earth-radius terms:
+
+```math
+s_H=\frac{-c}{b+\sqrt{b^2-c}}.
+\tag{A5}
+```
+
+No plane-parallel `1/\sin e`, optical-airmass table, or multiplication of the
+10° result is used to obtain another elevation.
+
+The angular coordinate of the refraction product is explicitly
+`apparent_at_aperture`: elevation and azimuth are the local launch direction
+seen by an instrument at `H_SURF+2 m` on the ICON reference sphere, at the
+declared wavelength `500 nm`. They are neither a WGS84-geodetic local frame nor
+a vacuum/geometric celestial direction. The payload therefore records
+`direction_coordinate=apparent_at_aperture`,
+`direction_reference_surface=icon_sphere_hsurf_plus_2m`,
+`direction_reference_wavelength_m=5e-7`, and
+`vacuum_direction_available=false`. The cell inspector labels this coordinate
+as **apparent altitude at aperture, 500 nm (ICON sphere)** rather than as a
+generic geometric altitude. The separately versioned straight
+compatibility path uses the same numerical launch angles without refraction;
+neither mode performs inverse shooting to a requested direction above model
+top.
+
+### 8.3. Moist-air refraction
+
+The full geometry version is
+`astrodome-icon-sphere-refraction-full-ciddor-dopri54-v3`. The phase index at
+500 nm is evaluated from native `P,T,q_v` using Ciddor's published moist-air
+density formulation and BIPM 1981/91 compressibility. Specific humidity is
+converted algebraically to water-vapour mole fraction; relative humidity is
+not introduced. The fixed, versioned carbon-dioxide assumption is 425 ppm.
+
+Let $M_w=0.018015\ \mathrm{kg\,mol^{-1}}$, let $x_c$ be the fixed carbon-dioxide
+content in ppm, and let
+$M_a=10^{-3}[28.9635+12.011\times10^{-6}(x_c-400)]\ \mathrm{kg\,mol^{-1}}$.
+The exact mass-fraction-to-mole-fraction conversion used by the implementation
+is
+
+```math
+\begin{aligned}
+x_w
+&=\frac{q_v/M_w}{q_v/M_w+(1-q_v)/M_a}
+=\frac{q_vM_a}{M_w+q_v(M_a-M_w)}.
+\end{aligned}
+\tag{A5a}
+```
+
+For $t_C=T-273.15\ \mathrm K$, pressure $P$ in Pa and temperature $T$ in K,
+the BIPM 1981/91 compressibility evaluated in code is
+
+```math
+\begin{aligned}
+Z(P,T,x_w)={}&1-\frac PT\Bigl[
+1.58123\times10^{-6}-2.9331\times10^{-8}t_C
++1.1043\times10^{-10}t_C^2\\
+&+(5.707\times10^{-6}-2.051\times10^{-8}t_C)x_w
++(1.9898\times10^{-4}-2.376\times10^{-6}t_C)x_w^2\Bigr]\\
+&+\left(\frac PT\right)^2
+\left(1.83\times10^{-11}-0.765\times10^{-8}x_w^2\right).
+\end{aligned}
+\tag{A5b}
+```
+
+Writing $\lambda_\mu=\lambda/(1\ \mu\mathrm m)$ and
+$\sigma=1/\lambda_\mu$, the Ciddor density-index closure is
+
+```math
+\begin{aligned}
+r_{as}&=10^{-8}\left[
+\frac{5792105}{238.0185-\sigma^2}
++\frac{167917}{57.362-\sigma^2}\right],\\
+r_{axs}&=r_{as}\left[1+0.534\times10^{-6}(x_c-450)\right],\\
+r_{ws}&=1.022\times10^{-8}
+\left(295.235+2.6422\sigma^2-0.032380\sigma^4
++0.004028\sigma^6\right),\\
+\rho_a&=\frac{PM_a(1-x_w)}{ZRT},&
+\rho_w&=\frac{PM_wx_w}{ZRT},\\
+Z_{as}&=Z(101325,288.15,0),&
+\rho_{axs}&=\frac{101325M_a}{Z_{as}R(288.15)},\\
+Z_{ws}&=Z(1333,293.15,1),&
+\rho_{ws}&=\frac{1333M_w}{Z_{ws}R(293.15)},\\
+n&=1+\frac{\rho_a}{\rho_{axs}}r_{axs}
++\frac{\rho_w}{\rho_{ws}}r_{ws},
+\qquad R=8.314510\ \mathrm{J\,mol^{-1}\,K^{-1}}.
+\end{aligned}
+\tag{A5c}
+```
+
+The implemented dual-number derivatives are analytic first derivatives of
+this same expression with respect to $P,T,q_v$; they do not differentiate an
+independent approximation. The declared implementation range is
+$230\le\lambda\le1690\ \mathrm{nm}$, while the present product fixes
+$\lambda=500\ \mathrm{nm}$.
+
+The aperture is anchored at `H_{\mathrm{SURF}}+2 m`. Native surface pressure
+is transported to this anchor by the declared two-metre hydrostatic closure
+
+```math
+\begin{aligned}
+R_{\mathrm{mix}}&=(1-q_{v,2})R_d+q_{v,2}R_v,\\
+P_2&=P_s\exp\!\left[-\frac{g_0(2\ \mathrm m)}
+{R_{\mathrm{mix}}T_2}\right],
+\qquad g_0=9.80665\ \mathrm{m\,s^{-2}}.
+\end{aligned}
+\tag{A6}
+```
+
+This boundary is versioned as
+`icon-ps-t2m-qv2m-hydrostatic-2m-v1`. `PMSL` and dew point are not substitutes
+for `PS` and `QV_2M`.
+
+With geometric path length `s`, unit tangent `\boldsymbol t`, refractive index
+`n(\boldsymbol r)`, and optical path `\mathcal L`, the implemented coupled ray
+equations are
+
+```math
+\begin{aligned}
+\frac{d\boldsymbol r}{ds}&=\boldsymbol t,\\
+\frac{d\boldsymbol t}{ds}
+&=\frac{\nabla n-\boldsymbol t
+(\boldsymbol t\mathbin{\boldsymbol\cdot}\nabla n)}{n},\\
+\frac{d\mathcal L}{ds}&=n.
+\end{aligned}
+\tag{A7}
+```
+
+Analytic derivatives of the Ciddor expression are combined with analytic ECEF
+gradients of the reconstructed `P,T,q_v` fields. Adaptive Dormand–Prince 5(4)
+with continuous extension locates model-top, terrain, and interpolation
+partition events. The calibration declares relative tolerance `10^{-9}`;
+`10^{-4} m` absolute position/optical-path tolerances; `10^{-11} rad`
+direction tolerance; `10^{-2} m` event tolerance; an initial `25 m` step
+within `10^{-4}…1000 m`; `500 km` maximum path; and at most `10^6` steps. A
+convergence controller starts with tolerance scales `1` and `1/2`. Adjacent forward
+endpoints must agree within $0.02\ \mathrm{m}$,
+$10^{-8}\ \mathrm{rad}$, and $0.02\ \mathrm{m}$ of optical path. If the
+forward pair fails, the local RK and event-localisation tolerances are both
+halved through the bounded sequence `1/4`, `1/8`, `1/16`, `1/32`, `1/64`,
+`1/128`; the
+acceptance bounds themselves are never relaxed. Thus the event tolerance
+reaches $7.8125\times10^{-5}\ \mathrm{m}$ at the finest pass. Event roots are
+located on the accepted Shampine dense extension independently of the RK
+minimum step; the latter is instead required to clear the finest internal
+partition-transition scale $25/128=0.1953125\ \mathrm{m}$. Production
+refraction v3 publishes
+only after two neighbouring forward passes converge. Reference/strict
+verification additionally launches a reverse pass from the finer endpoint and
+requires return within $0.05\ \mathrm{m}$ and
+$5\times10^{-9}\ \mathrm{rad}$. Reverse closure is therefore a release and
+regression diagnostic, not work repeated for every production ray. Failure of
+the checks required by the selected mode rejects the ray as numerically
+non-converged.
+
+The returned direction is explicitly `direction_at_icon_top`. ICON model top
+is not vacuum, so this version does not claim a complete astrometric
+apparent-to-vacuum correction above it.
+
+Primary sources: Ciddor,
+[DOI 10.1364/AO.35.001566](https://doi.org/10.1364/AO.35.001566);
+Auer and Standish,
+[DOI 10.1086/301325](https://doi.org/10.1086/301325); van der Werf,
+[DOI 10.1364/AO.42.000354](https://doi.org/10.1364/AO.42.000354).
+The embedded Runge--Kutta pair follows Dormand and Prince,
+[DOI 10.1016/0771-050X(80)90013-3](https://doi.org/10.1016/0771-050X(80)90013-3),
+and its quartic continuous extension follows Shampine,
+[DOI 10.1090/S0025-5718-1986-0815836-3](https://doi.org/10.1090/S0025-5718-1986-0815836-3).
+
+### 8.4. Reconstruction of native primitives
+
+The reconstruction order is part of the scientific contract:
+**time interpolation of raw native levels -> bilinear interpolation of the
+corresponding HHL geometry and raw variables -> vertical interpolation in the
+resulting local terrain-following column -> complete nonlinear recomputation**.
+Changing that order would reconstruct four different absolute-height columns
+before mixing them and would be physically wrong where model levels follow
+sloping terrain.
+
+For a raw primitive `x` at support column `i` and native level `k`, native
+times `t_0<t_1` separated by no more than three hours are interpolated first:
+
+```math
+\begin{aligned}
+\alpha&=\frac{t-t_0}{t_1-t_0},\\
+\widetilde{x}_{i,k}(t)
+&=(1-\alpha)x_{i,k}(t_0)+\alpha x_{i,k}(t_1).
+\end{aligned}
+\tag{A8}
+```
+
+At an exact native time the stored value is used directly. There is no time
+extrapolation, nearest-time substitution, or cross-run bracket. Let
+`u,v\in[0,1]` be the eastward and northward coordinates in the regular-grid
+cell and let `\mathcal{S}={\mathrm{SW},\mathrm{SE},\mathrm{NW},\mathrm{NE}}`.
+The four bilinear weights and the corresponding-level reconstruction are
+
+```math
+\begin{aligned}
+w_{\mathrm{SW}}&=(1-u)(1-v),&
+w_{\mathrm{SE}}&=u(1-v),\\
+w_{\mathrm{NW}}&=(1-u)v,&
+w_{\mathrm{NE}}&=uv,\\
+Z_k(u,v)&=\sum_{i\in\mathcal{S}}w_i(u,v)Z_{i,k},&
+x_k(u,v,t)&=\sum_{i\in\mathcal{S}}w_i(u,v)
+\widetilde{x}_{i,k}(t),\\
+\partial_a Z_k&=\sum_{i\in\mathcal{S}}(\partial_a w_i)Z_{i,k},&
+\partial_a x_k&=\sum_{i\in\mathcal{S}}(\partial_a w_i)
+\widetilde{x}_{i,k}(t),\qquad a\in\{u,v\}.
+\end{aligned}
+\tag{A9}
+```
+
+CDO `gennn` is not the scientific interpolation operator in (A9). Before any
+extraction, the implementation reads the HHL source-grid metadata from the
+GRIB and requires the exact regular ICON-EU dimensions, endpoints, increments,
+and scan flags recorded by the immutable manifest. Every GRIB message in a
+source file is inspected; mixed geometry or scanning order is rejected. Every
+extraction target is then constructed from an integer native
+`(latitude_index, longitude_index)`; no ray coordinate is passed to CDO.
+After `gennn`, the generated SCRIP file must contain exactly one link per
+target, the expected canonical one-based source address, the target's
+one-based destination address, and a weight whose binary64 value is exactly
+`1`. Every meteorological GRIB subsequently remapped with those weights must
+reproduce the same proven grid descriptor as the HHL source. Thus
+`gennn -> remap` collects only the exact union of native support columns
+required by all four-point stencils. The sorted native-index/coordinate plan
+is validated for uniqueness and exact binary64 agreement with the manifest
+grid and is persisted as `source_column_plan_digest=sha256:...`. An opt-in
+manufactured-grid regression runs the installed production CDO, encodes the
+native source index in each field value, and verifies the same address and
+unit-weight contract. The project-owned bilinear evaluation in (A9) is the
+sole horizontal interpolation used by the physical model.
+
+Here `Z_{i,k}` is the HHL geometric height for a half-level field. For a
+full-level field, the two bounding HHL surfaces are each reconstructed
+horizontally before their local arithmetic midpoint is formed:
+
+```math
+Z_k^{\mathrm{full}}(u,v)
+=\frac12\left[
+\sum_{i\in\mathcal S}w_iZ_{i,k-1/2}
++\sum_{i\in\mathcal S}w_iZ_{i,k+1/2}
+\right].
+\tag{A9a}
+```
+
+The implementation deliberately does not precompute four corner midpoints and
+then mix them: although the two expressions are algebraically equal over the
+reals, their binary64 operation order can differ at a WMO sign boundary. The
+path planner and the science kernel use the order in (A9a). HHL is immutable
+within the run; only raw meteorological variables undergo (A8). Horizontal
+wind at each support is rotated into the common ECEF frame before it is
+combined.
+
+At fixed absolute geometric height `z`, the local column supplies lower and
+upper anchors `Z_{\mathrm{l}}<z<Z_{\mathrm{u}}`. With
+`\Delta Z=Z_{\mathrm{u}}-Z_{\mathrm{l}}`, the exact moving-level interpolant and
+its derivatives are
+
+```math
+\begin{aligned}
+\beta&=\frac{z-Z_{\mathrm{l}}}{\Delta Z},&
+\partial_a\beta
+&=-\frac{(1-\beta)\partial_a Z_{\mathrm{l}}
++\beta\partial_a Z_{\mathrm{u}}}{\Delta Z},\\
+x&=(1-\beta)x_{\mathrm{l}}+\beta x_{\mathrm{u}},&
+\partial_a x
+&=(1-\beta)\partial_a x_{\mathrm{l}}
++\beta\partial_a x_{\mathrm{u}}
++(x_{\mathrm{u}}-x_{\mathrm{l}})\partial_a\beta,\\
+\partial_z\beta&=\frac{1}{\Delta Z},&
+\partial_z x&=\frac{x_{\mathrm{u}}-x_{\mathrm{l}}}{\Delta Z},
+\qquad a\in\{u,v\}.
+\end{aligned}
+\tag{A10}
+```
+
+Thus the horizontal derivatives used by refraction are taken at fixed
+absolute height, not at fixed model-level index. Omitting the
+`\partial_a\beta` terms would discard the slope of both terrain-following
+anchors. The analytic geographic derivatives are subsequently transformed to
+ECEF gradients.
+
+Pressure alone is vertically log-linear. Writing
+`\ell_P=\ln P` gives the separately implemented pressure equations
+
+```math
+\begin{aligned}
+\ell_P&=(1-\beta)\ln P_{\mathrm{l}}
++\beta\ln P_{\mathrm{u}},&
+P&=\exp(\ell_P),\\
+\partial_a\ell_P
+&=(1-\beta)\frac{\partial_aP_{\mathrm{l}}}{P_{\mathrm{l}}}
++\beta\frac{\partial_aP_{\mathrm{u}}}{P_{\mathrm{u}}}
++(\ln P_{\mathrm{u}}-\ln P_{\mathrm{l}})\partial_a\beta,&
+\partial_aP&=P\,\partial_a\ell_P,\\
+\partial_z\ell_P&=
+\frac{\ln P_{\mathrm{u}}-\ln P_{\mathrm{l}}}{\Delta Z},&
+\partial_zP&=P\,\partial_z\ell_P,
+\qquad a\in\{u,v\}.
+\end{aligned}
+\tag{A11}
+```
+
+`T,q_v,q_l,q_i,C,U,V,W,\mathrm{TKE}` use (A10); `U,V` use full levels and
+`W,TKE` use half levels. The outer HHL half-cell retains the nearest native
+representative value instead of inventing a vertical gradient.
+
+The physical coarse-model surface is reconstructed from the same stencil,
+not selected as the highest support corner:
+
+```math
+H_s(u,v)=\sum_{i\in\mathcal{S}}w_i(u,v)\,\mathrm{HSURF}_i,
+\qquad H_2=H_s+2\ \mathrm m.
+```
+
+The bottom HHL must agree with `H_s`. `PS` is anchored at `H_s`; `T_2` and
+`q_{v,2}` define the surface-to-2 m closure, and (A6) transports pressure to
+`H_2`. Inside that two-metre interval, `T` and `q_v` remain at their 2 m
+values and pressure follows the same hydrostatic exponential. From `H_2` to
+the lowest native full level, the local-column interpolation above is applied.
+
+Only `P,T,q_v` have narrow continuous numerical extensions immediately below
+bilinear `H_s` and immediately above model-top HHL. They exist solely so the
+ODE event locator can bracket terrain and model-top roots: pressure follows
+the declared hydrostatic closure while `T` and `q_v` retain the boundary
+value. No cloud, wind, turbulence, transmission, seeing, `tau0`, or Overall is
+extrapolated there. Scientific quadrature never integrates below the bilinear
+terrain or above model top; a terrain crossing is returned as a blocked path,
+not as atmosphere.
+
+After the local raw state is reconstructed, density, refractive index,
+turbulence, cloud extinction and overlap, seeing, `tau0`, and Overall are all
+recomputed from that state. None of these nonlinear products is interpolated.
+Every reconstructed evaluation is then rejected unless `P>0`, `T>0`,
+`0<=q_v<1`, `q_l>=0`, `q_i>=0`, `q_v+q_l+q_i<1`, `0<=CLC<=1`, `TKE>=0`, and
+all wind components, vertical derivatives, refractive state, and spatial
+gradients are finite. Before reconstruction, native full-level pressure must
+strictly increase in stored top-to-surface order and native surface pressure
+`PS` must be strictly greater than the lowest full-level pressure. After
+log-linear reconstruction, upward geometric height must satisfy `dP/dz < 0`
+in `Pa/m`; zero or positive values are rejected. These are provider-data and
+physical-coordinate invariants, not score calibration. They complement the
+post-decode and post-interpolation fail-closed checks.
+
+The immutable source identity contains provider, product, grid, run base time,
+run ID, manifest digest, and `astrodome-icon-primitives-v2`. Any identity
+change during reconstruction invalidates the node.
+
+The separate calculation-request schema is v3. It carries the fixed science
+and path versions, the apparent-direction contract, and
+`science_calibration_sha256`: SHA-256 of the canonical JSON serialization of
+the complete validated `AstrodomeScienceCalibration`. The same configured
+calibration is injected into the bot and isolated worker and the digest is
+stored in every current dataset. A supported coefficient change therefore
+changes the cache identity; a bot/worker digest mismatch is unavailable rather
+than silently using either side's defaults.
+
+The vertical-coordinate basis is the official
+[DWD ICON Database Reference Manual](https://www.dwd.de/DWD/forschung/nwv/fepub/icon_database_main.pdf),
+which documents HHL geometric model half levels and their relation to model
+topography, together with the
+[DWD ICON tutorial](https://www.dwd.de/EN/ourservices/nwp_icon_tutorial/pdf_volume/icon_tutorial2020_en.pdf?__blob=publicationFile&v=9).
+
+### 8.5. Joint line-of-sight physics
+
+For reconstructed mass fractions `q_v,q_l,q_i`,
+
+```math
+\begin{aligned}
+T_v&=T\left[1+\left(\frac{R_v}{R_d}-1\right)q_v-q_l-q_i\right],\\
+\rho&=\frac{P}{R_dT_v},
+\qquad R_d=287.05,\quad R_v=461.5\\
+\mathrm{J\,kg^{-1}\,K^{-1}}.
+\end{aligned}
+\tag{A12}
+```
+
+The dynamic boundary-layer top is
+
+```math
+h_{\mathrm{PBL}}=H_{\mathrm{SURF}}+
+\mathrm{clamp}(MH,500\ \mathrm m,2000\ \mathrm m).
+\tag{A13}
+```
+
+Below it, the Masciadri TKE kernel is evaluated pointwise; above it, HMNSP99's
+tropospheric/stratospheric branch uses the local reconstructed primitives and
+the thermal-tropopause diagnosis. The formulae and provenance are exactly
+Sections 3.1 and 4.2–4.4; Astrodome changes the integration path, not these
+kernels.
+
+For local ECEF wind `\boldsymbol V`,
+
+```math
+\boldsymbol V_\perp=
+\boldsymbol V-(\boldsymbol V\mathbin{\boldsymbol\cdot}\boldsymbol t)
+\boldsymbol t.
+\tag{A14}
+```
+
+Five components are integrated jointly along the actual straight or refracted
+path:
+
+```math
+\begin{aligned}
+J&=\int C_n^2\,ds,\\
+J_V&=\int C_n^2\lVert\boldsymbol V_\perp\rVert^{5/3}\,ds,\\
+W_{\mathrm{slant}}&=\int\rho q_v\,ds,\\
+\tau_l&=\int\frac{3Q_{\mathrm{ext},l}\rho q_l}
+{4\rho_l r_{\mathrm{eff},l}}\,ds,\\
+\tau_i&=\int\frac{3Q_{\mathrm{ext},i}\rho q_i}
+{4\rho_i r_{\mathrm{eff},i}}\,ds.
+\end{aligned}
+\tag{A15}
+```
+
+The cloud constants are
+
+```math
+\begin{aligned}
+Q_{\mathrm{ext},l}&=2.0,&\rho_l&=1000\ \mathrm{kg\,m^{-3}},
+&r_{\mathrm{eff},l}&=10\ \mu\mathrm m,\\
+Q_{\mathrm{ext},i}&=2.1,&\rho_i&=916.7\ \mathrm{kg\,m^{-3}},
+&r_{\mathrm{eff},i}&=25\ \mu\mathrm m.
+\end{aligned}
+\tag{A16}
+```
+
+`W_{\mathrm{slant}}` is in `kg m^{-2}`, numerically equal to millimetres of
+liquid-water equivalent. It is exposed as a physical diagnostic but does not
+enter generic Overall. Its relevance depends on passband, molecular
+absorption, source spectrum, and instrument; a universal PWV penalty would be
+less scientific than the actual slant column. Target/passband radiative
+transfer remains a separate future product and is not silently approximated in
+the generic score.
+
+At `\lambda=500 nm`,
+
+```math
+\begin{aligned}
+k&=\frac{2\pi}{\lambda},&
+r_0&=\left(0.423\,k^2J\right)^{-3/5},\\
+\varepsilon_{\mathrm{arcsec}}
+&=206264.80624709636\,\frac{0.98\lambda}{r_0},&
+\tau_0&=\left(2.910\,k^2J_V\right)^{-3/5}.
+\end{aligned}
+\tag{A17}
+```
+
+The unexpanded published `2.910` temporal phase-structure coefficient avoids a
+second rounding through the common `0.058` shorthand. If `J_V` is
+indistinguishable from zero at the numerical scale, `tau0` is reported as
+unbounded above with an explicit state rather than JSON infinity.
+
+Primary sources: Fried,
+[DOI 10.1364/JOSA.56.001372](https://doi.org/10.1364/JOSA.56.001372);
+Greenwood,
+[DOI 10.1364/JOSA.67.000390](https://doi.org/10.1364/JOSA.67.000390);
+Kellerer and Tokovinin,
+[DOI 10.1051/0004-6361:20065788](https://doi.org/10.1051/0004-6361:20065788);
+Masciadri et al.,
+[DOI 10.1051/aas:1999474](https://doi.org/10.1051/aas:1999474); Wu et al.,
+[DOI 10.1093/mnras/stab515](https://doi.org/10.1093/mnras/stab515); Cuevas et
+al., [DOI 10.1093/mnras/stae630](https://doi.org/10.1093/mnras/stae630).
+
+### 8.6. Directional cloud closure
+
+A cloud block is the unique pair `(native horizontal cell, AGL tier)`, with
+tier boundaries at 2 and 7 km AGL. Its path domain $\Gamma_b$ is the union of
+the atomic intervals carrying that exact block identity. Optical depth is
+allocated normatively while the original extinction integrands are evaluated,
+not apportioned from a finished line-of-sight total:
+
+```math
+\begin{aligned}
+\tau_{l,b}^{(0)}
+&=\sum_{p\subset\Gamma_b}\int_p
+\frac{3Q_{\mathrm{ext},l}\rho q_l}
+{4\rho_l r_{\mathrm{eff},l}}\,ds,\\
+\tau_{i,b}^{(0)}
+&=\sum_{p\subset\Gamma_b}\int_p
+\frac{3Q_{\mathrm{ext},i}\rho q_i}
+{4\rho_i r_{\mathrm{eff},i}}\,ds,\\
+E_{\tau_l,b}&=\sum_{p\subset\Gamma_b}e_{\tau_l,p},&
+E_{\tau_i,b}&=\sum_{p\subset\Gamma_b}e_{\tau_i,p},\\
+\tau_b^{(0)}&=\tau_{l,b}^{(0)}+\tau_{i,b}^{(0)},&
+\tau_b^{(+)}&=\max\!\left(0,
+\tau_b^{(0)}+E_{\tau_l,b}+E_{\tau_i,b}\right).
+\end{aligned}
+\tag{A18}
+```
+
+Here $e_{\tau_l,p}$ and $e_{\tau_i,p}$ are the accepted embedded-rule
+component estimators for that panel. They are numerical allowances, not
+probabilistic uncertainty intervals.
+
+Within each atomic interval $p$, let $S_p$ be its four native horizontal
+stencil columns, $T_p$ the one or two distinct endpoints of its native
+temporal bracket, and $K_p$ its exact active vertical CLC support: either one
+adjacent bottom-to-top full-level pair or the single constant top/bottom
+extension level. The nominal diagnostic cover and strict raw-support envelope
+are distinct:
+
+```math
+\begin{aligned}
+C_{p,\max}
+&=\max_{i\in S_p,\,t\in T_p,\,k\in K_p}
+\mathrm{CLC}^{\mathrm{raw}}_{i,k,t},\\
+\eta_p
+&=\max\!\left(0,\sum_{i\in S_p}\widehat w_{p,i}-1\right)+256u_q,
+\qquad u_q=2^{-53},\\
+\overline C_p
+&=\begin{cases}
+0,&C_{p,\max}=0,\\
+\min\!\left(1,\mathrm{nextup}\!\left[C_{p,\max}(1+\eta_p)\right]\right),
+&C_{p,\max}>0,
+\end{cases}\\
+C_b^{(0)}&=\max_{s\in\Xi_b}C_{\mathrm{reconstructed}}(s),&
+C_b^{(+)}&=\max_{p\subseteq\Gamma_b}\overline C_p.
+\end{aligned}
+\tag{A18a}
+```
+
+Native CLC is validated in $[0,1]$. Temporal, bilinear-horizontal, and
+within-support vertical reconstruction are convex; consequently
+$\overline C_p$ bounds every reconstructed CLC value in that active support
+even though the refracted trajectory is nonlinear in path length. The bound
+is deliberately conservative across the four columns and temporal bracket,
+but it uses only the active adjacent pair or extension level, not an entire
+tier or column. The vertical-support identity is part of the partition
+signature and envelope-cache key. Path v22 must certify every native
+full-level support transition and every reachable raw WMO predicate before
+quadrature; a missing certificate or sampled change fails closed rather than
+triggering a heuristic kernel split.
+
+$\Xi_b$ contains the actual higher/lower quadrature nodes and the one-sided
+atomic-interval endpoint probes used by the accepted calculation. Thus
+$C_b^{(0)}$ is a reproducible sampled nominal diagnostic, not a claimed bound
+on an unsampled nonlinear ray segment. Conversely, $C_b^{(+)}$ is the
+certified conservative raw-support envelope. The payload publishes both and
+never labels the latter as nominal.
+
+For either pair $(C,\tau)=(C_b^{(0)},\tau_b^{(0)})$ or
+$(C_b^{(+)},\tau_b^{(+)})$, define the same exact effective-cover function
+
+```math
+\begin{aligned}
+C_{\mathrm{cond}}(\tau)&=0&&\text{if }\tau<10^{-9},\\
+C_{\mathrm{cond}}(\tau)&=
+\min\!\left[1,\max\!\left(0.01,-\mathrm{expm1}(-\tau)\right)\right]
+&&\text{if }\tau\ge10^{-9},\\
+C_{\mathrm{eff}}(C,\tau)&=\max\!\left(C,C_{\mathrm{cond}}(\tau)\right),\\
+T_b(C,\tau)&=1&&\text{if }C_{\mathrm{eff}}=0,\\
+T_b(C,\tau)&=(1-C_{\mathrm{eff}})
++C_{\mathrm{eff}}\exp\!\left(-\frac{\tau}{C_{\mathrm{eff}}}\right)
+&&\text{if }C_{\mathrm{eff}}>0.
+\end{aligned}
+\tag{A19}
+```
+
+The nominal and conservative block transmissions are
+$T_b^{(0)}=T_b(C_b^{(0)},\tau_b^{(0)})$ and
+$T_b^{(+)}=T_b(C_b^{(+)},\tau_b^{(+)})$. The explicit zero branch prevents
+division by zero. Applying the condensate-derived lower bound through `max`
+for every declared cover avoids a small-cover branch discontinuity. Since
+$T_b=(1-C)+C\exp(-\tau/C)$ is non-increasing in effective cover and optical
+depth for $C>0$, increasing either the CLC envelope or the optical-depth error
+cannot improve conservative transmission or Overall. The `0.01` and `10^{-9}`
+guards are versioned project closures for an inconsistent state with non-zero
+condensate but vanishing CLC; they are not published cloud microphysics.
+
+Independent-block random overlap is accumulated in log space:
+
+```math
+T_{\mathrm{cond}}^{(r)}=\prod_bT_b^{(r)}
+=\exp\!\left(\sum_b\mathrm{log1p}(T_b^{(r)}-1)\right),
+\qquad r\in\{0,+\}.
+\tag{A20}
+```
+
+If any block has exactly zero transmission, the product is set to zero and the
+closure state is `opaque`; its logarithm is never evaluated. Otherwise the
+implemented accumulation uses `log1p(T_b-1)` as written in (A20), which avoids
+loss of relative accuracy for nearly transparent blocks.
+
+The unresolved-cover guard and final closure are
+
+```math
+\begin{aligned}
+C_j^{(r)}&=\max_{b:\,\mathrm{tier}(b)=j} C_b^{(r)},
+\qquad j\in\{\mathrm{low,mid,high}\},\\
+T_{\mathrm{guard}}^{(r)}&=
+\prod_{j\in\{\mathrm{low,mid,high}\}}\left(1-g_jC_j^{(r)}\right),\\
+(g_{\mathrm{low}},g_{\mathrm{mid}},g_{\mathrm{high}})
+&=(0.45,0.2475,0.081),\\
+T_{\mathrm{cloud}}^{(r)}&=\min(T_{\mathrm{cond}}^{(r)},T_{\mathrm{guard}}^{(r)}),
+\qquad r\in\{0,+\}.
+\end{aligned}
+\tag{A21}
+```
+
+For a tier with no blocks the implementation defines $C_j^{(r)}=0$.
+`cloud_transmission_nominal` publishes $T_{\mathrm{cloud}}^{(0)}$;
+`cloud_transmission_conservative` publishes $T_{\mathrm{cloud}}^{(+)}$.
+The legacy internal/display alias `effective_cloud_transmission` is exactly the
+conservative value, and directional Overall uses only that conservative value.
+
+Guard coefficients and fixed effective radii are versioned project closures,
+not universal cloud microphysics. Extinction basis: Stephens,
+[DOI 10.1175/1520-0469(1978)035%3C2123:RPIEWC%3E2.0.CO;2](https://doi.org/10.1175/1520-0469(1978)035%3C2123:RPIEWC%3E2.0.CO;2).
+Overlap basis: Hogan and Illingworth,
+[DOI 10.1002/qj.49712656914](https://doi.org/10.1002/qj.49712656914).
+
+### 8.7. Directional Overall and data quality
+
+Let $I_{H,j}$ be the accumulated higher-order estimate of integral component
+$j$ from the accepted production pass, and let $e_{\mathrm{emb},j}$ be the
+accumulated componentwise selected-rule estimator. Depending on certified
+child-panel length and endpoint ownership, it is the augmented G7/K15
+difference or the independent GL5/GL3, GL3/GL2, or GL2/GL1 difference. A
+physical panel below the GL2/GL1 sampling floor uses the separately labelled
+limited midpoint rule in Section 8.8; no extrapolatory moment-fitted rule is
+present. Production defines
+
+```math
+\begin{aligned}
+E_j^{(\mathrm{prod})}&=e_{\mathrm{emb},j},\\
+J_+&=\max(0,J_H+E_J^{(\mathrm{prod})}),&
+J_{V,+}&=\max(0,J_{V,H}+E_{J_V}^{(\mathrm{prod})}),\\
+\varepsilon_{\mathrm{score}}&=\varepsilon(J_+),&
+\tau_{0,\mathrm{score}}&=\tau_0(J_{V,+}).
+\end{aligned}
+\tag{A21a}
+```
+
+Reference/calibration mode repeats the integration at half tolerance. With
+coarse and fine results $I_{c,j},I_{f,j}$ and the fine selected-rule estimator
+$e_{f,j}$, its diagnostic allowance is
+
+```math
+E_j^{(\mathrm{ref})}=e_{f,j}+\left|I_{f,j}-I_{c,j}\right|.
+\tag{A21b}
+```
+
+The repeat is required for regression, calibration, and release verification,
+but not for an ordinary production node. Each $E_j$ is an engineering
+numerical allowance, not a rigorous confidence interval. Published nominal
+production diagnostics use $J_H$ and $J_{V,H}$; their reported seeing range
+uses $J_H\pm E_J^{(\mathrm{prod})}$, while Overall uses only the conservative
+$\varepsilon_{\mathrm{score}}$ and $\tau_{0,\mathrm{score}}$. If
+$J_{V,H}-E_{J_V}^{(\mathrm{prod})}$ is at the declared numerical floor,
+nominal `tau0` is reported as calm/unbounded, but the score still uses $J_{V,+}$
+whenever it is positive. The cloud-transmission bound is propagated per exact
+cell/tier block from that block's accumulated liquid and ice errors; the
+overall error bound is then evaluated from these componentwise bounds rather
+than by applying one aggregate perturbation to the finished product.
+
+The physical seeing and `tau0` enter the same bounded target-agnostic utility
+as ordinary Overall:
+
+```math
+\begin{aligned}
+q_\varepsilon&=
+\mathrm{clamp}\!\left(
+\frac{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{score}})}
+{\ln(\varepsilon_{\mathrm{bad}}/\varepsilon_{\mathrm{best}})},0,1\right),\\
+q_\tau&=
+\mathrm{clamp}\!\left(
+\frac{\ln(\tau_{0,\mathrm{score}}/\tau_{\mathrm{bad}})}
+{\ln(\tau_{\mathrm{best}}/\tau_{\mathrm{bad}})},0,1\right),\\
+q_{\mathrm{raw}}&=
+q_\varepsilon^{w_\varepsilon}
+\left[1-w_\tau(1-q_\tau)\right],\\
+f_{\mathrm{turb}}&=
+1-p_{\mathrm{turb}}
+\left[1-\mathrm{clamp}(q_{\mathrm{raw}},0,1)\right].
+\end{aligned}
+\tag{A22}
+```
+
+In (A22), the two wrapped line continuations are multiplicative in the
+implementation:
+`q_raw = pow(q_epsilon,w_epsilon) * [1-w_tau(1-q_tau)]` and
+`f_turb = 1-p_turb*[1-clamp(q_raw,0,1)]`. This plain-text restatement is
+normative because it avoids any renderer ambiguity. Defaults are
+`w_epsilon=1`, `w_tau=0.25`, `p_turb=0.25`,
+`epsilon_best=0.5 arcsec`, `epsilon_bad=2.0 arcsec`,
+`tau_bad=1.6 ms`, and `tau_best=5.2 ms`.
+
+With the surface-wind and fog closures from Section 3.3,
+
+```math
+\begin{aligned}
+f_{\mathrm{cloud}}&=\left(T_{\mathrm{cloud}}^{(+)}\right)^{w_{\mathrm{cloud}}},\\
+q_{\mathrm{precip}}&=[R_{1h}<0.05\ \mathrm{mm}],\\
+Q&=f_{\mathrm{turb}}f_{\mathrm{cloud}}
+q_{\mathrm{surface}}q_{\mathrm{fog}}q_{\mathrm{precip}},\\
+\mathrm{Overall}&=1+9\,\mathrm{clamp}(Q,0,1).
+\end{aligned}
+\tag{A23}
+```
+
+Precipitation is an operational veto, not a fitted intensity curve. Dew,
+light pollution, and generic PWV remain excluded. Shapley values decompose the
+exact multiplicative loss; they add no second penalty.
+
+Data quality is deterministic metadata, not a success probability. Forecast
+lead contributes
+
+```math
+C_{\mathrm{lead}}=
+0.96-0.26\,\mathrm{clamp}\!\left(\frac{h_{\mathrm{lead}}}{72},0,1\right).
+\tag{A24}
+```
+
+An available, top-closed, numerically converged path with complete spatial
+coverage and hourly temporal resolution is `good` for
+`C_lead >= 0.85`, `usable` for `0.75 <= C_lead < 0.85`, and `limited` below
+0.75. Any accepted short-path approximation forces `limited` and
+`quadrature_converged=false`, independently of lead time. Its accumulated
+length is serialized as `approximation_length_m` and its reason set contains
+`short_path_approximation`. Missing mandatory geometry, turbulence, cloud,
+temporal brackets, terrain, or top closure gives `unavailable`. A terrain
+intersection is a separate physical state and is never published as Overall 1.
+
+### 8.8. Numerical method, versions, and limitations
+
+The vector in (A15) is integrated jointly by non-extrapolatory positive-weight
+regimes: adaptive embedded Gauss–Kronrod G7/K15 on ordinary panels and
+independent Gauss–Legendre GL5/GL3, GL3/GL2, or GL2/GL1 on successively shorter
+physical panels. Physical-event and adaptive numerical endpoints are distinct
+metadata. A physical interval at or below the GL2 sampling floor is evaluated
+only by the positive midpoint fallback defined below: it is neither replaced
+by zero nor inferred from nodes outside its certified safe domain.
+The 1-cm floor applies only to adaptively created numerical panels. A rejected
+smooth panel may reuse recursive tolerance subdivision only while both
+represented children remain strictly above their applicable floors.
+Intervals split at native horizontal/HHL, PBL, thermal-tropopause, cloud-tier,
+terrain, and model-top events. Path contract v23 must isolate every reachable
+raw WMO decision breakpoint before integration; any physical-partition
+signature mismatch observed by quadrature fails closed. When the WMO
+thermal diagnosis has no finite result, the `P<200 hPa` HMNSP99 fallback is
+not left as a pointwise branch inside quadrature: its geometric boundary is
+reconstructed by the same log-pressure interpolation as (A11), and that
+boundary is added to the path partition. Let $I_{H,j}$ be the higher-order
+estimate and let $e_{j,\mathrm{panel}}$ denote its G7/K15 or selected GL5/GL3,
+GL3/GL2, or GL2/GL1
+higher/lower difference. Component `j` is accepted only when
+
+```math
+e_{j,\mathrm{panel}}
+\le a_j+r\lvert I_{H,j}\rvert,
+\qquad r=10^{-3},
+\tag{A25}
+```
+
+with
+
+```math
+(a_J,a_{J_V},a_W,a_{\tau_l},a_{\tau_i})
+=(10^{-20},10^{-19},10^{-6},10^{-8},10^{-8}).
+\tag{A26}
+```
+
+The accumulated embedded error over all accepted panels must separately
+satisfy the same absolute-plus-relative budget; local acceptance is not
+sufficient. This accepted pass is the complete production science integration.
+Reference mode subsequently performs the independent half-tolerance repeat
+described below.
+
+The WMO diagnosis does not define one globally smooth tropopause-height
+surface: the first qualifying native level can change discontinuously as the
+raw profile varies horizontally. The path planner therefore partitions the
+zeros of every raw bilinear HHL/T predicate used by the discrete decision:
+the 5-km eligibility threshold, the local `2 K km^-1` lapse test, the 2-km
+window selection, and the corresponding mean-lapse tests. A candidate is
+accepted only when the native profile covers the complete following 2 km and
+the mean lapse from the candidate to every native level through the first
+level at or above 2 km is at most `2 K km^-1`; checking only the final level or
+accepting the former 1.5-km edge case would be scientifically weaker. The
+implemented comparison never divides two nearly cancelling differences. For
+every upward ordered native pair it evaluates the canonical residual
+
+```math
+\begin{aligned}
+R_{ij}
+&=(z_j-z_i)
+ +500\ \mathrm{m\,K^{-1}}(T_j-T_i),\\
+R_{ij}&\ge 0
+\quad\Longleftrightarrow\quad
+-\frac{T_j-T_i}{z_j-z_i}\le 2\times10^{-3}\ \mathrm{K\,m^{-1}},
+\qquad z_j>z_i.
+\end{aligned}
+\tag{A26a}
+```
+
+The height differences and both products in $R_{ij}$ are accumulated by one
+fixed binary64 expansion using error-free `TwoSum` transforms and
+`TwoProduct` residuals obtained with `FMA`. The path planner and the science
+kernel call this same provider-neutral comparator after reconstructing the
+same native HHL/T primitives in the same order. The 5-km eligibility and
+2-km-span comparisons use the corresponding compensated signed difference.
+This certifies the numerical decision for the decoded and reconstructed
+binary64 model primitives; it is not a claim that ICON meteorological
+uncertainty is micrometric.
+
+For `upper=lower+1`, the first mean-lapse residual is algebraically identical
+to the instantaneous `lower/next-level` residual in (A26a). The WMO decision
+still evaluates both logical conditions, but the current path contract v23
+continues the v12 rule of registering their shared physical zero set only
+once. This avoids treating one surface as two distinct roots without
+coalescing any genuinely different event identities.
+
+The planner emits span and mean-lapse predicates in native-level order through the
+first upper level whose four corner spans are all strictly greater than 2 km
+by more than their unit-aware roundoff enclosure. Because bilinear
+reconstruction is a convex combination of those corners, that upper level is
+above 2 km everywhere in the cell: it can still be selected, but no later
+level can be read by the WMO decision and later predicates are therefore not
+physical events. If even one corner is at or inside the enclosure, enumeration
+continues so a horizontally changing first upper level remains partitioned.
+Two additional reachability proofs remove algebraic zeros that the WMO
+decision cannot read. If an eligible lower candidate's instantaneous-lapse
+residual is strictly negative at all four corners beyond its raw-operand
+roundoff enclosure, it fails everywhere in the bilinear cell and none of its
+span or mean-lapse predicates is emitted. During the upper-level scan, if a
+mean-lapse residual is strictly negative throughout the cell, every point
+that reaches that upper level rejects the candidate, while every point that
+does not reach it has already stopped at an earlier first 2-km top; no later
+upper-level predicate is reachable and that scan ends. All predicates
+belonging to earlier lower-level candidates remain present. If
+one lower candidate is strictly certified at all four corners for 5-km
+eligibility, its instantaneous lapse, every mean lapse through the first
+cell-wide 2-km top, and the existence of that top, convexity proves that this
+candidate qualifies everywhere in the cell. Since WMO returns the first
+qualifying candidate, every later WMO predicate and the 200-hPa fallback are
+then unreachable and are omitted. Otherwise the 200-hPa predicates of every
+native level are partitioned, so the fallback pressure bracket cannot change
+inside an open decision interval.
+Between those events the WMO candidate is fixed, and its native full-level
+surface is already part of the physical partition. This follows the
+thermal-tropopause definition
+quoted by the [WMO/Copernicus algorithm documentation](https://dast.data.compute.cci2.ecmwf.int/documents/satellite-aerosol-properties/C3S2_312a_Lot2_FDDP-AER/C3S2_312a_Lot2_D-WP2-FDDP-AER_202311_ATBD_AER_Annex_K_AERGOM_v2.1_final3.pdf),
+while retaining the project's explicitly documented native-level
+approximation. Finished seeing, tau0, transmission, or Overall values are
+never interpolated to find these events.
+
+Every raw WMO predicate and side-sensitive physical-science scalar root
+processed by the recursive isolator has a finite event identity and retained
+root evidence `[s_left,s_right]`. Horizontal-cell crossings use the separate
+ECEF predicates and compound-corner rule described below. Four independent
+lengths define the current contract:
+
+```math
+\begin{aligned}
+\delta_{\mathrm{root}}&=0.0002\ \mathrm{m},&
+\delta_{\mathrm{merge}}&=0.0004\ \mathrm{m},\\
+\delta_{\mathrm{side}}&=0.0005\ \mathrm{m},&
+\delta_{\mathrm{proof}}&=0.0002\ \mathrm{m}.
+\end{aligned}
+\tag{A26b}
+```
+
+Thus a proved unique physical or horizontal root is represented by an interval
+of radius at most 0.2 mm; non-identical roots inside the 0.4-mm proximity window
+fail closed; all side-sensitive probes must clear 0.5 mm; and generic recursive absence proof
+continues to 0.2 mm. These are numerical ownership scales for reconstructed
+binary64 primitives, not atmospheric accuracy claims.
+
+Evaluation of the accepted Shampine dense polynomial has its own explicit
+floating-point enclosure. For Cartesian component $k$, normalized dense-step
+coordinate $\theta$, accepted step $h$, DOPRI stages $K_{i,k}$, and dense
+coefficients $P_{iq}$, define
+
+```math
+\begin{aligned}
+\widehat r_k(\theta)
+&=y_{0,k}+h\sum_{i=1}^{7}K_{i,k}
+  \sum_{q=1}^{4}P_{iq}\theta^q,\\
+S_{r,k}(\theta)
+&=|y_{0,k}|+|h|\sum_{i=1}^{7}|K_{i,k}|
+ \sum_{q=1}^{4}|P_{iq}|\,|\theta|^q,\\
+u&=2^{-53},\\
+\nu_{128}&=\mathrm{up}(128u),&
+d_{128}&=\mathrm{down}(1-\nu_{128}),\\
+\gamma_{128}&=\mathrm{up}\!\left(\frac{\nu_{128}}{d_{128}}\right),&
+\overline S_{r,k}(\theta)
+&=\mathrm{up}\!\left(\frac{\max\{1,S_{r,k}(\theta)\}}
+{\mathrm{down}(1-\gamma_{128})}\right),\\
+e_{r,k}(\theta)
+&=\mathrm{up}\!\left(\gamma_{128}\overline S_{r,k}(\theta)\right),\\
+Q_0&=0,&
+Q_k&=\mathrm{up}\!\left(Q_{k-1}+\mathrm{up}(e_{r,k}^2)\right),\quad k=1,2,3,\\
+E_r(\theta)&=\mathrm{up}\!\left(\sqrt{Q_3}\right).
+\end{aligned}
+\tag{A26c}
+```
+
+This is Higham's outward-rounded
+$\gamma_n=(n u)/(1-n u)$ construction. The point evaluator and its positive
+absolute-monomial scale require at most 82 rounding-capable source operations
+per position component and 102 per derivative component; the independently
+audited $n=128$ ceiling therefore retains a 26-operation margin over the
+longest case. The represented positive formation sum can itself round
+downward, so its denominator is rounded downward before the forward-error
+factor is applied. Component errors are combined only after their individual
+bounds have been proved, using outward-rounded squares, additions, and square
+root; this retains the Euclidean envelope instead of replacing it with a
+cross-component L1 scale. Cancellation inside a Shampine coefficient cannot
+shrink the bound because $S_{r,k}$ sums the absolute monomials before their
+signs cancel. The derivative uses differentiated absolute monomials and its
+own component scales $S_{r',k}$ in the same construction. The broader
+Bernstein control-vector formation and affine-restriction paths for the
+restricted cubic derivative and quadratic second derivative retain their
+separate audited $\gamma_{1024}$ allowances. This is a bound on evaluating the
+**accepted dense polynomial**; it is deliberately separate from DOPRI
+truncation error, the production science-integral estimator, the repeated
+integration enabled in reference mode, and meteorological uncertainty.
+
+The Cartesian, spherical-coordinate, normalized-grid, and grid-snap
+enclosures are converted to one equivalent positional envelope
+
+```math
+E_{\mathrm{pc}}
+=\max\{E_{\mathrm{ECEF}},E_{\phi},E_{\lambda}\}
+\le 10^{-3}\ \mathrm{m}.
+\tag{A26d}
+```
+
+The 1-mm inequality is a hard **acceptance ceiling**, not an error substituted
+into every sample. It is enforced at every horizontal-root evaluation,
+physical sample, and metric midpoint; exceeding it makes the node unavailable.
+The residual uses the smaller uncertainty actually derived at that sample.
+Let $e_r$ be the outward dense-ECEF formation and Cartesian-arithmetic bound,
+$\rho_-$ and $p_-$ the positive spherical and cylindrical radius bounds, and
+$\Delta\phi$, $\Delta\lambda$ the native grid increments. The implementation
+forms outward coordinate-fraction uncertainties of the form
+
+```math
+\begin{aligned}
+\delta\phi&=\mathrm{up}\!\left(\arcsin\frac{e_r}{\rho_-}+\eta_\phi\right),&
+\delta\lambda&=\mathrm{up}\!\left(\arcsin\frac{e_r}{p_-}+\eta_\lambda\right),\\
+\delta u&=\mathrm{up}\!\left(\frac{\delta\phi}{\Delta\phi}
++\eta_u+\delta_{\mathrm{snap}}\right),&
+\delta v&=\mathrm{up}\!\left(\frac{\delta\lambda}{\Delta\lambda}
++\eta_v+\delta_{\mathrm{snap}}\right),\\
+E_{\mathrm{coord}}[F]
+&=\mathrm{up}\!\left(G_{u,F}\delta u+G_{v,F}\delta v\right).
+\end{aligned}
+\tag{A26d1}
+```
+
+$G_{u,F}$ and $G_{v,F}$ are the outward, field-specific maximum opposing-edge
+differences of the four native corners; their subtraction roundoff is included.
+Thus a nearly constant field receives a much smaller coordinate uncertainty
+than a steep field at the same ray point. The equivalent metric quantity
+$E_{\mathrm{pc}}$ is retained only for the 1-mm admission check and for
+conservative reach/denominator construction. It is not blindly multiplied by
+a path Lipschitz constant for every residual.
+
+Grid-line roots are not found by asking whether a rounded `asin` or `atan2`
+coordinate equals a grid value. For boundary longitude $\lambda_b$ and
+latitude $\phi_b$, the planner isolates the ECEF predicates
+
+```math
+\begin{aligned}
+g_{\lambda}(\boldsymbol r)
+&=y\cos\lambda_b-x\sin\lambda_b,\\
+g_{\phi}(\boldsymbol r)
+&=z\cos\phi_b-\sqrt{x^2+y^2}\sin\phi_b.
+\end{aligned}
+\tag{A26e}
+```
+
+Their spatial gradient norm is at most one away from the polar singularity,
+so the actual sample-specific dense-ECEF bound $e_r$, not the 1-mm ceiling,
+enters each residual interval directly. Longitude and latitude events coalesce only under the explicit
+compound-corner identity rule; ordinary nearby events remain fail-closed.
+
+Smooth physical HHL, full-level, surface, and fixed cloud-tier boundaries, and
+smooth bilinear WMO decision predicates, additionally receive a local
+transversality certificate before the generic terminal-leaf rule is used. The
+PBL boundary receives the same certificate only inside a partition with one
+proved branch of `clamp(MH,500 m,2000 m)`. Bilinear weights are non-negative
+and sum to one, so an outward-expanded four-corner range can prove a complete
+cell to be on the lower constant, identity, or upper constant branch. For a
+mixed cell the planner first isolates both raw bilinear decision fields
+
+```math
+D_{500}(s)=MH(s)-500\ \mathrm{m},
+\qquad
+D_{2000}(s)=MH(s)-2000\ \mathrm{m}.
+\tag{A26e1}
+```
+
+Their strict root evidence becomes mandatory path endpoints. Each resulting
+subinterval must clear the 0.5-mm side guard and must give the same certified
+branch at all one-sided and quarter probes before the corresponding smooth PBL
+surface is isolated. At the midpoint $m=(a+b)/2$ of such an interval, with
+half-width $h=(b-a)/2$, reconstructed depth $M(m)$, a certified path Lipschitz
+bound $L_M$, and its unit-aware binary64 enclosure $\eta_M$, the
+implementation forms
+
+```math
+I_M=
+\left[
+\mathrm{down}\!\left(M(m)-L_Mh-\eta_M\right),
+\mathrm{up}\!\left(M(m)+L_Mh+\eta_M\right)
+\right].
+```
+
+If $I_M\subseteq(-\infty,500\,\mathrm m]$, the smooth boundary fields are
+`HSURF + const`; if $I_M\subseteq[500\,\mathrm m,2000\,\mathrm m]$, they are
+`HSURF + MH`; and if $I_M\subseteq[2000\,\mathrm m,\infty)$, they are again
+`HSURF + const`. Indeterminate decision evidence, evidence entering a
+branch-sensitive probe span, or a branch change inside a certified partition
+fails closed. On the upper branch, `HSURF+2000 m` is algebraically identical
+to the configured low-cloud top; that shared physical zero set is registered
+once rather than rejected as two nearby events.
+Let $\boldsymbol r(s)$ be the stored DOPRI dense ray,
+$\rho=\lVert\boldsymbol r\rVert$, $p=\sqrt{x^2+y^2}$, and let $U_B$ and $A$
+be outward Bernstein bounds for $\lVert\boldsymbol r'\rVert$ and
+$\lVert\boldsymbol r''\rVert$ on $I=[a,b]$. The common metric speed is
+deliberately
+
+```math
+U=\max\{1,U_B\}.
+```
+
+Here $s$ is geometric arc length, so the exact trajectory has
+$\lVert\boldsymbol r'(s)\rVert=1$. Consequently `1` is a known value of the
+metric speed in the exact system, while $U_B$ is the outward numerical upper
+bound; their maximum is the conservative upper bound used for coordinate
+reach. Let
+$m=(a+b)/2$, $\Delta s^+=\mathrm{up}(b-a)$,
+$\boldsymbol r_m=(x_m,y_m,z_m)$, and let $E_r(m)$ be (A26c). Unlike the older
+latitude-support construction, the current contract derives the two metric
+denominators directly from the evaluated ECEF point. With `down`/`up`
+including directed rounding and the declared operand-scale enclosure,
+
+```math
+\begin{aligned}
+\rho_{m,-}&=\mathrm{down}\!\left(
+\sqrt{x_m^2+y_m^2+z_m^2}-E_r(m)-\eta_\rho\right),\\
+p_{m,-}&=\mathrm{down}\!\left(
+\sqrt{x_m^2+y_m^2}-E_r(m)-\eta_p\right),\\
+d_I&=\mathrm{up}\!\left(U\frac{\Delta s^+}{2}\right),\\
+\rho_{\min}&=\mathrm{down}(\rho_{m,-}-d_I),\\
+p_{\min}&=\mathrm{down}(p_{m,-}-d_I),\\
+\sigma_\phi&=\mathrm{up}\!\left(\frac{\rho_{\min}}{p_{\min}}\right)
+\ge\max\{1,|\tan\phi|\},\\
+\Phi_1&=\frac{U}{\rho_{\min}},&
+\Lambda_1&=\frac{U}{p_{\min}},\\
+\Phi_2&=\frac{A}{\rho_{\min}}
++\frac{U^2\sigma_\phi}{\rho_{\min}^2},&
+\Lambda_2&=\frac{A}{p_{\min}}+\frac{U^2}{p_{\min}^2}.
+\end{aligned}
+```
+
+Here $\eta_\rho$ and $\eta_p$ enclose formation of the two norms after the
+dense-position error has already been included. Both positive denominators
+must remain finite and strictly positive. Computing $p_{\min}$ from
+$\sqrt{x_m^2+y_m^2}$ rather than from $\rho_{\min}\cos\phi$ avoids coupling
+two separately rounded coordinate transforms and preserves the tighter,
+direct high-latitude cylindrical-radius certificate.
+
+For normalized cell coordinates
+$u=(\phi-\phi_S)/\Delta\phi$ and
+$v=(\lambda-\lambda_W)/\Delta\lambda$, define the outward corner-difference
+bounds
+
+```math
+\begin{aligned}
+G_u&=\max\{|h_{10}-h_{00}|,|h_{11}-h_{01}|\},\\
+G_v&=\max\{|h_{01}-h_{00}|,|h_{11}-h_{10}|\},\\
+C&=|h_{11}-h_{10}-h_{01}+h_{00}|.
+\end{aligned}
+```
+
+Each edge difference is enlarged by two corner roundoff envelopes and $C$ by
+four. Bilinearity then yields the complete mixed-term bound
+
+```math
+\begin{aligned}
+H_2={}&G_u\frac{\Phi_2}{\Delta\phi}
++G_v\frac{\Lambda_2}{\Delta\lambda}
++2C\frac{\Phi_1}{\Delta\phi}\frac{\Lambda_1}{\Delta\lambda},\\
+f(s)={}&\rho(s)-R_{\mathrm{ICON}}-H(u(s),v(s)),\\
+M_f={}&A+\frac{U^2}{\rho_{\min}}+H_2
+\ge\sup_{s\in I}|f''(s)|.
+\end{aligned}
+```
+
+Every sign, clearance, and secant decision uses a residual interval rather
+than the nominal binary64 value alone. If $\widehat f(x)$ is the reconstructed
+value, $S_f$ is the raw operand scale, and $\Delta_f$ is the Lipschitz
+variation used by a clearance test, then the evaluation term is selected from
+the actual dependency graph:
+
+```math
+E_{f,\mathrm{eval}}=
+\begin{cases}
+e_r,
+&\text{ECEF latitude/longitude predicate},\\
+E_{\mathrm{coord}}[F],
+&\text{bilinear WMO or other field-only predicate},\\
+\mathrm{up}\!\left(e_r+\sum_k E_{\mathrm{coord}}[H_k]\right),
+&f=z-\sum_k H_k\quad\text{(HHL, full level, PBL, cloud tier)},\\
+\mathrm{up}\!\left(e_r+E_{H_{200},\mathrm{coord}}+E_{H_{200},\mathrm{arith}}\right),
+&f=z-H_{200}.
+\end{cases}
+\tag{A26i}
+```
+
+Here the physical-boundary sum contains exactly the operands used by that
+boundary: for example surface height alone for a fixed cloud top, and surface
+height plus mixed-layer depth on the identity branch of PBL. The separate
+unit-aware scalar arithmetic allowance below still covers formation of the
+nominal residual. Therefore
+
+```math
+\begin{aligned}
+\eta_f(x,\Delta_f)
+&=\mathrm{up}\!\left(
+64u\max\{1,|\widehat f(x)|,|\Delta_f|,|S_f|\}
+\right),\\
+E_f(x,\Delta_f)
+&=\mathrm{up}\!\left(E_{f,\mathrm{eval}}(x)
++\eta_f(x,\Delta_f)\right),\\
+F_x(\Delta_f)
+&=\left[
+\mathrm{down}(\widehat f(x)-E_f(x,\Delta_f)),
+\mathrm{up}(\widehat f(x)+E_f(x,\Delta_f))
+\right].
+\end{aligned}
+\tag{A26f}
+```
+
+For ordinary sign classification $\Delta_f=0$; for root-free clearance it is
+the upward Lipschitz variation on the tested interval. A sign exists only when
+the complete interval is strictly above or below zero. This same residual
+contract is used by the WMO, PBL, HHL, cloud-tier, surface, and horizontal
+ECEF predicates.
+
+Let outward endpoint residual intervals be
+$F_a=[F_a^-,F_a^+]$, $F_b=[F_b^-,F_b^+]$, and let
+$W=[W^-,W^+]$ enclose $w=b-a>0$. Directed interval subtraction and division
+form
+
+```math
+\begin{aligned}
+D&=[F_b^- - F_a^+,\ F_b^+ - F_a^-],\\
+Q&=D/W,\\
+f'(I)&\subseteq
+\left[Q^- - \frac{M_fW^+}{2},\\
+      Q^+ + \frac{M_fW^+}{2}\right].
+\end{aligned}
+\tag{A26g}
+```
+
+The factor $1/2$ is exact: the secant is the mean derivative on $I$, and
+$w^{-1}\int_a^b|x-t|\,dt\le w/2$. This local enclosure is intersected with
+the independent radial-derivative-minus-boundary-slope enclosure. All
+positive arithmetic is rounded outward. Cubic $\boldsymbol r'$ and quadratic
+$\boldsymbol r''$ are first restricted to each accepted DOPRI segment and
+enclosed by their Bernstein control vectors.
+
+If the resulting derivative interval excludes zero and an ancestor has strict
+opposite endpoint residual signs, the intermediate value theorem proves
+existence and Rolle's theorem proves uniqueness. That proof is retained while
+the bracket is refined; it is not discarded when a small residual interval
+later contains zero. For the retained proof bracket
+$B_k=[\ell_k,r_k]$, derivative enclosure $D=[d^-,d^+]$, and an outward
+residual interval $F_x=[F_x^-,F_x^+]$ at a represented point $x$, the
+contractor is
+
+```math
+\begin{aligned}
+B_k&=[\ell_k,r_k],\qquad D=[d^-,d^+],\qquad 0\notin D,\\
+q^-&=\mathrm{down}\!\left(
+\min_{i,j\in\{-,+\}}\frac{F_x^i}{d^j}
+\right),&
+q^+&=\mathrm{up}\!\left(
+\max_{i,j\in\{-,+\}}\frac{F_x^i}{d^j}
+\right),\\
+N_x&=[\mathrm{down}(x-q^+),\mathrm{up}(x-q^-)],\\
+B_{k+1}&=B_k\cap N_x\cap S_k(x),\\
+S_k(x)&=
+\begin{cases}
+[x,r_k],&\sigma_D\sigma_F<0,\\
+[\ell_k,x],&\sigma_D\sigma_F>0,\\
+B_k,&0\in F_x.
+\end{cases}
+\end{aligned}
+\tag{A26h}
+```
+
+Here $\sigma_D$ is the strict sign of $D$ and $\sigma_F$ exists only when the
+complete interval $F_x$ is strictly signed. The mean-value theorem makes
+$x-F_x/D$ a necessary enclosure for the same already-proved unique root. All
+four endpoint quotients and both subtractions are rounded outward. A residual
+interval containing zero receives no nominal sign. Contractor images of the
+two signed ancestor endpoints are applied first and are followed by the
+midpoint image. The coarser diagnostic radius
+$\max\{|F_x^-|,|F_x^+|\}/\inf|D|$ remains a valid superset, but it is not used
+in place of the asymmetric interval-Newton image.
+
+If the midpoint contraction still leaves an unlocalised bracket
+$B=[\ell,r]$, let $w=r-\ell$, $d=2\delta_{\mathrm{root}}$, and let
+$d_{64}^-$ denote the immediately preceding binary64 number below $d$. The
+two off-centre probes are constructed from
+
+```math
+\begin{aligned}
+w'&=
+\begin{cases}
+\max\{d_{64}^-,w/2\},&w>d,\\
+w/2,&w\le d,
+\end{cases}\\
+\mu&=(w-w')/2,\qquad
+x_L=\ell+\mu,\qquad x_R=r-\mu.
+\end{aligned}
+\tag{A26j}
+```
+
+Both probes receive the same strict-sign and interval-Newton contraction; the
+second may be skipped only after the first has already met the public radius.
+This rule prevents arbitrarily small midpoint contractions from postponing
+off-centre evidence until the complete isolation budget is exhausted. If
+neither probe contracts an unlocalised bracket, the node fails closed.
+Acceptance requires both outward-rounded represented half-widths
+$\mathrm{up}(m-\ell)$ and $\mathrm{up}(r-m)$ to be at most 0.2 mm; a nominal
+total width alone is insufficient. A derivative enclosure containing zero, a
+missing ancestor existence proof, or contradictory orientation never receives
+this contractor. It therefore cannot absorb a tangent, paired, or triple root
+and never treats a nominal near-zero value as an exact root.
+
+Without that certificate, a nominal floating-point zero is not treated as an
+exact mathematical root: its full residual interval is retained. At a
+terminal leaf no wider than $\delta_{\mathrm{proof}}=0.2$ mm, each non-zero sign
+change records the actual sign-changing half-leaf; every other indeterminate
+leaf remains unresolved and rejects the node. Both halves are examined
+independently, so evidence in one half never suppresses search in the other.
+The public maximum root-localisation radius is
+$\delta_{\mathrm{root}}=0.2$ mm, equal to the terminal proof scale. A proof
+bracket is still retained explicitly; equality of scales does not turn a
+nominal zero into an exact event.
+
+Historically, a production ICON-EU WMO residual exposed the first inadequate
+micrometre contract: its rigorously enclosed root bracket had a
+`58.3140936 micrometre` diameter, so the former 5-micrometre root radius was
+unattainable even with further bisection. A later full-system audit showed the
+deeper issue: dense-polynomial formation, spherical-coordinate conversion,
+grid normalization, and residual classification must share one enforced
+envelope rather than each relying on a smaller local epsilon. The current
+1-mm position/coordinate-evaluation ceiling and 0.2-mm proof/root scales
+replace the interim 50/100/125-micrometre contract. They remain negligible against ICON-EU native
+horizontal and vertical resolution and change numerical ownership only; they
+do not claim increased meteorological accuracy.
+
+A terminal leaf that is neither resolved by (A26g), proved root-free by
+Lipschitz clearance, nor
+produces exact or sign-changing root evidence is unresolved, and **any such
+leaf rejects the complete node**. Intersection with, adjacency to, or global
+proximity to retained evidence is never accepted as a substitute for an
+absence proof. Consequently, absent a strict monotonicity certificate, even
+exact `[s,s]` evidence does not suppress an uncleared adjacent remainder; that
+exact-root case still fails closed. Within
+one scalar event, only bit-identical root evidence — the
+same representative, left endpoint, right endpoint, and exactness flag — is
+discarded as a duplicate; the metadata field cannot union different brackets,
+and an evaluated nominal zero with a non-zero envelope is never marked exact.
+Separately localised non-identical roots of the same scalar event 0.4 mm or less
+apart fail closed. At the later cross-event candidate-compaction stage,
+candidates whose represented `pathM` values are bit-identical form one compound
+geometric breakpoint even when their event identities differ. The complete
+sorted union of event identities is retained and every associated transition
+is applied at that same section. Bit-distinct coordinates are never averaged
+or merged; if their separation is at most 0.4 mm, the node fails closed. The
+sole horizontal exception is an exact grid corner consisting of exactly one
+`latitude/*` and one `longitude/*` identity: both path coordinates and both
+underlying scalar zeros must be exactly equal. A compound corner plus either
+of its existing constituents is idempotent; a second event on either axis or
+any third identity is rejected.
+
+The declared side-uncertainty guard retains the independent 0.4-mm
+numerical-proximity threshold and the 0.2-mm root-radius allowance:
+
+```math
+\delta_{\mathrm{side}}
+=0.0004\ \mathrm{m}+\frac{0.0002\ \mathrm{m}}{2}
+=0.0005\ \mathrm{m}.
+\tag{A27}
+```
+
+This is a numerical ownership allowance, not a statistical confidence
+interval, and it never certifies an otherwise unproved remainder. Every
+physical planner probe must be separated from the stored compound-event
+representative by strictly more than $0.0005$ m; a
+probe at exactly the guard is not accepted. Every omitted one-sided
+classification sliver between an event and its physical probe first attempts
+an independent Lipschitz or one-sided derivative clearance. If neither proof
+closes, path v23 records the sliver in the limited approximation union from
+(A28g); it may be published only below the one-metre cumulative ceiling.
+The science-kernel endpoint probe requests the 0.5-mm side guard and, for a
+short event-forced interval, is clipped only where the independently derived
+event-interval floor still permits it. Root
+isolation recursively explores both halves of every interval, including both
+sides of every detected root. A same-sign terminal interval is accepted as
+empty only with a Lipschitz-clearance proof; otherwise it is refined locally to
+`0.0002 m`. At that proof scale it must yield sign-changing root
+evidence; any unresolved leaf fails closed without an overlap exception.
+Boundary ownership is never delegated to a floating-point `nextafter` step.
+Path v23 retains the v22 contraction of one same-event bracket whose
+existence and uniqueness have already been proved. It does not change the
+0.2-mm root radius, 0.2-mm terminal proof scale, 0.4-mm distinct-root
+proximity rejection, 0.5-mm side guard, bit-identical compounding,
+root-localisation contracts. It changes only the product treatment of an
+unproved endpoint sliver: the interior root search remains complete, while the
+sliver is exposed as a limited-quality approximation under (A28g). Kernel v29
+retains this contract. Interval Newton and paired
+probes neither merge bit-distinct roots nor choose a physical side inside the
+0.5-mm guard.
+
+For an omitted endpoint sliver, ordinary Lipschitz clearance remains the first
+test. HHL, full-level, cloud-tier, and raw bilinear PBL-clamp predicates also
+have a one-sided derivative certificate. Let $x_p$ be the nearest unambiguously
+interior probe, $I_s$ the sliver between it and the horizontal-cell endpoint,
+$S_p$ the secant/curvature derivative enclosure on the adjacent fully interior
+probe interval, $M_f$ a bound for $|f''|$, and $L_f$ the independent global
+bound for $|f'|$. The transported enclosure is
+
+```math
+D_s=\left(S_p+[-M_f|I_s|,M_f|I_s|]\right)\cap[-L_f,L_f].
+\tag{A27a}
+```
+
+Write $D_s=[d^-,d^+]$, let
+$F_p=[F_p^-,F_p^+]$ be the outward-rounded residual enclosure at $x_p$, and
+let $w^+$ be an outward-rounded upper bound for the sliver width. With
+$\mathrm{rd}_{-}$ and $\mathrm{rd}_{+}$ denoting directed rounding toward
+$-\infty$ and $+\infty$, respectively, the complete one-sided residual
+enclosures are
+
+```math
+\begin{aligned}
+\mathcal F_{\mathrm{start}}
+&=\left[
+\mathrm{rd}_{-}\left(F_p^- - w^+\max(d^+,0)\right),
+\mathrm{rd}_{+}\left(F_p^+ + w^+\max(-d^-,0)\right)
+\right],\\
+\mathcal F_{\mathrm{end}}
+&=\left[
+\mathrm{rd}_{-}\left(F_p^- - w^+\max(-d^-,0)\right),
+\mathrm{rd}_{+}\left(F_p^+ + w^+\max(d^+,0)\right)
+\right].
+\end{aligned}
+\tag{A27b}
+```
+
+The start formula follows from
+$f(x)=f(x_p)-\int_x^{x_p}f'(t)\,dt$; the end formula follows from
+$f(x)=f(x_p)+\int_{x_p}^{x}f'(t)\,dt$. The sliver is certified root-free only
+when $0\notin\mathcal F_{\mathrm{start}}$ or
+$0\notin\mathcal F_{\mathrm{end}}$, as appropriate. Thus motion away from
+zero remains certifiable, but motion toward zero or a derivative enclosure
+containing zero is also safe when its complete bounded displacement cannot
+consume the strict residual margin. An empty derivative intersection,
+non-finite bound, indeterminate probe residual, or final enclosure containing
+zero fails closed. The ambiguously owned cell endpoint is never evaluated.
+For every physical predicate, including WMO categories and the nonlinear
+200-hPa fallback, an inconclusive endpoint-only root clearance is recorded in
+the limited one-metre budget while root isolation over the certified interior
+still runs in full. The ambiguous endpoint itself is never evaluated.
+
+Known physical breakpoints are mandatory integration endpoints even when the
+atomic interval between them is shorter than 1 cm. The 1-cm value remains only
+the floor for a panel whose two endpoints were both created by adaptive
+subdivision; it is not permission to delete, merge, or reclassify an
+event-forced interval. A short event-forced interval is processed by the
+highest-order applicable positive-weight GL5/GL3, GL3/GL2, or GL2/GL1 pair
+when every node clears its endpoint evidence. Below the GL2 sampling boundary,
+v29 instead permits the explicitly limited positive midpoint rule defined in
+(A28f) when its three safe probes retain one partition and the total budget in
+(A28g) is not exceeded; otherwise the node is unavailable. This
+separation follows the same structural principle as
+[GNU GSL QAGP integration with known singular points](https://www.gnu.org/software/gsl/doc/html/integration.html#qagp-adaptive-integration-with-known-singular-points),
+where supplied difficult points delimit the integration ranges before adaptive
+work begins. Astrosferum implements its own G7/K15 and positive-weight
+Gauss–Legendre rules and does not call GSL.
+
+For the outer Kronrod abscissa used by the Go constant expression,
+
+```math
+\begin{aligned}
+g_{K15}
+&=\frac{1-0.991455371120812639206854697526329}{2}\\
+&=0.0042723144395936803965726512368355\ldots,\\
+L_{K15,\mathrm{geom}}
+&=\frac{\delta_{\mathrm{side}}}{g_{K15}}\\
+&=0.11703258434497453171\ldots\ \mathrm{m},\\
+L_{K15,\min}
+&=(1+10^{-12})L_{K15,\mathrm{geom}}\\
+&=0.11703258434509156429\ldots\ \mathrm{m}.
+\end{aligned}
+\tag{A28}
+```
+
+For a short interval $[a,b]$, let $c=(a+b)/2$, $h=(b-a)/2$, and let $f_j(s)$
+be component $j$ of the original physical integrand (A15). The independent
+five- and three-point Gauss–Legendre estimates are
+
+```math
+\begin{aligned}
+I_{5,j}&=h\left[
+w^{(5)}_0f_j(c)
++\sum_{k=1}^{2}w^{(5)}_k
+\left(f_j(c-hx^{(5)}_k)+f_j(c+hx^{(5)}_k)\right)
+\right],\\
+I_{3,j}&=h\left[
+w^{(3)}_0f_j(c)
++w^{(3)}_1
+\left(f_j(c-hx^{(3)}_1)+f_j(c+hx^{(3)}_1)\right)
+\right],\\
+e_{j,5/3}&=\left|I_{5,j}-I_{3,j}\right|.
+\end{aligned}
+\tag{A28a}
+```
+
+The implemented positive nodes and weights are
+
+```math
+\begin{aligned}
+(x^{(5)}_1,x^{(5)}_2)
+&=(0.906179845938663992797626878299393,
+   0.538469310105683091036314420700209),\\
+(w^{(5)}_1,w^{(5)}_2,w^{(5)}_0)
+&=(0.236926885056189087514264040719917,
+   0.478628670499366468041291514835638,
+   0.568888888888888888888888888888889),\\
+x^{(3)}_1
+&=0.774596669241483377035853079956480,\\
+(w^{(3)}_1,w^{(3)}_0)
+&=(0.555555555555555555555555555555556,
+   0.888888888888888888888888888888889),\\
+x^{(2)}_1
+&=0.577350269189625764509148780501957,\\
+w^{(2)}_1&=1,\\
+w^{(1)}_0&=2.
+\end{aligned}
+\tag{A28b}
+```
+
+The additional positive-weight estimates and their independent comparisons are
+
+```math
+\begin{aligned}
+I_{2,j}&=h\left[
+f_j(c-hx^{(2)}_1)+f_j(c+hx^{(2)}_1)
+\right],\\
+I_{1,j}&=2h f_j(c),\\
+e_{j,3/2}&=\left|I_{3,j}-I_{2,j}\right|,\\
+e_{j,2/1}&=\left|I_{2,j}-I_{1,j}\right|.
+\end{aligned}
+\tag{A28b1}
+```
+
+An $n$-point Gauss--Legendre rule has algebraic degree of exactness $2n-1$:
+GL5, GL3, GL2, and GL1 are exact through degrees 9, 5, 3, and 1,
+respectively. Implementation regressions verify these declared orders on
+polynomial inputs. Reconstructed atmospheric integrands are not generally
+polynomials, however, so each higher/lower difference in (A28a) and (A28b1)
+remains an engineering error estimator rather than a rigorous enclosure.
+
+The outer GL5 node gives the smallest endpoint fraction among the two rules
+and therefore controls the certified short-panel floor:
+
+```math
+\begin{aligned}
+g_{GL5}
+&=\frac{1-x^{(5)}_1}{2}\\
+&=0.0469100770306680036011865608503035\ldots,\\
+L_{GL5,\mathrm{geom}}
+&=\frac{\delta_{\mathrm{side}}}{g_{GL5}}\\
+&=0.010658690661989730616\ldots\ \mathrm{m},\\
+L_{GL5,\min}
+&=(1+10^{-12})L_{GL5,\mathrm{geom}}\\
+&=0.010658690662000389306\ldots\ \mathrm{m}.
+\end{aligned}
+\tag{A28c}
+```
+
+The GL3 and GL2 outer nodes analogously define the two lower positive-rule
+floors:
+
+```math
+\begin{aligned}
+g_{GL3}
+&=\frac{1-x^{(3)}_1}{2}
+=0.112701665379258311482073460021760,\\
+L_{GL3,\mathrm{geom}}
+&=\frac{\delta_{\mathrm{side}}}{g_{GL3}}
+=0.004436491673103708443\ldots\ \mathrm{m},\\
+L_{GL3,\min}
+&=(1+10^{-12})L_{GL3,\mathrm{geom}}
+=0.004436491673108144934\ldots\ \mathrm{m}.
+\end{aligned}
+\tag{A28d}
+```
+
+```math
+\begin{aligned}
+g_{GL2}
+&=\frac{1-x^{(2)}_1}{2}
+=0.2113248654051871177454256097490215,\\
+L_{GL2,\mathrm{geom}}
+&=\frac{\delta_{\mathrm{side}}}{g_{GL2}}
+=0.002366025403784438647\ldots\ \mathrm{m},\\
+L_{GL2,\min}
+&=(1+10^{-12})L_{GL2,\mathrm{geom}}
+=0.002366025403786804672\ldots\ \mathrm{m}.
+\end{aligned}
+\tag{A28e}
+```
+
+The dimensionless `1e-12` factors are representation cushions for strict
+binary64 comparisons, not physical uncertainties. Production v29 deliberately
+contains no moment-fitted or extrapolatory short-panel rule. Such a rule can
+have arbitrarily large signed weights when endpoint guards compress its sample
+domain, so exact construction of its coefficients cannot bound amplification
+of errors in the nonlinear atmospheric integrand. A certified interval upper
+bound would be acceptable in principle, but the current primitive contract
+does not provide the componentwise supremum or Lipschitz evidence required to
+construct one without inventing a physical bound. Instead, v29 exposes the
+insufficient quadrature evidence as limited quality and uses a positive
+interior point estimate with a deliberately broad engineering allowance.
+
+The v29/v23 rule selection is exact:
+
+- a panel with two numerical endpoints uses G7/K15 and its 1-cm adaptive
+  floor;
+- otherwise $L>L_{K15,\min}$ uses G7/K15;
+- otherwise $L_{GL5,\min}<L\le L_{K15,\min}$ uses independent GL5/GL3;
+- otherwise $L_{GL3,\min}<L\le L_{GL5,\min}$ uses independent GL3/GL2;
+- otherwise $L_{GL2,\min}<L\le L_{GL3,\min}$ uses independent GL2/GL1;
+- otherwise $L\le L_{GL2,\min}$ uses the limited positive midpoint rule when a
+  certified safe interior exists and the cumulative approximation ceiling is
+  not exceeded;
+- an impossible certified split or any partition-signature mismatch also
+  fails closed. Path contract v23 must isolate and certify every reachable raw
+  WMO decision breakpoint before quadrature; the science kernel never creates
+  a breakpoint reactively.
+
+For a limited panel $[a,b]$, let $L=b-a$, $m=a+L/2$, and let
+$s_l,m,s_r$ be the two certified one-sided probes and the midpoint. The
+published point estimate and engineering allowance are
+
+```math
+\begin{aligned}
+I_{1,j}&=L f_j(m),\\
+M_j&=L\max\{f_j(s_l),f_j(m),f_j(s_r)\},\\
+e_{\mathrm{approx},j}&=\mathrm{nextup}\!\left(\max\{|I_{1,j}|,M_j\}\right).
+\end{aligned}
+\tag{A28f}
+```
+
+All five integrands are non-negative, all three represented points must have
+the same exact partition signature, and the midpoint must lie strictly inside
+both 0.5-mm event guards. Thus the reported range contains zero and extends to
+at least twice the midpoint estimate; the error radius itself covers the
+largest sampled panel-equivalent magnitude. This is an explicit
+project engineering allowance, **not** a rigorous interval enclosure or an
+embedded convergence proof. The conservative cloud-cover member uses the
+already-computed raw-native corner/support envelope at those points.
+
+The same limited-quality budget records a horizontal-cell endpoint sliver for
+which neither the Lipschitz test nor the one-sided derivative test proved the
+absence of a physical root. Root isolation still runs on the complete certified
+interior; only the unresolved endpoint span follows the unambiguous interior
+branch. Overlapping slivers are unioned. With $\mathcal P_{\mathrm{lim}}$ the
+limited midpoint panels and $\mathcal S_{\mathrm{edge}}$ the union of such
+endpoint spans, publication requires
+
+```math
+L_{\mathrm{approx}}
+=\sum_{p\in\mathcal P_{\mathrm{lim}}}|p|
+ +\left|\bigcup_{s\in\mathcal S_{\mathrm{edge}}}s\right|
+\le 1\ \mathrm{m}.
+\tag{A28g}
+```
+
+One metre is a versioned product ceiling, not a routine integration step or a
+claim of atmospheric homogeneity. Above it, or without a safe interior point,
+the node remains unavailable. The endpoint-span term records branch-ownership
+uncertainty only: unlike a midpoint panel it contributes no quantitative term
+to $E_{j,\mathrm{pub}}$, because the current native contract provides no proven
+componentwise bound for the alternate branch inside that span. Therefore the
+reported numerical-error fields do **not** bound this endpoint-branch effect;
+the mandatory `limited` quality, non-zero `approximation_length_m`, and reason
+code disclose it separately.
+
+For an incoming absolute component budget $A_j$, represented midpoint
+$m=a+(b-a)/2$, represented length $L=b-a$, and represented child lengths
+$L_l=m-a$ and $L_r=b-m$, the subdivision uses
+
+```math
+\begin{aligned}
+f_l&=\frac{L_l}{L},\\
+A_{l,j}&=f_l A_j,\\
+A_{r,j}&=A_j-A_{l,j},\\
+r_l&=r_r=r.
+\end{aligned}
+```
+
+Thus the right absolute budget is the residual rather than an independently
+rounded product, so the two represented budgets preserve the incoming budget.
+The relative tolerance is unchanged. Every adaptive midpoint is explicitly
+marked numerical, whereas each breakpoint certified by path contract v23 —
+including a raw WMO decision breakpoint — remains physical. Consequently each
+child is checked against the floor corresponding to its actual endpoint types,
+rather than inheriting the parent's two-sided guard.
+
+In reference verification mode, the independent pass at half tolerance must
+not merely repeat the coarse nodes. Before rule selection it bisects every
+original atomic interval with two physical endpoints exactly once **except a
+limited sub-GL2 panel**, which has no room for that split and remains explicitly
+non-converged in both passes. For all ordinary panels this is independent of
+which positive-weight production rule the coarse pass would select.
+The represented midpoint is numerical; the two children are then processed
+normally and are not recursively forced to split again. This supplies
+genuinely different samples while retaining the same physical-event envelopes
+and proportionally allocated absolute budgets. Production does not perform
+this repeat.
+
+All five integrands in (A15), and every retained G7/K15, GL5/GL3, GL3/GL2, or
+GL2/GL1 weight, are non-negative. A negative panel or accumulated component can therefore only be
+a numerical artefact: it is rounded to zero when its magnitude does not exceed
+its own estimator, and a larger negative value fails closed. After all panels are
+summed, compensated totals $I_j=\sum_p I_{p,j}$ and the strict embedded error
+over ordinary converged panels
+$E_{j,\mathrm{conv}}=\sum_{p\notin\mathcal P_{\mathrm{lim}}}e_{p,j}$ must
+additionally satisfy the global gate
+
+```math
+E_{j,\mathrm{conv}}\le A_j+r|I_j|.
+\tag{A28i}
+```
+
+Local acceptance alone cannot consume the same relative allowance repeatedly.
+The published uncertainty remains
+$E_{j,\mathrm{pub}}=E_{j,\mathrm{conv}}+
+\sum_{p\in\mathcal P_{\mathrm{lim}}}e_{\mathrm{approx},p,j}$ and is propagated
+through turbulence, cloud closure, and Overall. Failure of the strict
+accumulated check makes the node unavailable. The limited allowance is not
+compared with the convergence tolerance because the node explicitly reports
+that quadrature did not converge on those panels.
+
+Earlier kernels contained regressions for `0.0251479956 m` and
+`0.0181762987 m` panels under the interim 125-micrometre guard. Those values
+are retained only as historical failure evidence. Under v22/v23 they were
+below the then-current 50-mm two-physical-endpoint floor and failed closed.
+They exceed the historical v24 5-mm floor and were not rejected by v24 merely
+because of their length. Current v29 regressions exercise limited midpoint
+publication below the GL2 boundary, the one-metre fail-closed ceiling, and both
+sides of the GL2, GL3, GL5, and K15 rule
+boundaries, retain
+distinct physical gaps of `1.53107653`, `1.9401`, `3.7474`, `3.9203`,
+`4.802253`, `15.9325455`, `26.7341866`, `31.1486803`, `41.5455627`, and
+`48.78 mm`, verify exact simultaneous-event
+compounding, represented-node
+clearance, and the independent finer split. Passing these regressions
+is not a claim that the complete Astrodome production rollout has passed.
+
+Every estimate evaluates the original reconstructed state and complete
+component integrand at its own path nodes. No rule interpolates
+seeing, `tau0`, cloud transmission, Overall, any other derived diagnostic, or
+even a finished integrand value. The limited midpoint rule is visibly marked
+and never presented as an embedded-converged result.
+
+Clearance arithmetic is unit-aware. With binary64 machine spacing
+`u=2^-52`, the implementation encloses cancellation by
+
+```math
+\begin{aligned}
+\rho(f,Lh,S_f)
+&=\mathrm{nextup}\!\left(
+64u\max\{1,|f|,|Lh|,|S_f|\}
+\right),\\
+|f(m)|
+&>\mathrm{nextup}\!\left(Lh+\rho(f,Lh,S_f)\right)
+\quad\Longrightarrow\quad
+\text{the interval of half-width }h\text{ is root-free}.
+\end{aligned}
+\tag{A29}
+```
+
+Here `S_f` is expressed in the native units of the residual, rather than being
+an arbitrary dimensionless epsilon. For a physical height residual
+`z-H(u,v)`, it includes the ICON spherical-Earth radius plus 200 km because
+`z` is obtained by subtracting that radius from an ECEF norm. After the
+compensated construction in (A26a), WMO decision fields retain the scale of
+the raw operands that participate in cancellation: native HHL heights and
+`500|T|` for lapse residuals, both HHL heights and the fixed offset for height
+and span residuals, and native pressure together with `20000 Pa` for the
+fallback predicate. Using only the much smaller already-cancelled residual
+would understate binary64 uncertainty. Corner differences are widened by two such roundoff
+allowances, metric denominators are rounded toward zero, and positive slopes,
+sums, and products are rounded upward. The WMO prefilter drops a bilinear
+predicate only when every corner is on one side of zero by more than this
+unit-aware allowance. A same-sign corner set inside the allowance is retained
+for the recursive fail-closed isolator.
+
+The reconstructed 200-hPa fallback surface receives the same treatment through
+the complete logarithm and quotient, not only through one final rounding step.
+Writing
+
+```math
+\begin{aligned}
+D&=\ln\!\frac{p_l}{p_u},&
+N&=\ln\!\frac{p_l}{P_{200}},&
+\alpha&=\frac{N}{D},\\
+H_{200}&=h_l+\alpha(h_u-h_l),&
+P_{200}&=20000\ \mathrm{Pa},
+\end{aligned}
+\tag{A30}
+```
+
+the implementation first widens the positive pressure and height corner
+ranges. The dimensionless logarithmic roundoff scale below uses
+$p_{\mathrm{ref}}=1\,\mathrm{Pa}$, matching the implementation's Pa-valued
+operands:
+
+```math
+\begin{aligned}
+p_{\mathrm{ref}}&=1\,\mathrm{Pa},\\
+S_{\log}
+&=\max\left\{
+1,
+\left|\ln\frac{P_{200}}{p_{\mathrm{ref}}}\right|,
+\left|\ln\frac{p_{l,\min}}{p_{\mathrm{ref}}}\right|,
+\left|\ln\frac{p_{l,\max}}{p_{\mathrm{ref}}}\right|
+\right\},\\
+\rho_{\log}&=\mathrm{nextup}(64uS_{\log}).
+\end{aligned}
+```
+
+It then constructs the outward bounds
+
+```math
+\begin{aligned}
+D_{\min}
+&=\mathrm{nextdown}\!\left(
+\frac{\Delta p_{\min}}{p_{l,\max}}
+\right),\\
+N_{\max}
+&=\mathrm{nextup}\!\left(
+\max_{p\in\{p_{l,\min},p_{l,\max}\}}
+\left|\ln\frac{P_{200}}{p_{\mathrm{ref}}}
+-\ln\frac{p}{p_{\mathrm{ref}}}\right|+2\rho_{\log}
+\right),\\
+L_{\ln p_l}&=\mathrm{nextup}\!\left(\frac{L_{p_l}}{p_{l,\min}}\right),&
+L_{\ln p_u}&=\mathrm{nextup}\!\left(\frac{L_{p_u}}{p_{u,\min}}\right),\\
+\alpha_{\max}&=\mathrm{nextup}\!\left(\frac{N_{\max}}{D_{\min}}\right),&
+L_\alpha
+&=\mathrm{nextup}\!\left(
+\frac{L_{\ln p_l}}{D_{\min}}
++\frac{N_{\max}(L_{\ln p_l}+L_{\ln p_u})}
+{\mathrm{nextdown}(D_{\min}^{2})}
+\right),\\
+L_{H_{200}}
+&=\mathrm{nextup}\!\left(
+L_{h_l}+L_\alpha\Delta h_{\max}
++\alpha_{\max}(L_{h_l}+L_{h_u})
+\right).
+\end{aligned}
+\tag{A31}
+```
+
+The arithmetic error of the reconstructed fallback height is enclosed
+separately from the path-coordinate error. Let $e_p$ and $e_h$ be the outward
+64-ULP reconstruction allowances on one pressure and height value,
+$e_{\log}$ the corresponding absolute logarithm allowance, and let
+$\rho_N$, $\rho_D$, $\rho_\alpha$, $\rho_{\Delta h}$,
+$\rho_{\times}$, and $\rho_{+}$ enclose the indicated binary64 operations.
+The implementation constructs
+
+```math
+\begin{aligned}
+e_{\log,l}&=\mathrm{up}\!\left(\frac{e_p}{p_{l,\min}}+e_{\log}\right),&
+e_{\log,u}&=\mathrm{up}\!\left(\frac{e_p}{p_{u,\min}}+e_{\log}\right),\\
+e_N&=\mathrm{up}(e_{\log,l}+e_{\log}+\rho_N),&
+e_D&=\mathrm{up}(e_{\log,l}+e_{\log,u}+\rho_D),\\
+D_{\mathrm{eval},\min}
+&=\mathrm{down}(D_{\min}-e_D)>0,&
+\widehat\alpha_{\max}
+&=\mathrm{up}\!\left(\frac{N_{\max}+e_N}{D_{\mathrm{eval},\min}}\right),\\
+e_\alpha
+&=\mathrm{up}\!\left(
+\frac{e_N}{D_{\mathrm{eval},\min}}
++\frac{N_{\max}e_D}{D_{\min}D_{\mathrm{eval},\min}}
++\rho_\alpha
+\right),\\
+e_{\Delta h}&=\mathrm{up}(2e_h+\rho_{\Delta h}),\\
+e_{H_{200}}
+&=\mathrm{up}\!\left(
+e_h+e_\alpha\Delta h_{\max}
++\widehat\alpha_{\max}e_{\Delta h}
++\rho_{\times}+\rho_{+}
+\right).
+\end{aligned}
+\tag{A31b}
+```
+
+If $D_{\mathrm{eval},\min}$ is not strictly positive or
+$e_{H_{200}}>0.001\ \mathrm{m}$, the node fails closed. Otherwise every
+fallback residual sample combines the actual dense ray-height error, the
+coordinate uncertainty propagated through the four native $H_l,H_u,p_l,p_u$
+fields, and this arithmetic term as stated in (A26i). It does not substitute
+$L_f$ times the 1-mm admission ceiling. The nominal evaluation uses
+the cancellation-resistant but mathematically identical expressions
+$\log1p((p_l-P_{200})/P_{200})$ and
+$\log1p((p_l-p_u)/p_u)$; (A31b) still encloses the complete operation chain
+rather than relying on that implementation improvement.
+
+For the monotonicity certificate, with $L_x$ and $B_x$ denoting outward first-
+and second-path-derivative bounds, the implementation uses
+
+```math
+\begin{aligned}
+L_{\log p}&=\mathrm{up}\!\left(\frac{L_p}{p_{\min}}\right),&
+B_{\log p}&=\mathrm{up}\!\left(
+\frac{B_p}{p_{\min}}+L_{\log p}^{,2}
+\right),\\
+L_D&=\mathrm{up}(L_{\log p_l}+L_{\log p_u}),&
+B_D&=\mathrm{up}(B_{\log p_l}+B_{\log p_u}),\\
+L_N&=L_{\log p_l},&B_N&=B_{\log p_l},\\
+L_{1/D}&=\mathrm{up}\!\left(\frac{L_D}{D_{\min}^{2}}\right),&
+B_{1/D}&=\mathrm{up}\!\left(
+\frac{B_D}{D_{\min}^{2}}+\frac{2L_D^2}{D_{\min}^{3}}
+\right),\\
+B_\alpha&=\mathrm{up}\!\left(
+\frac{B_N}{D_{\min}}+2L_NL_{1/D}+N_{\max}B_{1/D}
+\right),\\
+B_{H_{200}}&=\mathrm{up}\!\left(
+B_{h_l}+B_\alpha\Delta h_{\max}
++2L_\alpha(L_{h_l}+L_{h_u})
++\alpha_{\max}(B_{h_l}+B_{h_u})
+\right),\\
+B_f&=\mathrm{up}\!\left(A_r+\frac{U^2}{\rho_{\min}}+B_{H_{200}}\right).
+\end{aligned}
+\tag{A31c}
+```
+
+On an interval of represented width $w$, a residual secant interval $S_I$
+therefore gives
+
+```math
+f'(I)\subseteq
+\left(S_I+\left[-\frac{B_fw}{2},\frac{B_fw}{2}\right]\right)
+\cap[-L_f,L_f].
+\tag{A31d}
+```
+
+Strict opposite endpoint signs preserved from an ancestor plus an interval in
+(A31d) that excludes zero prove existence and uniqueness. If either the
+arithmetic enclosure or derivative certificate remains inconclusive at the
+declared proof floor, the complete node is unavailable. No finished $H_{200}$
+surface is spatially interpolated.
+
+The positive native separation `Delta p_min` keeps the logarithmic denominator
+away from zero; `ln(x) >= (x-1)/x` supplies its lower bound. Every positive
+addition, multiplication, and division in (A31) is rounded outward with the
+denominator rounded downward. Finally the path-position derivative is added to
+`L_H200` for the zero of `z-H200`. These are conservative floating-point
+enclosures used by the project, not a claim of general interval-arithmetic
+proof for the entire atmospheric model.
+
+The selected G7/K15, GL5/GL3, GL3/GL2, or GL2/GL1 higher/lower-rule difference
+is the project's declared production componentwise error estimator; it is not
+claimed to be a rigorous mathematical enclosure. Each GL pair is independent
+rather than embedded; GL5/GL3 shares only the centre, GL3/GL2 shares no nodes,
+and GL2/GL1 shares no nodes. The
+half-tolerance repeat in reference mode and the partition-signature checks are
+engineering consistency tests, not proofs of smoothness. The quadrature also checks the actual HMNSP99
+branch at its evaluation nodes. Path contract v23 must already have isolated
+every reachable raw WMO decision breakpoint; any categorical mismatch observed
+by quadrature fails closed rather than invoking an automatic kernel split.
+These science-partition tolerances do not relax the separately validated ODE
+top/terrain event tolerance.
+
+The dense-path Lipschitz bounds are formed from the Bernstein control vectors
+of the derivative of each accepted Shampine quartic segment; the RK endpoint
+tangent diagnostic is not used as an interior derivative bound. Path planning
+has an independent budget of 32768 recursive isolations per scalar field, so
+the thousands of WMO predicates cannot consume the later physical-surface
+allowance. The science quadrature separately retains its limit of 8192
+subdivisions and depth 24. Reference verification additionally requires the
+half-tolerance repeat to agree within the component bounds, `0.01` Overall,
+and `10^{-4}` cloud transmission; otherwise the reference node is unavailable.
+Compensated sums are used. Production uses the accumulated selected
+higher/lower-rule estimator; reference diagnostics augment the fine estimator
+with the repeat difference. Neither is an observational confidence interval.
+
+Implemented identities:
+
+- primitive input: `astrodome-icon-primitives-v2`;
+- grid: `astrosferum-grid-geometry-v1` / `spherical-voronoi-v1`;
+- straight ray: `astrodome-icon-sphere-straight-ray-v2`;
+- full refraction:
+  `astrodome-icon-sphere-refraction-full-ciddor-dopri54-v3`;
+- refractivity: `ciddor-1996-phase-index-v1`;
+- ODE: `dormand-prince-5-4-event-v3`;
+- science path: `astrodome-science-path-v23`;
+- science kernel: `astrodome-science-kernel-v29`.
+
+Kernel v29 and path contract v23 use one strict boundary-ownership contract
+for physical and horizontal events: a maximum 0.2-mm root-localisation radius,
+0.4-mm proximity detection with fail-closed handling for bit-distinct roots, a
+0.5-mm side guard, and a 0.2-mm proof scale. The separate 1-mm
+position/coordinate-evaluation ceiling is unchanged. Bit-identical `pathM`
+coordinates alone form a compound geometric breakpoint; its sorted event-ID
+union is retained and all transitions are applied there. There is no nominal micrometre representative and
+no `preview` override. An accepted root retains its complete evidence bracket;
+the stored representative cannot substitute for the interval proof or choose
+a side inside the guard.
+
+Path contract v23 retains the v22 secant/curvature monotonicity certificate and
+outward corner/interval arithmetic described above and adds the safeguarded
+interval-Newton contractor in (A26h) and paired-probe rule (A26j). A mixed PBL cell is first
+partitioned at strictly isolated `MH-500 m` and `MH-2000 m` decision roots;
+each resulting interval must prove one branch of the clamp before receiving
+the smooth certificate. Unresolved interior decision evidence remains
+fail-closed; only the explicitly bounded endpoint-sliver case follows (A28g).
+Where the upper clamp makes the PBL boundary exactly identical to the
+low-cloud top `HSURF+2000 m`, the planner registers the common zero set once
+rather than creating a false pair of distinct roots. Likewise,
+`mean-lapse(lower, upper=lower+1)` is not registered twice because it is
+algebraically identical to the instantaneous `lower/next-level` lapse
+predicate; the WMO decision itself is still evaluated.
+
+The dynamic dense-DOPRI formation-sum bound, direct ECEF denominators,
+$U=\max\{1,U_B\}$, explicit residual intervals, and ECEF grid predicates are
+part of path v23. Kernel v29 retains the removal of the ill-conditioned
+extrapolatory Q5/Q3 path, adds positive-weight GL3/GL2 and GL2/GL1 pairs, and
+uses the limited positive midpoint path below the GL2 floor under the explicit
+one-metre cumulative approximation ceiling. Rule-specific recursion allocates
+absolute tolerance by represented length, gives the right child the exact
+residual budget, and leaves relative tolerance unchanged. The planner must
+certify raw WMO decision breakpoints before quadrature; every partition
+mismatch in the kernel remains fail-closed.
+
+The bot calculator and cache, plus the independent site's dataset decoder and
+browser, accept only the current v29/v23 contract with an explicitly supported
+pinned grid profile; the production writer uses `production-v2`. Older datasets
+are not migrated or reinterpreted; a new successful calculation must replace
+an older fixture.
+Older version identifiers below remain solely as historical numerical evidence,
+not as supported serialized formats.
+
+Historical performance evidence is intentionally reported separately from the scientific
+equations. On immutable ICON-EU run `2026080812` (manifest SHA-256
+`85d94a87e24a5eba4775baf4e46a4151c8c30021f51af6c54299cdbbabc5482e`), the
+eight-CPU production-v2/v28/v22 calculation covered all 72 hours `f002..f073`
+and all 129 nodes. Preloading 2,863 source columns took `357.118 s`; total wall
+time was 33 min 14 s and peak cgroup memory was 15,127,642,112 bytes. Of 9,288
+node-hours, 9,284 were available. Four physical spans of
+`0.45534076..2.12574664 mm` were shorter than the positive-weight GL2/GL1
+domain and failed closed as `integration_nonconvergence`; all other nodes were
+available. The strict diagnostic consequently returned non-zero and is not
+described as a 9,288/9,288 pass. Its report and executed test binary have
+SHA-256 values `00977e620d60029e3e3f23f4aeb31352d614c9e75af6fa9cb8050f1830afdb31`
+and `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`,
+respectively. This is a v28/v22 baseline and not a measurement of the current
+v29/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
+measurement, and observational validation remain separate gates.
+
+This numerical revision does not alter the product contracts: a dataset has
+one to 72 consecutive native hourly forecast frames. An ordinary successfully
+saved user visualization is retained for exactly 96 hours. One explicitly
+marked `admin_fixture` may be retained without expiry. It is a read-only public
+reference for unauthenticated visitors and remains visible to configured
+Telegram administrators. An authenticated non-administrator cannot list or
+open it and sees only owner-scoped 96-hour results. The fixture is a test
+archive, not a cache hit eligible for new calculations.
+
+This remains a reproducible NWP diagnostic, not a measurement. ICON cannot
+resolve local obstruction, dome seeing, telescope thermal plumes, or sub-grid
+cloud/turbulence. Fixed particle radii, cloud guards, HMNSP99, and the
+engineering `1…10` utility require observational validation. Slant PWV is
+physical, but no line-by-line passband/instrument transmission is claimed.
+Refraction stops at ICON top and is not yet a vacuum-direction correction.
+The one-sided endpoints and three quarter points now seed recursive coverage of
+every complete horizontal-cell span; they are not the only samples. Endpoint
+slivers require their own Lipschitz clearance, both halves are recursively
+explored, and every remaining interval is either proved root-free, resolved by
+the strict physical-surface monotonicity certificate (A26g), represented by
+exact or sign-changing evidence, or rejected. No unresolved leaf is published.
+For a root accepted through (A26g), opposite signs and a derivative interval
+excluding zero formally prove both existence and uniqueness. This applies to
+smooth bilinear WMO decision residuals as well as the eligible smooth physical
+boundaries, while preserving the ancestor's whole-probe existence proof.
+Predicates that cannot obtain that certificate retain the generic terminal
+sign-change rule. Whenever recursion exposes separate non-identical evidence,
+including evidence inside the 0.4-mm numerical-proximity window, the calculation
+fails closed. This residual finite-resolution limitation is stated explicitly
+and is not converted into a quality or confidence value.
+
+Before isolation, every grid line reachable from each accepted DOPRI interval
+is enumerated from an outward angular-reach enclosure. Equal endpoint signs do
+not suppress a candidate, and sub-centimetre source intervals are not skipped.
+Latitude and longitude events form a compound corner only for exact scalar
+zeros at the identical path coordinate; overlap of two finite root brackets is
+insufficient. A path that follows, or is numerically inseparable from, a grid
+line therefore fails closed until a future explicit adjacent-cell ownership
+contract can provide union derivative bounds. This is an availability
+limitation, not a silent interpolation or side-selection rule.
+
+An angular-discretization sensitivity run on immutable ICON-EU cycle
+`2026080812` evaluated `f002/f020/f038/f056/f073` on 789 distinct directions:
+production-v2, dense-v1, and an independent 513-node uniform-32 reference were
+all computed through the complete physical kernel, with no interpolation of
+finished diagnostics and no calculation or availability mismatch. The
+production-v2 comparison had maximum Overall delta `4.495704`, worst
+area-weighted hourly P95 `0.821550`, at most `8.565771%` of cap area above
+`0.5`, and worst P95 `3.457452` for reference-cell centres below `20°` (cells
+covering `10..17.5°`). Dense-v1 reduced those
+four maxima to `1.744252`, `0.794451`, `7.393201%`, and `0.455779`. Preload and
+calculation took `391.354 s` and `715.054 s`; report SHA-256 is
+`3811f777a2c7ca471838d276bbb3acf974ac182587ef9c58fb257d1db8b31466`.
+The comparison assigns each fine reference cell the nearest support-node
+value with exact spherical-ring midpoint area weights; it does not create a
+new scientific value. Because no scientifically sourced acceptance threshold
+was specified before execution, the zero-failure `PASS` is only a successful
+diagnostic execution, not proof that production-v2 is converged. In
+particular, the low-elevation discretization remains a material controlled-
+rollout limitation.
+
+Public rollout therefore remains conditional on multi-site/multi-run angular-
+grid acceptance criteria, cold/warm resource measurements, payload limits,
+ordinary-forecast non-regression, and observational validation.
+
+Numerical basis: Piessens et al.,
+[DOI 10.1007/978-3-642-61786-7](https://doi.org/10.1007/978-3-642-61786-7);
+Gander and Gautschi,
+[DOI 10.1023/A:1022318402393](https://doi.org/10.1023/A:1022318402393).

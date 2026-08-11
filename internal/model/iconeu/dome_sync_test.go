@@ -203,7 +203,7 @@ func TestSyncDomeResumesWithoutRedownloadAndPublishesAtomically(t *testing.T) {
 	budget := newDomeTestBudget(t, root, model.HardDiskProjectCapBytes)
 	oldTarget := installOldDomeCurrent(t, root)
 
-	if _, err := client.SyncDome(context.Background(), root, loaded, budget); err == nil {
+	if _, err := syncDomeTest(client, context.Background(), root, loaded, budget); err == nil {
 		t.Fatal("injected network failure did not stop acquisition")
 	}
 	assertDomeCurrentTarget(t, root, oldTarget)
@@ -222,7 +222,7 @@ func TestSyncDomeResumesWithoutRedownloadAndPublishesAtomically(t *testing.T) {
 		t.Fatalf("f000 extension requests = %d, want %d", f000Requests, domeModelMessagesPerStep-cloudStepMessageCount())
 	}
 
-	ready, err := client.SyncDome(context.Background(), root, loaded, budget)
+	ready, err := syncDomeTest(client, context.Background(), root, loaded, budget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestSyncDomeRejectsMetadataMismatchWithoutPublishingPartial(t *testing.T) {
 	budget := newDomeTestBudget(t, root, model.HardDiskProjectCapBytes)
 	oldTarget := installOldDomeCurrent(t, root)
 
-	if _, err := client.SyncDome(context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "missing canonical message") {
+	if _, err := syncDomeTest(client, context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "missing canonical message") {
 		t.Fatalf("metadata mismatch error = %v", err)
 	}
 	assertDomeCurrentTarget(t, root, oldTarget)
@@ -305,7 +305,7 @@ func TestSyncDomeRefusesChangedBaseManifest(t *testing.T) {
 	budget := newDomeTestBudget(t, root, model.HardDiskProjectCapBytes)
 	oldTarget := installOldDomeCurrent(t, root)
 
-	if _, err := client.SyncDome(context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "base manifest changed") {
+	if _, err := syncDomeTest(client, context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "base manifest changed") {
 		t.Fatalf("base mutation error = %v", err)
 	}
 	assertDomeCurrentTarget(t, root, oldTarget)
@@ -330,7 +330,7 @@ func TestSyncDomeRejectsChangedVerifiedObjectByCheckpoint(t *testing.T) {
 	budget := newDomeTestBudget(t, root, model.HardDiskProjectCapBytes)
 	oldTarget := installOldDomeCurrent(t, root)
 
-	if _, err := client.SyncDome(context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "checkpoint") {
+	if _, err := syncDomeTest(client, context.Background(), root, loaded, budget); err == nil || !strings.Contains(err.Error(), "checkpoint") {
 		t.Fatalf("changed verified object error = %v", err)
 	}
 	assertDomeCurrentTarget(t, root, oldTarget)
@@ -347,7 +347,7 @@ func TestSyncDomeCapRejectionLeavesCurrentAndDoesNotCreateStaging(t *testing.T) 
 	budget := newDomeTestBudget(t, root, 1)
 	oldTarget := installOldDomeCurrent(t, root)
 
-	if _, err := client.SyncDome(context.Background(), root, loaded, budget); !errors.Is(err, model.ErrDiskProjectCap) {
+	if _, err := syncDomeTest(client, context.Background(), root, loaded, budget); !errors.Is(err, model.ErrDiskProjectCap) {
 		t.Fatalf("cap error = %v, want ErrDiskProjectCap", err)
 	}
 	assertDomeCurrentTarget(t, root, oldTarget)
@@ -395,6 +395,26 @@ func domeTestClient(transport *domeTestTransport, runner *domeTestRunner) *Clien
 		BaseURL: "https://dwd.invalid/icon-eu", HTTPClient: &http.Client{Transport: transport},
 		Runner: runner, Workers: 4, Progress: func(string, ...any) {},
 	}
+}
+
+func syncDomeTest(
+	client *Client,
+	ctx context.Context,
+	root string,
+	loaded LoadedManifest,
+	budget *model.DiskBudget,
+) (LoadedDomeManifest, error) {
+	return client.syncDome(ctx, root, loaded, budget, func(tasks []domeSyncTask) (model.DiskProjection, model.DiskProjection, error) {
+		// The production projection is independently exercised by
+		// TestDomeProjectionDiffersOnlyByResultCacheAllowance. These transport
+		// and publication tests need only preserve dense-before-sparse ordering;
+		// tying their admission to the runner's physical free space makes the
+		// result depend on unrelated CI-host capacity.
+		if _, _, err := domeSyncProjections(tasks); err != nil {
+			return model.DiskProjection{}, model.DiskProjection{}, err
+		}
+		return model.DiskProjection{Bytes: 3, Inodes: 3}, model.DiskProjection{Bytes: 2, Inodes: 2}, nil
+	})
 }
 
 func writeDomeTestBase(t *testing.T, root string) (LoadedManifest, *domeTestRunner) {
