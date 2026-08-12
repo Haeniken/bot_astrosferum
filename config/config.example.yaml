@@ -144,7 +144,7 @@ algorithms:
   cloud_ice_radius_micrometers: 25
 
 render:
-  version: render-v16-overall-penalty-decomposition
+  version: render-v18-celestial-distance
   width: 1280
   height: 960
 

@@ -5,9 +5,9 @@
 **Project:** Astrosferum\
 **Document type:** Research-software methodology and calculation note\
 **Version:** 2.0\
-**Revision date:** 9 August 2026
+**Revision date:** 12 August 2026
 
-Status: research-software method and calculation note, revised 9 August 2026.
+Status: research-software method and calculation note, revised 12 August 2026.
 This document is the canonical description of sources, units, formulas,
 control calculations, validation, uncertainty, and configurable engineering
 decisions in `bot-astrosferum`.
@@ -76,7 +76,8 @@ The answer remains decomposed into auditable outputs:
 - a separate Johnson-V zenith efficiency reference for a declared
   background-limited, seeing-limited point-source observation;
 - optional ICON-EU directional conditions at the 10-degree Horizon reference;
-- Sun, Moon, Jupiter, and Saturn planning events;
+- hourly topocentric planning ephemerides for the Sun, Moon, Mercury, Venus,
+  Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto;
 - point light-pollution context, reported separately from the hourly index.
 
 ### 2.2. Data provenance
@@ -642,9 +643,11 @@ serialization-consistency tolerances: `2e-6` for factor/product/Shapley loss
 and `2e-5` for the reconstructed `1…10` Overall value. These project validation
 limits are neither observational uncertainties nor permission to publish a
 loss outside `[0,1]`.
-This writer correction retains dataset schema 1 and the same scientific
-meaning, but `astrodome-dataset-writer-v2` participates in the calculation
-cache key so a payload produced by the defective writer cannot be reused.
+The current Astrodome dataset schema is `3`. Its penalty semantics remain the
+bounded product definition above, while schema 3 additionally carries the
+versioned celestial distance and ring-aspect diagnostics from section 4.10.
+The narrow `astrodome-dataset-writer-v4-celestial-distance-aspect` identity participates in the
+calculation cache key, so an older or incompatible payload cannot be reused.
 An archived payload outside the declared unit interval is rejected rather than
 silently clamped or reinterpreted.
 
@@ -1361,6 +1364,287 @@ step is an hourly comparison against DIMM/MASS/SCIDAR or high-quality observing
 logs around Saint Petersburg and Moscow. Until then, the
 UI must say “model estimate” and must not call Overall a measured seeing value
 or a Pickering scale.
+
+### 4.10. Planning ephemerides and displayed sky paths
+
+The celestial overlay is an independent planning product and **does not enter
+Overall, seeing, cloud transmission, or any meteorological value**. Its
+canonical order is Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus,
+Neptune, and Pluto. Earth is the observer and is therefore not a displayed
+target. Every stored sample is evaluated at the exact UTC hour of the forecast
+axis; azimuth is geodetic, clockwise from true north, and altitude is measured
+from the local astronomical horizon. The current location type has no observer
+height, so the topocentric observer is placed on the reference ellipsoid at
+zero height. This approximation is negligible at the plotted scale but must be
+remembered close to the horizon. The common declared numerical domain is
+`1885-01-02 <= t < 2050-01-01`. The one-day lower-bound margin keeps the
+light-time-retarded Pluto state inside the series' published interval; the
+upper boundary remains exclusive. Requests outside this domain fail closed
+instead of silently switching approximation families.
+
+For Mercury through Neptune, the implementation uses the fitted Keplerian
+elements published by [JPL Solar System
+Dynamics](https://ssd.jpl.nasa.gov/planets/approx_pos.html). This is a
+**published planning approximation**, not a replacement for an integrated DE
+ephemeris. With Julian ephemeris date `JDE`, the number of Julian centuries
+from J2000 and the linearly propagated elements are
+
+```math
+T = \frac{JDE-2451545.0}{36525},
+\qquad
+x(T)=x_0+\dot{x}T.
+```
+
+The argument of perihelion, corrected mean anomaly, Kepler equation, and
+orbital-plane coordinates are
+
+```math
+\omega=\varpi-\Omega,
+```
+
+```math
+M=L-\varpi+bT^2+c\cos(fT)+s\sin(fT),
+```
+
+```math
+M=E-e\sin E,
+```
+
+```math
+x'=a(\cos E-e),
+\qquad
+y'=a\sqrt{1-e^2}\sin E,
+\qquad
+z'=0.
+```
+
+The JPL rotation by `omega`, inclination `I`, and ascending node `Omega`
+places this vector in the J2000 ecliptic frame. The implementation subtracts
+the Earth-Moon-barycentre vector and performs one light-time iteration,
+
+```math
+\Delta_0=\lVert \mathbf r_p(t)-\mathbf r_{EMB}(t)\rVert,
+```
+
+```math
+\mathbf r_g(t)=
+\mathbf r_p\!\left(t-\frac{\Delta_0}{c}\right)-\mathbf r_{EMB}(t).
+```
+
+The JPL table provides the Earth-Moon barycentre rather than the Earth's
+centre. A conservative `5,000 km` upper bound for their separation and a
+conservative `0.25 au` lower bound for the geocentric distance of the displayed
+planets give a directional contribution below
+
+```math
+\arcsin\!\left(
+\frac{5000\ \mathrm{km}}{0.25\times149597870.7\ \mathrm{km}}
+\right)<0.0077\ \mathrm{degree}.
+```
+
+This is a declared part of the planning approximation, not an unreported
+high-precision Earth ephemeris.
+
+#### Distance, model-range closeness, radial motion, and Saturn rings
+
+The distance diagnostic is separate from sky position and observing
+suitability. For the Sun and Moon, `D(t)` is referenced to the Earth centre.
+For planets it is referenced to JPL's Earth–Moon barycentre and the
+light-time-retarded target, so the serialized field is
+`reference_distance_km`, not an exact geocentric range. It does not enter
+Overall.
+
+The project closeness scale uses the finite set of every whole UTC hour in the
+common model domain:
+
+```math
+\mathcal T_h=\{1885\text{-}01\text{-}02T00{:}00Z+n\,\mathrm{h}\mid t<2050\text{-}01\text{-}01T00{:}00Z\}.
+```
+
+For each body, the checked-in `D_min` and `D_max` are generated by exhaustive
+evaluation of every member of `T_h` with the same ephemeris version. A runtime
+distance outside the stored range is rejected; there is no silent clamp. For
+an exact hour,
+
+```math
+C(t)=100\frac{D_{\max}-D(t)}{D_{\max}-D_{\min}}\ \%,
+\qquad t\in\mathcal T_h.
+```
+
+`100%` therefore denotes the closest sampled hour of this approximate model,
+and `0%` the farthest. It is not a probability, brightness, angular size,
+physical percentage change, periapsis/apoapsis, or a continuous global
+extremum. Chart 1 shows the integer-rounded arithmetic mean over the exact
+hourly samples present in that forecast,
+
+```math
+\bar C_N=\mathrm{round}\!\left(\frac{1}{N}\sum_{i=1}^{N}C(t_i)\right),
+```
+
+whereas the selected-hour interactive value is displayed to two decimal
+places. That difference is presentation precision only.
+
+Signed radial velocity uses a centred one-hour difference, with one-sided
+stencils only at the model-domain boundaries:
+
+```math
+v_r(t)=\frac{D(t+30\,\mathrm{min})-D(t-30\,\mathrm{min})}{3600\,\mathrm{s}}.
+```
+
+The unit is `km/s`; `v_r<0` means approaching and `v_r>0` means receding,
+matching JPL Horizons quantity 20. There is no arbitrary stationary deadband.
+The `30 min` half-step is a numerical choice for an hourly planning product.
+Independent DE441/Horizons controls at `2026-08-12T00:00Z` bound the tested
+Mars–Pluto residuals by `2,000,000 km` in distance and `0.08 km/s` in range
+rate. These are planning-regression limits, not guarantees for all epochs.
+
+For Saturn, the signed ring-opening angle uses the IAU north pole at the
+light-emission epoch:
+
+```math
+\alpha_p=40.589^\circ-0.036^\circ T,
+\qquad
+\delta_p=83.537^\circ-0.004^\circ T.
+```
+
+```math
+B=\arcsin\!\left(\widehat{\mathbf p}_{N}\cdot
+\widehat{\mathbf r}_{Saturn\rightarrow EMB}\right).
+```
+
+Positive `B` exposes Saturn's IAU north side; negative `B` exposes the south
+side. Pole coefficients are from the [IAU Working Group report](https://doi.org/10.1007/s10569-017-9805-5),
+and the sign follows the [NASA PDS ring-elevation convention](https://pds.nasa.gov/datastandards/documents/dd/all/current/ch105s175.html).
+An independent Horizons direction-and-pole construction gives
+`-8.98046 degrees` on `2026-08-12`; the implementation regression limit is
+`0.08 degree`. `B` controls ring opening, not the full sky-plane position
+angle of the rings.
+
+It then rotates to J2000 equatorial coordinates and applies the Meeus
+precession, nutation, and annual-aberration transformation to the apparent
+place of date. Pluto is evaluated separately with the periodic series in
+chapter 37 of Jean Meeus, *Astronomical Algorithms*, as implemented by the
+pinned `github.com/soniakeys/meeus/v3` module. The Sun and Moon retain the
+existing Meeus solar and lunar series; the Moon is topocentric before the
+horizontal conversion.
+
+For right ascension `alpha`, declination `delta`, geocentric distance
+`Delta`, geodetic latitude `phi`, and local hour angle `H`, the topocentric
+conversion uses the reference-ellipsoid flattening `f=1/298.257`. Define
+
+```math
+H=\mathrm{GAST}(t_{UT1})+\lambda_{east}-\alpha.
+```
+
+The equatorial coordinates are apparent places, therefore the rotation uses
+Greenwich apparent sidereal time (GAST), including nutation in right ascension,
+rather than GMST. The runtime has UTC but no live Earth-orientation input and
+uses `UTC approximately equals UT1`. [IERS defines
+GAST](https://www.iers.org/iers/en/service/glossary/functions/glossary/G) as
+the Greenwich hour angle of the true equinox and keeps
+[`absolute value of UT1-UTC` below `0.9 s`](https://www.iers.org/SharedDocs/Glossareintraege/EN/C/utc?nn=ef326957-149a-433c-8880-5730bfcd389d).
+For the modern UTC regime since 1972, the latter corresponds to less than
+`0.0038 degree` of Earth rotation. Before 1972, an input timestamp is treated
+as a UTC-like proxy for UT1 and this `0.9 s` bound is not claimed. The modern
+bound is an angular-direction bound; azimuth itself is ill-conditioned
+arbitrarily close to the zenith.
+
+Now define
+
+```math
+u=\arctan\!\big((1-f)\tan\phi\big),
+\qquad
+\rho_s=(1-f)\sin u,
+\qquad
+\rho_c=\cos u,
+\qquad
+p=\frac{R_\oplus}{\Delta}.
+```
+
+Then
+
+```math
+A=\cos\delta\sin H,
+```
+
+```math
+B=\cos\delta\cos H-\rho_c p,
+```
+
+```math
+C=\sin\delta-\rho_s p,
+```
+
+```math
+H'=\mathrm{atan2}(A,B),
+\qquad
+\delta'=\arcsin\!\left(\frac{C}{\sqrt{A^2+B^2+C^2}}\right).
+```
+
+The airless altitude and north-through-east azimuth are
+
+```math
+h=\arcsin\!\left(
+\sin\phi\sin\delta'+\cos\phi\cos\delta'\cos H'
+\right),
+```
+
+```math
+Az=\mathrm{atan2}\!\left(
+-\cos\delta'\sin H',
+\sin\delta'\cos\phi-\cos\delta'\cos H'\sin\phi
+\right)\pmod{2\pi}.
+```
+
+The planning apparent altitude uses the existing standard-refraction
+approximation only for `h >= -1 degree`; below that boundary it equals the
+airless altitude:
+
+```math
+h_{app}=h+
+\frac{0.0002967}
+{\tan\!\left(h+\frac{0.00312536}{h+0.08901179}\right)}.
+```
+
+This refraction is a **project numerical convention** at standard conditions,
+not a pressure/temperature measurement at the observing site. Both geometric
+and apparent altitude are serialized, so the distinction is not hidden.
+
+The browser draws a smooth dashed curve between adjacent exact hourly unit
+directions with shortest-arc spherical linear interpolation. For `0 <= q <=
+1`, `theta=acos(clamp(u0 dot u1,-1,1))`,
+
+```math
+\mathbf u(q)=
+\frac{\sin((1-q)\theta)}{\sin\theta}\mathbf u_0+
+\frac{\sin(q\theta)}{\sin\theta}\mathbf u_1.
+```
+
+The curve is subdivided into twelve presentation segments per hour (five
+minutes). Slerp is **only drawing geometry**: the selected marker and tooltip
+use the exact stored hourly sample, and no Overall or meteorological field is
+interpolated. A deterministic great-circle fallback makes the mathematical
+antipodal edge case total; adjacent physical hourly ephemerides are not
+antipodal.
+
+JPL describes the short-interval elements as suitable for scheduling and
+pointing, with nominal heliocentric-longitude errors from `10` to `600`
+arcseconds depending on planet. High-precision work must use [JPL
+Horizons](https://ssd-api.jpl.nasa.gov/doc/horizons.html) or a current
+integrated DE ephemeris. An independent Horizons `AIRLESS` observer-table
+control at `53.65 N, 37.3462 E`, `2026-08-12 00:00 UTC` covers all ten bodies.
+The largest difference is `0.0987 degree` in Saturn azimuth. A second control
+contains thirty Mars-through-Pluto positions at five three-month dates from
+`2026-01-15` through `2027-01-15`; its maxima are `0.0856 degree` in azimuth
+and `0.0662 degree` in altitude. All sixty individual seasonal components and
+all twenty all-body components stay below the fixed `0.15-degree` regression
+limit. The Horizons query fixes `CENTER=coord@399`, the exact observer
+coordinates at zero height, `TIME_TYPE=UT`, `QUANTITIES=4`, `ICRF`, `AIRLESS`,
+`EXTRA_PREC=YES`, and DE441. These controls are evidence against sign, frame,
+time, seasonal-propagation, and azimuth-wrap errors; they are not a global
+accuracy calibration. The
+photorealistic body icons are generated presentation assets and do not encode
+angular diameter, orientation, phase, brightness, or scale.
 
 ## 5. Reproducibility, validation, and interpretation
 

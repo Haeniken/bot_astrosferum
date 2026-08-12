@@ -10,16 +10,17 @@ import (
 	"math"
 	"time"
 
+	"github.com/soniakeys/meeus/v3/base"
 	"github.com/soniakeys/meeus/v3/julian"
 	"github.com/soniakeys/meeus/v3/moonposition"
 	"github.com/soniakeys/meeus/v3/nutation"
+	"github.com/soniakeys/meeus/v3/sidereal"
 	"github.com/soniakeys/meeus/v3/solar"
 )
 
 const (
 	degree      = math.Pi / 180
 	earthRadius = 6378.14
-	sunDistance = 149598000.0
 )
 
 type equatorial struct {
@@ -110,9 +111,12 @@ func geometricAltitude(at time.Time, latitude, longitude float64, coordinates eq
 }
 
 func localHourAngle(at time.Time, longitude, rightAscension float64) float64 {
-	days := julian.TimeToJD(at) - 2451545.0
-	sidereal := degree * (280.46061837 + 360.98564736629*days)
-	return sidereal + longitude*degree - rightAscension
+	// The equatorial places used here include nutation, so they must be
+	// rotated with Greenwich apparent sidereal time rather than GMST. Go's
+	// civil time is UTC; using it as UT1 introduces at most the UTC contract's
+	// 0.9-second bound (0.00375 degree of Earth rotation).
+	greenwichApparent := sidereal.Apparent(julian.TimeToJD(at)).Rad()
+	return greenwichApparent + longitude*degree - rightAscension
 }
 
 func altitude(hourAngle, latitude, declination float64) float64 {
@@ -130,7 +134,7 @@ func atmosphericRefraction(altitude float64) float64 {
 func sunCoordinates(at time.Time) equatorial {
 	jde := julian.TimeToJD(at) + deltaTSeconds(at)/86400
 	ra, dec := solar.ApparentEquatorial(jde)
-	return equatorial{ra: ra.Rad(), dec: dec.Rad(), distance: sunDistance}
+	return equatorial{ra: ra.Rad(), dec: dec.Rad(), distance: solar.Radius(base.J2000Century(jde)) * astronomicalUnitKM}
 }
 
 func moonCoordinates(at time.Time) equatorial {
@@ -152,7 +156,7 @@ func moonIllumination(at time.Time) illumination {
 	cosSeparation := math.Sin(sun.dec)*math.Sin(moon.dec) +
 		math.Cos(sun.dec)*math.Cos(moon.dec)*math.Cos(sun.ra-moon.ra)
 	separation := math.Acos(math.Max(-1, math.Min(1, cosSeparation)))
-	incidence := math.Atan2(sunDistance*math.Sin(separation), moon.distance-sunDistance*math.Cos(separation))
+	incidence := math.Atan2(sun.distance*math.Sin(separation), moon.distance-sun.distance*math.Cos(separation))
 	brightLimb := math.Atan2(math.Cos(sun.dec)*math.Sin(sun.ra-moon.ra),
 		math.Sin(sun.dec)*math.Cos(moon.dec)-math.Cos(sun.dec)*math.Sin(moon.dec)*math.Cos(sun.ra-moon.ra))
 	phaseSign := 1.0

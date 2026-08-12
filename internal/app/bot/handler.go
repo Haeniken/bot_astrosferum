@@ -493,6 +493,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	var surfaceSeries forecast.SurfaceSeries
 	var sky astronomy.Series
+	var celestialTracks []astronomy.CelestialTrack
 	var compositionChannel chan compositionResult
 	hasWeather := false
 	hasOverall := false
@@ -510,13 +511,18 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			if astronomyError != nil {
 				handler.logf("forecast request %d astronomy calculation failed: %v", requestID, astronomyError)
 			} else {
-				hasWeather = true
-				if handler.atmosphericComposition != nil {
-					validTimes := make([]time.Time, len(surface.Frames))
-					for index := range surface.Frames {
-						validTimes[index] = surface.Frames[index].ValidAt
+				validTimes := make([]time.Time, len(surface.Frames))
+				for index := range surface.Frames {
+					validTimes[index] = surface.Frames[index].ValidAt
+				}
+				celestialTracks, astronomyError = astronomy.ComputeCelestialTracks(location, validTimes)
+				if astronomyError != nil {
+					handler.logf("forecast request %d celestial tracks failed: %v", requestID, astronomyError)
+				} else {
+					hasWeather = true
+					if handler.atmosphericComposition != nil {
+						compositionChannel = handler.startAtmosphericComposition(location, validTimes)
 					}
-					compositionChannel = handler.startAtmosphericComposition(location, validTimes)
 				}
 			}
 		}
@@ -583,7 +589,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 				}
 				hasOverall = true
 				interactiveDataset, upperAirDiagnostics, cloudDiagnostics, cloudObstruction, err = render.PrepareForecastInteractiveDataset(
-					series, surfaceSeries, cloudSeries, sky, overallFrames, handler.overallCalibration,
+					series, surfaceSeries, cloudSeries, sky, celestialTracks, overallFrames, handler.overallCalibration,
 				)
 				if err != nil {
 					handler.logf("forecast request %d interactive dataset preparation failed: %v", requestID, err)
@@ -627,7 +633,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			}
 			if hasWeather {
 				charts.Weather = filepath.Join(requestDirectory, "weather-hourly.png")
-				if err := render.Weather(charts.Weather, surfaceSeries, sky, requestRenderOptions); err != nil {
+				if err := render.Weather(charts.Weather, surfaceSeries, sky, celestialTracks, requestRenderOptions); err != nil {
 					charts.Weather, hasWeather = "", false
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
 )
 
@@ -56,12 +57,35 @@ func TestAstrodomeDatasetAcceptsShortNativeHourlyWindow(t *testing.T) {
 	t.Parallel()
 	input := completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1)
 	input.Frames = input.Frames[:70]
+	for index := range input.CelestialTracks {
+		input.CelestialTracks[index].Samples = input.CelestialTracks[index].Samples[:70]
+	}
 	dataset, err := BuildAstrodomeDataset(input)
 	if err != nil {
 		t.Fatalf("BuildAstrodomeDataset: %v", err)
 	}
 	if len(dataset.ValidTimes) != 70 || len(dataset.Frames) != 70 || dataset.Grid.FrameCount != 70 {
 		t.Fatalf("short dataset cardinality = %d/%d/%d", len(dataset.ValidTimes), len(dataset.Frames), dataset.Grid.FrameCount)
+	}
+}
+
+func TestAstrodomeDatasetRejectsMisorderedAndMisalignedCelestialTracks(t *testing.T) {
+	t.Parallel()
+	dataset, err := BuildAstrodomeDataset(completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.CelestialTracks[0], dataset.CelestialTracks[1] = dataset.CelestialTracks[1], dataset.CelestialTracks[0]
+	if err := dataset.Validate(); err == nil {
+		t.Fatal("Astrodome dataset with reordered celestial tracks was accepted")
+	}
+	dataset, err = BuildAstrodomeDataset(completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.CelestialTracks[4].Samples[2].ValidAt = dataset.CelestialTracks[4].Samples[2].ValidAt.Add(time.Hour)
+	if err := dataset.Validate(); err == nil {
+		t.Fatal("Astrodome dataset with a time-shifted celestial sample was accepted")
 	}
 }
 
@@ -264,7 +288,10 @@ func TestAstrodomeDatasetRejectsOrderPartialUnknownAndFabricatedDiagnostics(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	withUnknown := bytes.Replace(encoded, []byte(`{"schema_version":1`), []byte(`{"unknown":true,"schema_version":1`), 1)
+	withUnknown := bytes.Replace(encoded, []byte(`{"schema_version":3`), []byte(`{"unknown":true,"schema_version":3`), 1)
+	if bytes.Equal(withUnknown, encoded) {
+		t.Fatal("unknown-field test did not mutate the current schema")
+	}
 	if _, err := DecodeAstrodomeDataset(bytes.NewReader(withUnknown)); err == nil {
 		t.Fatal("unknown JSON field was accepted")
 	}
@@ -424,8 +451,10 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 		InputContractVersion: forecast.AstrodomePrimitiveInputContractVersion,
 	}
 	frames := make([]AstrodomeDatasetFrameInput, forecast.AstrodomeFrameCount)
+	validTimes := make([]time.Time, len(frames))
 	for frameIndex := range frames {
 		validAt := run.Add(time.Duration(frameIndex) * time.Hour)
+		validTimes[frameIndex] = validAt
 		leadQuality := max(0.65, 0.96-0.26*float64(frameIndex)/72)
 		qualityCategory := forecast.AstrodomeScienceQualityLimited
 		if leadQuality >= 0.85 {
@@ -447,6 +476,11 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 			SolarAltitudeDeg: -20, Nodes: nodes,
 		}
 	}
+	location := forecast.Location{Latitude: 59.9, Longitude: 30.2, TimeZone: "Europe/Moscow"}
+	celestialTracks, err := astronomy.ComputeCelestialTracks(location, validTimes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	elevation := 17.0
 	return AstrodomeDatasetInput{
 		SourceIdentity: identity, GeneratedAt: run.Add(30 * time.Minute), Profile: profile,
@@ -458,6 +492,7 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 		RefractivityVersion:    "not-applicable",
 		CalibrationVersion:     forecast.DefaultAstrodomeScienceCalibration().Version,
 		CalibrationSHA256:      calibrationDigest,
+		CelestialTracks:        celestialTracks,
 		Frames:                 frames,
 	}
 }

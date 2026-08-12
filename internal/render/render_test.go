@@ -332,8 +332,16 @@ func TestWeatherProducesHourlyLandscapePNG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validTimes := make([]time.Time, len(surface.Frames))
+	for index := range surface.Frames {
+		validTimes[index] = surface.Frames[index].ValidAt
+	}
+	celestialTracks, err := astronomy.ComputeCelestialTracks(surface.Location, validTimes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "weather-hourly.png")
-	if err := Weather(path, surface, sky, Options{Language: "ru"}); err != nil {
+	if err := Weather(path, surface, sky, celestialTracks, Options{Language: "ru"}); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.Open(path)

@@ -254,7 +254,7 @@ func Defaults() Config {
 			CloudLiquidRadiusMicrometers:       10,
 			CloudIceRadiusMicrometers:          25,
 		},
-		Render:   RenderConfig{Version: "render-v16-overall-penalty-decomposition", Width: 1280, Height: 960},
+		Render:   RenderConfig{Version: "render-v18-celestial-distance", Width: 1280, Height: 960},
 		Database: DatabaseConfig{Host: "postgres", Port: 5432, Name: "bot_astrosferum", User: "bot_astrosferum", MaxConns: 10},
 	}
 }

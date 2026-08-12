@@ -163,6 +163,10 @@ func (computer *Computer) ComputeAstrodomeDataset(
 	if err != nil {
 		return result, err
 	}
+	celestialTracks, err := astronomy.ComputeCelestialTracks(request.RequestedLocation, request.ValidTimes)
+	if err != nil {
+		return result, fmt.Errorf("compute astrodome celestial tracks: %w", err)
+	}
 	nodeDefinitions, err := profile.Nodes()
 	if err != nil {
 		return result, err
@@ -220,7 +224,8 @@ func (computer *Computer) ComputeAstrodomeDataset(
 		RefractionVersion:   forecast.AstrodomeRefractionIntegratorVersion,
 		RefractivityVersion: forecast.AstrodomeCiddorVersion,
 		CalibrationVersion:  scienceCalibration.Version, CalibrationSHA256: computer.calibrationDigest,
-		Frames: frames,
+		CelestialTracks: celestialTracks,
+		Frames:          frames,
 	}, nil
 }
 

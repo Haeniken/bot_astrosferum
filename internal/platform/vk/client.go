@@ -36,10 +36,11 @@ type Client struct {
 }
 
 var (
-	_ bot.Messenger             = (*Client)(nil)
-	_ bot.KeyboardMessenger     = (*Client)(nil)
-	_ bot.HTMLKeyboardMessenger = (*Client)(nil)
-	_ bot.ActionMessenger       = (*Client)(nil)
+	_                           bot.Messenger             = (*Client)(nil)
+	_                           bot.KeyboardMessenger     = (*Client)(nil)
+	_                           bot.HTMLKeyboardMessenger = (*Client)(nil)
+	_                           bot.ActionMessenger       = (*Client)(nil)
+	errDocumentUploadIncomplete                           = errors.New("VK document upload returned incomplete data")
 )
 
 type actionToken struct {
@@ -191,6 +192,15 @@ func (client *Client) SendDocument(ctx context.Context, peerID int64, path, capt
 	attachment, err := client.uploadWithRetry(ctx, func() (string, error) {
 		return client.uploadDocument(ctx, peerID, path)
 	})
+	if errors.Is(err, errDocumentUploadIncomplete) {
+		// Some VK document upload hosts occasionally return HTTP 200 without
+		// the opaque file token. Keep the original lossless PNG and fall back
+		// to the independently supported message-photo upload path rather than
+		// dropping one chart from an otherwise complete forecast.
+		attachment, err = client.uploadWithRetry(ctx, func() (string, error) {
+			return client.uploadPhoto(ctx, peerID, path)
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -337,7 +347,7 @@ func (client *Client) uploadDocument(ctx context.Context, peerID int64, path str
 		return "", fmt.Errorf("upload VK message document: %w", err)
 	}
 	if uploaded.File == "" {
-		return "", errors.New("VK document upload returned incomplete data")
+		return "", errDocumentUploadIncomplete
 	}
 	var saved struct {
 		Type string `json:"type"`

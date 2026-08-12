@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
 )
 
@@ -97,6 +98,9 @@ func (dataset AstrodomeDataset) validate() error {
 	if err := forecast.ValidateAstrodomeValidTimes(dataset.ValidTimes); err != nil {
 		return err
 	}
+	if err := validateAstrodomeCelestialTracks(dataset.CelestialEphemerisVersion, dataset.CelestialTracks, dataset.ValidTimes); err != nil {
+		return err
+	}
 	if err := validateAstrodomeDatasetGrid(dataset.Grid, profile, len(dataset.ValidTimes)); err != nil {
 		return err
 	}
@@ -138,6 +142,13 @@ func (dataset AstrodomeDataset) validate() error {
 		}
 	}
 	return nil
+}
+
+func validateAstrodomeCelestialTracks(version string, tracks []astronomy.CelestialTrack, validTimes []time.Time) error {
+	if version != astronomy.CelestialEphemerisVersion {
+		return fmt.Errorf("astrodome celestial ephemeris version must be %q", astronomy.CelestialEphemerisVersion)
+	}
+	return astronomy.ValidateCelestialTracks(tracks, validTimes)
 }
 
 func validateAstrodomeDirectionContract(dataset AstrodomeDataset) error {

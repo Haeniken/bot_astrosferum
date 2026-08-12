@@ -352,6 +352,52 @@ func TestSendDocumentRetriesWithFreshUploadServer(t *testing.T) {
 	}
 }
 
+func TestSendDocumentFallsBackToPhotoAfterIncompleteDocumentUploads(t *testing.T) {
+	var documentUploads, photoUploads int
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/method/docs.getMessagesUploadServer":
+			writeAPIResponse(response, `{"upload_url":"`+server.URL+`/upload/doc"}`)
+		case "/upload/doc":
+			documentUploads++
+			assertUploadedFile(t, request, "file", "cloud.png", "lossless-cloud")
+			_, _ = io.WriteString(response, `{}`)
+		case "/method/photos.getMessagesUploadServer":
+			writeAPIResponse(response, `{"upload_url":"`+server.URL+`/upload/photo"}`)
+		case "/upload/photo":
+			photoUploads++
+			assertUploadedFile(t, request, "photo", "cloud.png", "lossless-cloud")
+			_, _ = io.WriteString(response, `{"server":7,"photo":"photo-token","hash":"hash-token"}`)
+		case "/method/photos.saveMessagesPhoto":
+			writeAPIResponse(response, `[{"owner_id":-240376006,"id":17,"access_key":"key"}]`)
+		case "/method/messages.send":
+			if err := request.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if request.Form.Get("attachment") != "photo-240376006_17_key" {
+				t.Fatalf("fallback attachment = %q", request.Form.Get("attachment"))
+			}
+			writeAPIResponse(response, `101`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "cloud.png")
+	if err := os.WriteFile(path, []byte("lossless-cloud"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := testClient(server.URL)
+	client.retryDelay = time.Nanosecond
+	if err := client.SendDocument(context.Background(), 42, path, "caption"); err != nil {
+		t.Fatal(err)
+	}
+	if documentUploads != 3 || photoUploads != 1 {
+		t.Fatalf("uploads document/photo = %d/%d, want 3/1", documentUploads, photoUploads)
+	}
+}
+
 func TestAPIErrorsDoNotExposeToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(response, `{"error":{"error_code":5,"error_msg":"authorization failed"}}`)

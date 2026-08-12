@@ -390,8 +390,12 @@ func runRenderPoint(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
+	celestialTracks, err := celestialTracksForSurface(surface)
+	if err != nil {
+		return err
+	}
 	result.Weather = filepath.Join(*outputDirectory, "weather-hourly.png")
-	if err := render.Weather(result.Weather, surface, sky, render.Options{Language: *language}); err != nil {
+	if err := render.Weather(result.Weather, surface, sky, celestialTracks, render.Options{Language: *language}); err != nil {
 		return err
 	}
 	calibration := app.OverallCalibration(cfg.Algorithms)
@@ -755,8 +759,12 @@ func runRenderSample(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	celestialTracks, err := celestialTracksForSurface(surface)
+	if err != nil {
+		return err
+	}
 	result.Weather = filepath.Join(*outputDirectory, "weather-hourly.png")
-	if err := render.Weather(result.Weather, surface, sky, render.Options{Language: *language}); err != nil {
+	if err := render.Weather(result.Weather, surface, sky, celestialTracks, render.Options{Language: *language}); err != nil {
 		return err
 	}
 	result.CloudObstruction = filepath.Join(*outputDirectory, "cloud-obstruction-height-hourly.png")
@@ -943,6 +951,14 @@ func writeJSON(writer io.Writer, value any) error {
 	encoder.SetIndent("", "  ")
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+func celestialTracksForSurface(surface forecast.SurfaceSeries) ([]astronomy.CelestialTrack, error) {
+	validTimes := make([]time.Time, len(surface.Frames))
+	for index := range surface.Frames {
+		validTimes[index] = surface.Frames[index].ValidAt
+	}
+	return astronomy.ComputeCelestialTracks(surface.Location, validTimes)
 }
 
 func printUsage(writer io.Writer) error {

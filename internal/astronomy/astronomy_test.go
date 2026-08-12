@@ -57,10 +57,31 @@ func TestMoscowEventsAgainstUSNO(t *testing.T) {
 	assertClockNear(t, day.Sunset, 20, 57, 2*time.Minute)
 	assertClockNear(t, day.Moonrise, 12, 25, 2*time.Minute)
 	assertClockNear(t, day.Moonset, 22, 33, 2*time.Minute)
-	if day.JupiterRise.IsZero() || day.JupiterSet.IsZero() || day.SaturnRise.IsZero() || day.SaturnSet.IsZero() {
+	jupiter, jupiterOK := day.PlanetEvents(CelestialJupiter)
+	saturn, saturnOK := day.PlanetEvents(CelestialSaturn)
+	if !jupiterOK || !saturnOK || jupiter.Rise.IsZero() || jupiter.Set.IsZero() || saturn.Rise.IsZero() || saturn.Set.IsZero() {
 		t.Fatalf("missing planetary events: %+v", day)
 	}
 	t.Logf("Moscow Sun %s–%s, Moon %s–%s", day.Sunrise.Format("15:04:05"), day.Sunset.Format("15:04:05"), day.Moonrise.Format("15:04:05"), day.Moonset.Format("15:04:05"))
+}
+
+func TestAstronomyEventsRejectDaysOutsideCommonCelestialDomain(t *testing.T) {
+	// UTC makes the civil-day end coincide exactly with the half-open common
+	// ephemeris boundary; nonzero-offset zones may have a final local day whose
+	// entire UTC support remains inside the domain.
+	location, err := forecast.NewLocation(55.7558, 37.6173, "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, start := range []time.Time{
+		time.Date(1884, time.December, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2049, time.December, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2050, time.January, 1, 12, 0, 0, 0, time.UTC),
+	} {
+		if _, err := Compute(location, start, start); err == nil {
+			t.Errorf("astronomy events accepted a local day outside the common domain at %s", start)
+		}
+	}
 }
 
 func assertClockNear(t *testing.T, actual time.Time, hour, minute int, tolerance time.Duration) {
