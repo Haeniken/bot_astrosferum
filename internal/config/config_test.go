@@ -337,7 +337,7 @@ func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 	algorithms := cfg.Algorithms
 	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v7" ||
 		algorithms.ConditionsVersion != "conditions-v8-precip-veto-penalty-decomposition" ||
-		cfg.Render.Version != "render-v16-overall-penalty-decomposition" {
+		cfg.Render.Version != "render-v18-celestial-distance" {
 		t.Fatalf("unexpected algorithm/render versions: %+v %+v", algorithms, cfg.Render)
 	}
 	if algorithms.OverallGoodSeeingArcsec != 0.5 || algorithms.OverallBadSeeingArcsec != 2.0 ||

@@ -10,15 +10,16 @@ import (
 	"sort"
 	"time"
 
+	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
 )
 
 const (
-	AstrodomeDatasetSchemaVersion = 1
+	AstrodomeDatasetSchemaVersion = 3
 	// AstrodomeDatasetWriterVersion participates in the calculation cache key.
 	// Increment it when a writer correction requires regeneration while the
 	// already-declared dataset schema and scientific meaning remain unchanged.
-	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v2"
+	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v4-celestial-distance-aspect"
 	maximumAstrodomeDatasetBytes  = 128 << 20
 )
 
@@ -48,35 +49,37 @@ var astrodomePenaltyKeys = [...]string{
 // contains physical values and diagnostics only; all human-readable labels
 // are selected by the browser locale.
 type AstrodomeDataset struct {
-	SchemaVersion                 int                      `json:"schema_version"`
-	Provider                      string                   `json:"provider"`
-	ModelProduct                  string                   `json:"model_product"`
-	ModelGrid                     string                   `json:"model_grid"`
-	RunID                         string                   `json:"run_id"`
-	RunManifestDigest             string                   `json:"run_manifest_digest"`
-	SourceColumnPlanDigest        string                   `json:"source_column_plan_digest"`
-	RunBaseTime                   time.Time                `json:"run_base_time"`
-	GeneratedAt                   time.Time                `json:"generated_at"`
-	RequestedLocation             AstrodomeDatasetLocation `json:"requested_location"`
-	ModelLocation                 AstrodomeDatasetLocation `json:"model_location"`
-	InputContractVersion          string                   `json:"input_contract_version"`
-	GeometryVersion               string                   `json:"geometry_version"`
-	RayGeometryVersion            string                   `json:"ray_geometry_version"`
-	GridProfile                   string                   `json:"grid_profile"`
-	GridGeometryDigest            string                   `json:"grid_geometry_digest"`
-	RefractionVersion             string                   `json:"refraction_version"`
-	RefractivityVersion           string                   `json:"refractivity_version"`
-	DirectionCoordinate           string                   `json:"direction_coordinate"`
-	DirectionReferenceSurface     string                   `json:"direction_reference_surface"`
-	DirectionReferenceWavelengthM float64                  `json:"direction_reference_wavelength_m"`
-	VacuumDirectionAvailable      *bool                    `json:"vacuum_direction_available,omitempty"`
-	ScienceVersion                string                   `json:"science_version"`
-	SciencePathVersion            string                   `json:"science_path_version,omitempty"`
-	CalibrationVersion            string                   `json:"calibration_version"`
-	CalibrationSHA256             string                   `json:"science_calibration_sha256,omitempty"`
-	Grid                          AstrodomeDatasetGrid     `json:"grid"`
-	ValidTimes                    []time.Time              `json:"valid_times"`
-	Frames                        []AstrodomeDatasetFrame  `json:"frames"`
+	SchemaVersion                 int                        `json:"schema_version"`
+	Provider                      string                     `json:"provider"`
+	ModelProduct                  string                     `json:"model_product"`
+	ModelGrid                     string                     `json:"model_grid"`
+	RunID                         string                     `json:"run_id"`
+	RunManifestDigest             string                     `json:"run_manifest_digest"`
+	SourceColumnPlanDigest        string                     `json:"source_column_plan_digest"`
+	RunBaseTime                   time.Time                  `json:"run_base_time"`
+	GeneratedAt                   time.Time                  `json:"generated_at"`
+	RequestedLocation             AstrodomeDatasetLocation   `json:"requested_location"`
+	ModelLocation                 AstrodomeDatasetLocation   `json:"model_location"`
+	InputContractVersion          string                     `json:"input_contract_version"`
+	GeometryVersion               string                     `json:"geometry_version"`
+	RayGeometryVersion            string                     `json:"ray_geometry_version"`
+	GridProfile                   string                     `json:"grid_profile"`
+	GridGeometryDigest            string                     `json:"grid_geometry_digest"`
+	RefractionVersion             string                     `json:"refraction_version"`
+	RefractivityVersion           string                     `json:"refractivity_version"`
+	DirectionCoordinate           string                     `json:"direction_coordinate"`
+	DirectionReferenceSurface     string                     `json:"direction_reference_surface"`
+	DirectionReferenceWavelengthM float64                    `json:"direction_reference_wavelength_m"`
+	VacuumDirectionAvailable      *bool                      `json:"vacuum_direction_available,omitempty"`
+	ScienceVersion                string                     `json:"science_version"`
+	SciencePathVersion            string                     `json:"science_path_version,omitempty"`
+	CalibrationVersion            string                     `json:"calibration_version"`
+	CalibrationSHA256             string                     `json:"science_calibration_sha256,omitempty"`
+	CelestialEphemerisVersion     string                     `json:"celestial_ephemeris_version"`
+	CelestialTracks               []astronomy.CelestialTrack `json:"celestial_tracks"`
+	Grid                          AstrodomeDatasetGrid       `json:"grid"`
+	ValidTimes                    []time.Time                `json:"valid_times"`
+	Frames                        []AstrodomeDatasetFrame    `json:"frames"`
 }
 
 type AstrodomeDatasetLocation struct {
@@ -202,6 +205,7 @@ type AstrodomeDatasetInput struct {
 	RefractivityVersion    string
 	CalibrationVersion     string
 	CalibrationSHA256      string
+	CelestialTracks        []astronomy.CelestialTrack
 	Frames                 []AstrodomeDatasetFrameInput
 }
 
@@ -292,6 +296,8 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 		SciencePathVersion:            forecast.AstrodomeSciencePathContractVersion,
 		CalibrationVersion:            input.CalibrationVersion,
 		CalibrationSHA256:             input.CalibrationSHA256,
+		CelestialEphemerisVersion:     astronomy.CelestialEphemerisVersion,
+		CelestialTracks:               input.CelestialTracks,
 		Grid: AstrodomeDatasetGrid{
 			FrameCount: len(frames), NodeCount: profile.NodeCount(),
 			Rings:  append([]forecast.AstrodomeGridRing(nil), profile.Rings...),

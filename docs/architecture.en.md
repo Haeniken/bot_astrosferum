@@ -842,7 +842,7 @@ The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / 
 - timezone is resolved offline; uncertain resolution falls back to explicitly labelled UTC;
 - polygon lookup uses `tzf v1.2.3` with embedded boundary data and no network API;
 - Go timezone data are embedded through `time/tzdata`;
-- sunrise, sunset, moonrise, moonset, phase, illumination, and lunar-cycle day are calculated offline with Meeus algorithms (`github.com/soniakeys/meeus/v3`, MIT); horizon crossings are refined to the second inside each local civil day and rounded to the minute by the UI;
+- sunrise, sunset, moonrise, moonset, phase, illumination, and lunar-cycle day are calculated offline with Meeus algorithms (`github.com/soniakeys/meeus/v3`, MIT); hourly topocentric planning positions and rise/set events are also produced for Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto in the fixed Sun-to-Pluto display order; horizon crossings are refined to the second inside each local civil day and rounded to the minute by the UI;
 - a Saint Petersburg 20 July 2026 regression test limits every one of the four events to two minutes from the supplied reference;
 - an independent Moscow (`55.7558, 37.6173`) regression on the same date uses the [USNO Complete Sun and Moon Data for One Day service](https://aa.usno.navy.mil/data/api.html): reference Sun `04:14/20:57`, Moon `12:25/22:33`; the pure-Go result stays within two minutes;
 - every timestamp and chart in a response uses and labels the same resolved point timezone, for example `Europe/Moscow · MSK (UTC+3)` or fallback `UTC`.
@@ -851,7 +851,7 @@ The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / 
 
 The MVP renders seven images:
 
-1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Jupiter, and Saturn rows contain only event icons and times; Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
+1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto are ordered by distance from the observer's central body: Sun and Moon first, followed by the planetary sequence from Mercury through Pluto. The PNG rows show minute-level rise/set icons and times; the interactive site also shows each exact hourly altitude. Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
 2. **Overall Astronomy Index** — enlarged hourly `1…10` stacked bars. The
    lower segment is retained suitability; colored segments above it are the
    exact Shapley allocation of loss from optical turbulence, effective cloud
@@ -871,7 +871,7 @@ The MVP renders seven images:
 
 PNG contract:
 
-- `3200×1080` weather, `4320×1600` Overall index, `3200×1100` cloud, and `1280×960` remaining charts;
+- `3200×1360` weather, `4320×1600` Overall index, `3200×1100` cloud, and `1280×960` remaining charts;
 - labels readable on a phone;
 - pressure axis with `50 hPa` at top and `1000 hPa` at bottom;
 - hourly weather axis and three-hour upper-air axes;
@@ -890,7 +890,7 @@ The displayed `Transparency %` row is a versioned heuristic, not physical transm
 
 DWD defines [`VIS` in metres and `TQV` in kg/m²](https://isabel.dwd.de/DWD/publikationen/dokumentation/grib/DWD_GRIB2_PARAMETER.htm); kg/m² is numerically equivalent to mm PWV. True optical transparency needs direct AOD/extinction observations: [DWD derives AOD and PWV through Sun, Moon, and stellar photometry](https://www.dwd.de/EN/research/observing_atmosphere/lindenberg_column/radiation/photometry.html). The proxy is therefore only for comparing hours in one forecast and is unsuitable for absolute photometry.
 
-A droplet means a small `T−Td` spread and possible dew and never penalizes seeing. Each event icon is placed at its actual X position. The pure-Go Jupiter/Saturn approximation uses mean orbital elements plus a light-time iteration. It is explicitly an approximate planning aid; scientific validation should compare it against [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/manual.html) for the site and date.
+A droplet means a small `T−Td` spread and possible dew and never penalizes seeing. Each event icon is placed at its actual X position. Mercury through Neptune use the published [JPL approximate-position elements](https://ssd.jpl.nasa.gov/planets/approx_pos.html) with one light-time iteration; Pluto uses the Meeus periodic series. The same versioned hourly topocentric coordinates feed chart 1 and the Astrodome, and an independent all-body regression is checked against a JPL Horizons `AIRLESS` observer table. They are planning ephemerides rather than integrated navigation ephemerides. The photorealistic body icons are presentation-only and do not encode angular size, phase, orientation, or brightness.
 
 Preferred implementation: one pure-Go renderer based on `gonum/plot` and `golang.org/x/image` with an embedded Cyrillic-capable font. A Python/Matplotlib container is unnecessary.
 
@@ -901,7 +901,7 @@ shared-render-v1/<sha256-bundle-key>/<chart>.png
 ```
 
 The SHA-256 identity currently includes the internal marker
-`shared-render-v19-reference-v-band-penalty-decomposition`; changing it invalidates derived
+`shared-render-v23-celestial-distance-aspect`; changing it invalidates derived
 images without renaming or duplicating the bounded cache root.
 
 ## 18. User flow
@@ -1095,7 +1095,7 @@ algorithms:
   cloud_ice_radius_micrometers: 25
 
 render:
-  version: render-v16-overall-penalty-decomposition
+  version: render-v18-celestial-distance
   width: 1280
   height: 960
 
@@ -1286,7 +1286,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - ICON-Ru WIS cannot affect production because its shadow adapter is not yet implemented;
 - provider, grid, run, and freshness are visible;
 - weather, dew, and fog information is visible in the first chart;
-- one readable `3200×1080` weather PNG, one `4320×1600` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
+- one readable `3200×1360` weather PNG, one `4320×1600` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
 - seeing is called a forecast index and includes confidence;
 - incomplete runs never publish;
 - current model manifests survive restart; platform cursors are reacquired from the APIs;
@@ -1822,7 +1822,7 @@ published. Their identity includes coordinates, run and manifest digest,
 versions, and calibration. Calculation-request schema v3 also binds the
 science-path version, apparent-direction contract, and SHA-256 of the complete
 configured science calibration; the same digest is retained in the dataset.
-The narrow `astrodome-dataset-writer-v2` identity also participates in the
+The narrow `astrodome-dataset-writer-v4-celestial-distance-aspect` identity also participates in the
 calculation cache key, so a writer correction regenerates the payload without
 claiming a different scientific formula or dataset schema.
 An earlier request or a bot/worker calibration mismatch fails closed rather
@@ -1929,7 +1929,7 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v2` or `horizon-interactive-v1` JSON; the
+versioned `forecast-interactive-v4-celestial-distance-aspect` or `horizon-interactive-v1` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
 weather and cloud retain one exact native hourly axis, Overall retains a
 narrower exact subset of that axis when pressure-profile support ends earlier, while
@@ -1938,11 +1938,15 @@ axis; none is resampled from another. Overall may cover a narrower exact subset
 when the current surface/cloud window extends beyond pressure-profile support.
 Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
-`forecast-interactive-v2` also pins `algorithms.overall` as
+`forecast-interactive-v4-celestial-distance-aspect` also pins `algorithms.overall` as
 `overall-astronomy-index-v1`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
-`algorithms.overall_calibration_sha256`; the browser validates this provenance
-before drawing. The separate Johnson-V diagnostic retains
+`algorithms.overall_calibration_sha256` and the exact
+`celestial-horizontal-distance-aspect-jpl-meeus-v2` ephemeris identity. It carries ten
+canonical tracks whose samples match the exact weather-hour axis. The browser
+validates this provenance before drawing and uses spherical interpolation only
+to densify dashed presentation paths; selected-hour values remain the stored
+server samples. The separate Johnson-V diagnostic retains
 NASA GEOS-CF AOD550/total-column-ozone provenance and is not reinterpreted as
 an Overall factor.
 `horizon-interactive-v1` pins the Horizon cache `artifact_key`, observer

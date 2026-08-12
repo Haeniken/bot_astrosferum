@@ -11,21 +11,26 @@ import (
 const synodicMonthDays = 29.53059
 
 type Day struct {
-	Date                    time.Time `json:"date"`
-	Sunrise                 time.Time `json:"sunrise,omitempty"`
-	Sunset                  time.Time `json:"sunset,omitempty"`
-	Moonrise                time.Time `json:"moonrise,omitempty"`
-	Moonset                 time.Time `json:"moonset,omitempty"`
-	MoonAlwaysUp            bool      `json:"moon_always_up,omitempty"`
-	MoonAlwaysDown          bool      `json:"moon_always_down,omitempty"`
-	MoonPhase               string    `json:"moon_phase"`
-	MoonCycle               float64   `json:"moon_cycle"`
-	MoonIlluminationPercent float64   `json:"moon_illumination_percent"`
-	MoonAgeDays             float64   `json:"moon_age_days"`
-	JupiterRise             time.Time `json:"jupiter_rise,omitempty"`
-	JupiterSet              time.Time `json:"jupiter_set,omitempty"`
-	SaturnRise              time.Time `json:"saturn_rise,omitempty"`
-	SaturnSet               time.Time `json:"saturn_set,omitempty"`
+	Date                    time.Time         `json:"date"`
+	Sunrise                 time.Time         `json:"sunrise,omitempty"`
+	Sunset                  time.Time         `json:"sunset,omitempty"`
+	Moonrise                time.Time         `json:"moonrise,omitempty"`
+	Moonset                 time.Time         `json:"moonset,omitempty"`
+	MoonAlwaysUp            bool              `json:"moon_always_up,omitempty"`
+	MoonAlwaysDown          bool              `json:"moon_always_down,omitempty"`
+	MoonPhase               string            `json:"moon_phase"`
+	MoonCycle               float64           `json:"moon_cycle"`
+	MoonIlluminationPercent float64           `json:"moon_illumination_percent"`
+	MoonAgeDays             float64           `json:"moon_age_days"`
+	Planets                 []PlanetDayEvents `json:"planets"`
+}
+
+type PlanetDayEvents struct {
+	Body       CelestialBody `json:"body"`
+	Rise       time.Time     `json:"rise,omitempty"`
+	Set        time.Time     `json:"set,omitempty"`
+	AlwaysUp   bool          `json:"always_up,omitempty"`
+	AlwaysDown bool          `json:"always_down,omitempty"`
 }
 
 type Series struct {
@@ -43,11 +48,26 @@ func Compute(location forecast.Location, start, end time.Time) (Series, error) {
 	}
 	first := localMidnight(start, zone)
 	last := localMidnight(end, zone)
+	// Event searches evaluate the complete local civil days, including the
+	// end point of the final day. Enforce the common planning-ephemeris domain
+	// before any planet path can reach a different JPL approximation family.
+	if err := validateCelestialEphemerisInstant(first); err != nil {
+		return Series{}, err
+	}
+	if finalBoundary := last.AddDate(0, 0, 1); !finalBoundary.Before(celestialEphemerisLastInstant) {
+		return Series{}, fmt.Errorf("astronomy event interval reaches beyond celestial planning ephemeris boundary %s", celestialEphemerisLastInstant.Format(time.DateOnly))
+	}
 	series := Series{Location: location}
 	for date := first; !date.After(last); date = date.AddDate(0, 0, 1) {
 		sun, moon := eventsForLocalDay(date, location.Latitude, location.Longitude)
-		jupiter := planetEventsForLocalDay(date, location.Latitude, location.Longitude, planetJupiter)
-		saturn := planetEventsForLocalDay(date, location.Latitude, location.Longitude, planetSaturn)
+		planets := make([]PlanetDayEvents, 0, len(celestialBodyOrder)-2)
+		for _, body := range celestialBodyOrder[2:] {
+			events := planetEventsForLocalDay(date, location.Latitude, location.Longitude, body)
+			planets = append(planets, PlanetDayEvents{
+				Body: body, Rise: validEvent(events.rise, date), Set: validEvent(events.set, date),
+				AlwaysUp: events.alwaysUp, AlwaysDown: events.alwaysDown,
+			})
+		}
 		phase := moonIllumination(date.Add(12 * time.Hour))
 		day := Day{
 			Date: date, Sunrise: validEvent(sun.rise, date), Sunset: validEvent(sun.set, date),
@@ -55,12 +75,20 @@ func Compute(location forecast.Location, start, end time.Time) (Series, error) {
 			MoonAlwaysUp: moon.alwaysUp, MoonAlwaysDown: moon.alwaysDown,
 			MoonPhase: phaseName(phase.phase), MoonCycle: phase.phase, MoonIlluminationPercent: phase.fraction * 100,
 			MoonAgeDays: phase.phase * synodicMonthDays,
-			JupiterRise: validEvent(jupiter.rise, date), JupiterSet: validEvent(jupiter.set, date),
-			SaturnRise: validEvent(saturn.rise, date), SaturnSet: validEvent(saturn.set, date),
+			Planets:     planets,
 		}
 		series.Days = append(series.Days, day)
 	}
 	return series, nil
+}
+
+func (day Day) PlanetEvents(body CelestialBody) (PlanetDayEvents, bool) {
+	for _, events := range day.Planets {
+		if events.Body == body {
+			return events, true
+		}
+	}
+	return PlanetDayEvents{}, false
 }
 
 func (series Series) DayAt(at time.Time) (Day, bool) {

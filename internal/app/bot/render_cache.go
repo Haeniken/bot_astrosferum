@@ -16,7 +16,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "shared-render-v21-interactive-axes"
+const renderCacheVersion = "shared-render-v23-celestial-distance-aspect"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, composition forecast.AtmosphericCompositionSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
@@ -41,6 +41,7 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 		"algorithm=" + vertical.AlgorithmVersion,
 		"overall=" + forecast.OverallIndexAlgorithmVersion,
 		"cloud_obstruction=" + forecast.CloudObstructionAlgorithmVersion,
+		"celestial_ephemeris=" + astronomy.CelestialEphemerisVersion,
 		fmt.Sprintf("size=%dx%d", options.Width, options.Height),
 		"language=" + options.Language,
 		"render=" + render.Version,

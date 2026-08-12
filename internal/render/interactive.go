@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const ForecastInteractiveSchema = "forecast-interactive-v2"
+const ForecastInteractiveSchema = "forecast-interactive-v4-celestial-distance-aspect"
 
 // ForecastInteractiveDataset contains the exact prepared values behind the
 // seven ordinary forecast charts. It is presentation data, not a second
@@ -55,6 +55,7 @@ type ForecastInteractiveAlgorithms struct {
 	Render                   string `json:"render"`
 	ReferenceV               string `json:"reference_v"`
 	ReferenceVAtm            string `json:"reference_v_atmosphere"`
+	CelestialEphemeris       string `json:"celestial_ephemeris"`
 }
 
 type ForecastInteractiveInputs struct {
@@ -76,8 +77,9 @@ type ForecastInteractiveUpperAir struct {
 }
 
 type ForecastInteractiveWeather struct {
-	Hours     []ForecastInteractiveWeatherHour `json:"hours"`
-	Astronomy astronomy.Series                 `json:"astronomy"`
+	Hours           []ForecastInteractiveWeatherHour `json:"hours"`
+	Astronomy       astronomy.Series                 `json:"astronomy"`
+	CelestialTracks []astronomy.CelestialTrack       `json:"celestial_tracks"`
 }
 
 type ForecastInteractiveWeatherHour struct {
@@ -110,6 +112,7 @@ func PrepareForecastInteractiveDataset(
 	surface forecast.SurfaceSeries,
 	cloud forecast.CloudSeries,
 	sky astronomy.Series,
+	celestialTracks []astronomy.CelestialTrack,
 	overall []forecast.OverallIndexFrame,
 	calibration forecast.OverallIndexCalibration,
 ) (ForecastInteractiveDataset, forecast.Diagnostics, forecast.CloudDiagnostics, [][]float64, error) {
@@ -145,12 +148,18 @@ func PrepareForecastInteractiveDataset(
 		}
 	}
 	surfaceTimes := make(map[int64]struct{}, len(surface.Frames))
+	celestialTimes := make([]time.Time, len(surface.Frames))
 	for index, frame := range surface.Frames {
 		if index > 0 && frame.ValidAt.Sub(surface.Frames[index-1].ValidAt) != time.Hour {
 			return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
 				fmt.Errorf("interactive surface time axis is not hourly at frame %d", index)
 		}
 		surfaceTimes[frame.ValidAt.UnixNano()] = struct{}{}
+		celestialTimes[index] = frame.ValidAt.UTC()
+	}
+	if err := astronomy.ValidateCelestialTracks(celestialTracks, celestialTimes); err != nil {
+		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
+			fmt.Errorf("interactive celestial tracks: %w", err)
 	}
 	cloudTimes := make(map[int64]struct{}, len(cloudDiagnostics.Times))
 	for index, validAt := range cloudDiagnostics.Times {
@@ -227,6 +236,7 @@ func PrepareForecastInteractiveDataset(
 			CloudObstruction:         forecast.CloudObstructionAlgorithmVersion,
 			OverallCalibrationSHA256: calibrationDigest, Render: Version,
 			ReferenceV: forecast.ReferenceVBandContractVersion, ReferenceVAtm: forecast.ReferenceVBandAtmosphereVersion,
+			CelestialEphemeris: astronomy.CelestialEphemerisVersion,
 		},
 		Inputs: ForecastInteractiveInputs{VerticalProduct: vertical.Product, SurfaceProduct: surface.Product, CloudProduct: cloud.Product},
 		UpperAir: ForecastInteractiveUpperAir{
@@ -235,7 +245,7 @@ func PrepareForecastInteractiveDataset(
 			DirectionDeltaDegrees: nullableMatrix(diagnostics.DirectionDelta), SeeingIndex: nullableVector(diagnostics.SeeingIndex),
 			OpticalSeeingArcsec: nullableVector(diagnostics.OpticalSeeingArcsec), Confidence: diagnostics.Confidence,
 		},
-		Weather: ForecastInteractiveWeather{Hours: hours, Astronomy: sky},
+		Weather: ForecastInteractiveWeather{Hours: hours, Astronomy: sky, CelestialTracks: celestialTracks},
 		Cloud: ForecastInteractiveCloud{
 			TimesUTC: cloudDiagnostics.Times, PressureHPA: cloudDiagnostics.PressureHPA, HeightKM: cloudDiagnostics.HeightKM,
 			SurfaceElevationM: cloudDiagnostics.SurfaceElevationM, ObstructionPercent: nullableMatrix(obstruction),

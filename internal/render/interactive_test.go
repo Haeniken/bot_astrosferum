@@ -68,8 +68,16 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 	if err != nil {
 		t.Fatal(err)
 	}
+	celestialTimes := make([]time.Time, len(surface.Frames))
+	for index := range surface.Frames {
+		celestialTimes[index] = surface.Frames[index].ValidAt
+	}
+	celestialTracks, err := astronomy.ComputeCelestialTracks(location, celestialTimes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dataset, diagnostics, _, obstruction, err := PrepareForecastInteractiveDataset(
-		vertical, surface, cloud, sky, overall, forecast.DefaultOverallIndexCalibration(),
+		vertical, surface, cloud, sky, celestialTracks, overall, forecast.DefaultOverallIndexCalibration(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +107,7 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 	}
 	shortOverall := overall[1:71]
 	shortDataset, _, _, _, err := PrepareForecastInteractiveDataset(
-		vertical, surface, cloud, sky, shortOverall, forecast.DefaultOverallIndexCalibration(),
+		vertical, surface, cloud, sky, celestialTracks, shortOverall, forecast.DefaultOverallIndexCalibration(),
 	)
 	if err != nil {
 		t.Fatalf("prepare narrower physical Overall overlap: %v", err)
@@ -125,7 +133,7 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 		"Overall": {surface: surface, cloud: cloud, overall: gapOverall},
 	} {
 		if _, _, _, _, err := PrepareForecastInteractiveDataset(
-			vertical, input.surface, input.cloud, sky, input.overall, forecast.DefaultOverallIndexCalibration(),
+			vertical, input.surface, input.cloud, sky, celestialTracks, input.overall, forecast.DefaultOverallIndexCalibration(),
 		); err == nil {
 			t.Fatalf("%s hourly gap was accepted", name)
 		}
@@ -134,7 +142,7 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 	gapVertical.Frames = append([]forecast.VerticalFrame(nil), vertical.Frames...)
 	gapVertical.Frames[1].ValidAt = gapVertical.Frames[1].ValidAt.Add(time.Hour)
 	if _, _, _, _, err := PrepareForecastInteractiveDataset(
-		gapVertical, surface, cloud, sky, overall, forecast.DefaultOverallIndexCalibration(),
+		gapVertical, surface, cloud, sky, celestialTracks, overall, forecast.DefaultOverallIndexCalibration(),
 	); err == nil || !strings.Contains(err.Error(), "not three-hourly") {
 		t.Fatalf("upper-air cadence error = %v", err)
 	}

@@ -26,7 +26,7 @@ import (
 const (
 	DefaultWidth  = 1280
 	DefaultHeight = 960
-	Version       = "render-v16-overall-penalty-decomposition"
+	Version       = "render-v18-celestial-distance"
 )
 
 type Options struct {

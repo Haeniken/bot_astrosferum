@@ -36,7 +36,7 @@ Deployment target: operator-managed host
 - an independent surface sync publishes 79 hourly `f000…f078` bundles containing `T_2M`, `TD_2M`, `RELHUM_2M`, `CLCT/CLCL/CLCM/CLCH`, `TOT_PREC`, `U_10M`, `V_10M`, `VMAX_10M`, `PMSL`, `VIS`, `TQV`, and exact total-column `TQC/TQI`; `PMSL` is retained for the weather product only and is never passed to SPECTRL2;
 - both platforms show 72 hours; fog uses direct `VIS`, while the cloud chart shows effective obstruction by height from `CLC+QC+QI` and phase-resolved optical depth;
 - dew is only an equipment-preparation advisory and does not lower seeing or the practical score;
-- pure-Go astronomy calculates Sun, Moon, Jupiter, and Saturn events; Saint Petersburg and Moscow Sun/Moon regressions constrain the result to two minutes against reference data, while planetary events remain explicitly approximate;
+- pure-Go astronomy calculates Sun/Moon state and hourly topocentric planning ephemerides plus rise/set events for Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto; Sun/Moon event regressions remain within two minutes of reference data, and an all-body JPL Horizons `AIRLESS` control remains within `0.15 degrees` while preserving the planning-accuracy qualification;
 - both platforms deliver the same seven PNG files; the enlarged `4320×1600`
   Overall chart combines hybrid ICON TKE/MH + HMNSP99 seeing, `tau0`, effective
   `CLCT+TQC+TQI` cloud transmission, fog, mild surface wind, and a binary
@@ -299,7 +299,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v2` and `horizon-interactive-v1` JSON
+  the bot publishes `forecast-interactive-v4-celestial-distance-aspect` and `horizon-interactive-v1` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:
@@ -310,7 +310,14 @@ to a single azimuth-independent zenith. Completed code includes:
   Go serializes the additive Overall penalty points and the browser only draws
   them. The payload pins `overall-astronomy-index-v1`,
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
-  website-only cache miss skips PNG rasterization. The separate Johnson-V diagnostic exposes NASA GEOS-CF provenance when
+  website-only cache miss skips PNG rasterization. It additionally carries ten
+  exact, canonical hourly topocentric tracks under
+  `celestial-horizontal-distance-aspect-jpl-meeus-v2`; shortest-arc interpolation is confined
+  to dashed presentation geometry and never changes a selected-hour or
+  meteorological value. The same contract carries a pinned exhaustive-hourly
+  model-distance scale, an integer forecast-mean closeness label, the exact-hour
+  closeness displayed to two decimals, signed range rate, and Saturn ring-opening
+  angle; none of these diagnostics changes Overall. The separate Johnson-V diagnostic exposes NASA GEOS-CF provenance when
   composition is available and never becomes an implicit Overall penalty;
 - the Horizon interactive payload pins its exact cache artifact, ICON HHL
   observer-surface elevation, ICON-EU provider/run/grid, Horizon science
@@ -453,8 +460,8 @@ Production uses the following replacement:
 - version markers match the new contract:
   `seeing-hybrid-tke-mh-hmnsp99-v7`,
   `conditions-v8-precip-veto-penalty-decomposition`,
-  `render-v16-overall-penalty-decomposition`, and
-  `shared-render-v19-reference-v-band-penalty-decomposition`; Reference V is
+  `render-v18-celestial-distance`, and
+  `shared-render-v23-celestial-distance-aspect`; Reference V is
   independently keyed by `reference-v-band-zenith-efficiency-v2`,
   `reference-v-band-spectrl2-ks91-v3`, and
   `reference-v-band-benchmark-v1`.

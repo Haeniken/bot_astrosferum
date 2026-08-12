@@ -43,7 +43,7 @@ func MoonStateAt(location forecast.Location, at time.Time) MoonState {
 		return state
 	}
 
-	altitude, azimuth := moonTopocentricHorizontal(
+	altitude, azimuth := topocentricHorizontal(
 		at,
 		location.Latitude*degree,
 		location.Longitude,
@@ -66,34 +66,6 @@ func MoonStateAt(location forecast.Location, at time.Time) MoonState {
 		finite(state.IlluminatedFraction) &&
 		finite(state.PhaseAngleDegrees)
 	return state
-}
-
-func moonTopocentricHorizontal(at time.Time, latitudeRadians, longitudeDegrees float64, coordinates equatorial) (float64, float64) {
-	// Meeus, Astronomical Algorithms, chapter 40, equations 40.6--40.7.
-	// At zero ellipsoidal height these are the IAU 1976 Earth parallax
-	// constants rho*sin(phi') and rho*cos(phi').
-	u := math.Atan((1 - earthFlattening) * math.Tan(latitudeRadians))
-	rhoSinPhiPrime := (1 - earthFlattening) * math.Sin(u)
-	rhoCosPhiPrime := math.Cos(u)
-	sinHorizontalParallax := earthRadius / coordinates.distance
-	hourAngle := localHourAngle(at, longitudeDegrees, coordinates.ra)
-
-	a := math.Cos(coordinates.dec) * math.Sin(hourAngle)
-	b := math.Cos(coordinates.dec)*math.Cos(hourAngle) - rhoCosPhiPrime*sinHorizontalParallax
-	c := math.Sin(coordinates.dec) - rhoSinPhiPrime*sinHorizontalParallax
-	norm := math.Sqrt(a*a + b*b + c*c)
-	topocentricHourAngle := math.Atan2(a, b)
-	topocentricDeclination := math.Asin(c / norm)
-
-	altitude := altitude(topocentricHourAngle, latitudeRadians, topocentricDeclination)
-	east := -math.Cos(topocentricDeclination) * math.Sin(topocentricHourAngle)
-	north := math.Sin(topocentricDeclination)*math.Cos(latitudeRadians) -
-		math.Cos(topocentricDeclination)*math.Cos(topocentricHourAngle)*math.Sin(latitudeRadians)
-	azimuth := math.Atan2(east, north)
-	if azimuth < 0 {
-		azimuth += 2 * math.Pi
-	}
-	return altitude, azimuth
 }
 
 func finite(value float64) bool {
