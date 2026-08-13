@@ -241,7 +241,7 @@ func TestStartProvidesUsageAndInterpretation(t *testing.T) {
 		"/forecast 59.9386 30.3141", "Forecast Wind Seeing Index", "1…10", "часовой зоне",
 		"по горизонтали", "сдвиг", "облачность не меняет wind-based seeing", "850 hPa ≈ 1,5 км",
 		"нижние", "средние", "верхние", "длинные выдержки", "не означает плохой сиинг",
-		"сохранившаяся пригодность", "точное аддитивное разложение", "индекс 1", "неполные данные",
+		"сохранившаяся пригодность", "точно разлагают потери", "индекс 1", "неполные данные",
 		"Эталон V, зенит", "PWV/AOD/O₃/Луна/PSF-сиинг", "Нет GEOS-CF", "Overall доступен", "в Overall Index она не входит",
 	} {
 		if !strings.Contains(messenger.messages[0].text, expected) {
@@ -537,8 +537,8 @@ func TestHandlerOffersFullPeriodHorizonOnlyForICONEU(t *testing.T) {
 	if len(messenger.actionMessages) != 1 || len(messenger.actionMessages[0]) != 1 || len(messenger.actionMessages[0][0]) != 1 {
 		t.Fatalf("unexpected Horizon keyboard: %#v", messenger.actionMessages)
 	}
-	if len(messenger.actionTexts) != 1 || !strings.Contains(messenger.actionTexts[0], "73 почасовых срока") ||
-		!strings.Contains(messenger.actionTexts[0], "f000…f072") {
+	if len(messenger.actionTexts) != 1 || !strings.Contains(messenger.actionTexts[0], "72 физических почасовых срока") ||
+		!strings.Contains(messenger.actionTexts[0], "f001…f072") {
 		t.Fatalf("unexpected Horizon prompt: %#v", messenger.actionTexts)
 	}
 	for _, forbidden := range []string{"дерев", "здани", "локальн"} {
@@ -593,7 +593,7 @@ func TestStructuredWebsiteForecastSkipsPNGRasterizationAndDelivery(t *testing.T)
 	if err := handler.replyToLocation(t.Context(), 501, 501, 59.9386, 30.3141, languageEnglish); err != nil {
 		t.Fatal(err)
 	}
-	if len(messenger.dataset) == 0 || !strings.Contains(string(messenger.dataset), `"schema_version":"forecast-interactive-v4-celestial-distance-aspect"`) {
+	if len(messenger.dataset) == 0 || !strings.Contains(string(messenger.dataset), `"schema_version":"forecast-interactive-v5-explicit-heuristics"`) {
 		t.Fatalf("structured website dataset = %q", messenger.dataset)
 	}
 	if messenger.photos != 0 || messenger.documents != 0 {

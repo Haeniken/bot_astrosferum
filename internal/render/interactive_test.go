@@ -32,7 +32,7 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 	for index := range 25 {
 		validAt := base.Add(time.Duration(index*3) * time.Hour)
 		vertical.Frames = append(vertical.Frames, forecast.VerticalFrame{
-			ValidAt: validAt, Confidence: 0.96 - 0.26*float64(index)/24,
+			ValidAt: validAt, LeadTimeQualityHeuristic: 0.96 - 0.26*float64(index)/24,
 			Levels: []forecast.VerticalLevel{
 				{PressureHPA: 850, HeightM: 1500, TemperatureK: 280, UMS: 3 + float64(index), VMS: 4},
 				{PressureHPA: 500, HeightM: 5600, TemperatureK: 250, UMS: 10, VMS: 5 + float64(index)},
@@ -53,7 +53,7 @@ func TestPrepareForecastInteractiveDatasetPreservesPreparedAxesAndMissingValues(
 			ValidAt: validAt, TemperatureC: 14, DewPointC: 10, RelativeHumidityPercent: 76,
 			CloudCoverPercent: 35, LowCloudCoverPercent: 10, MidCloudCoverPercent: 20, HighCloudCoverPercent: 35,
 			WindSpeedMS: 3, WindGustMS: 6, WindDirectionDegrees: 240, PressureHPA: 1005,
-			VisibilityKM: 35, PrecipitableWaterMM: 18, TransparencyAvailable: true,
+			VisibilityKM: 35, PrecipitableWaterMM: 18, FogHeuristicAvailable: true, TransparencyHeuristicAvailable: true,
 		})
 		cloud.Frames = append(cloud.Frames, forecast.CloudFrame{ValidAt: validAt, Levels: []forecast.CloudLevel{
 			{ModelLevel: 70, PressureHPA: 850, HeightM: 1500, LayerThicknessM: 500, TemperatureK: 280, CoverPercent: 10, CloudLiquidKgKg: 1e-5},

@@ -288,7 +288,7 @@ func TestAstrodomeDatasetRejectsOrderPartialUnknownAndFabricatedDiagnostics(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	withUnknown := bytes.Replace(encoded, []byte(`{"schema_version":3`), []byte(`{"unknown":true,"schema_version":3`), 1)
+	withUnknown := bytes.Replace(encoded, []byte(`{"schema_version":4`), []byte(`{"unknown":true,"schema_version":4`), 1)
 	if bytes.Equal(withUnknown, encoded) {
 		t.Fatal("unknown-field test did not mutate the current schema")
 	}
@@ -470,7 +470,7 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 			ValidAt: validAt,
 			Surface: forecast.AstrodomeScienceSiteInputs{
 				SourceIdentity: identity, ValidAt: validAt, WindSpeed10MMS: 2, WindGust10MMS: 4,
-				FogState: forecast.AstrodomeScienceFogNone, ForecastLeadHours: float64(frameIndex),
+				FogHeuristic: forecast.AstrodomeScienceFogNone, ForecastLeadHours: float64(frameIndex),
 				PrecipitationIntervalStart: validAt.Add(-time.Hour), PrecipitationIntervalEnd: validAt,
 			},
 			SolarAltitudeDeg: -20, Nodes: nodes,
@@ -536,7 +536,7 @@ func completeAstrodomeScienceNode(
 			IntegratedCn2Relative: &zero, WindWeightedCn2Relative: &zero,
 		},
 		Quality: forecast.AstrodomeScienceQuality{
-			LeadQuality: leadQuality, GeometryCoverage: 1, TurbulencePathCoverage: 1,
+			LeadTimeQualityHeuristic: leadQuality, GeometryCoverage: 1, TurbulencePathCoverage: 1,
 			CloudPathCoverage: 1, HumidityPathCoverage: floatPointer(1), TemporalResolutionHours: 1,
 			QuadratureConverged: true, TopClosed: true, Category: category,
 		},

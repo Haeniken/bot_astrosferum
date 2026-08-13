@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	AstrodomeDatasetSchemaVersion = 3
+	AstrodomeDatasetSchemaVersion = 4
 	// AstrodomeDatasetWriterVersion participates in the calculation cache key.
 	// Increment it when a writer correction requires regeneration while the
 	// already-declared dataset schema and scientific meaning remain unchanged.
-	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v4-celestial-distance-aspect"
+	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v5-explicit-heuristics"
 	maximumAstrodomeDatasetBytes  = 128 << 20
 )
 
@@ -113,11 +113,11 @@ type AstrodomeDatasetFrame struct {
 // shared by every direction in the frame. It deliberately does not duplicate
 // these values into thousands of nodes.
 type AstrodomeDatasetSurfaceCommon struct {
-	WindSpeed10MMS             float64                           `json:"wind_speed_10m_ms"`
-	WindGust10MMS              float64                           `json:"wind_gust_10m_ms"`
-	FogState                   forecast.AstrodomeScienceFogState `json:"fog_state"`
-	PrecipitationRateMMPerHour float64                           `json:"precipitation_rate_mm_per_hour"`
-	ForecastLeadHours          float64                           `json:"forecast_lead_hours"`
+	WindSpeed10MMS             float64                               `json:"wind_speed_10m_ms"`
+	WindGust10MMS              float64                               `json:"wind_gust_10m_ms"`
+	FogHeuristic               forecast.AstrodomeScienceFogHeuristic `json:"fog_heuristic"`
+	PrecipitationRateMMPerHour float64                               `json:"precipitation_rate_mm_per_hour"`
+	ForecastLeadHours          float64                               `json:"forecast_lead_hours"`
 }
 
 type AstrodomeDatasetECEFVector struct {
@@ -137,17 +137,17 @@ type AstrodomeDatasetFactors struct {
 // AstrodomeDatasetQuality keeps temporal resolution in hours. It is an input
 // diagnostic, not a dimensionless confidence score and not a probability.
 type AstrodomeDatasetQuality struct {
-	LeadQuality             float64  `json:"lead_quality"`
-	GeometryCoverage        float64  `json:"geometry_coverage"`
-	TurbulencePathCoverage  float64  `json:"turbulence_path_coverage"`
-	CloudPathCoverage       float64  `json:"cloud_path_coverage"`
-	HumidityPathCoverage    *float64 `json:"humidity_path_coverage"`
-	TemporalResolutionHours float64  `json:"temporal_resolution_hours"`
-	QuadratureConvergence   float64  `json:"quadrature_convergence"`
-	ApproximationLengthM    *float64 `json:"approximation_length_m,omitempty"`
-	TopClosure              float64  `json:"top_closure"`
-	MandatoryComplete       bool     `json:"mandatory_complete"`
-	ReasonCodes             []string `json:"reason_codes"`
+	LeadTimeQualityHeuristic float64  `json:"lead_time_quality_heuristic"`
+	GeometryCoverage         float64  `json:"geometry_coverage"`
+	TurbulencePathCoverage   float64  `json:"turbulence_path_coverage"`
+	CloudPathCoverage        float64  `json:"cloud_path_coverage"`
+	HumidityPathCoverage     *float64 `json:"humidity_path_coverage"`
+	TemporalResolutionHours  float64  `json:"temporal_resolution_hours"`
+	QuadratureConvergence    float64  `json:"quadrature_convergence"`
+	ApproximationLengthM     *float64 `json:"approximation_length_m,omitempty"`
+	TopClosure               float64  `json:"top_closure"`
+	MandatoryComplete        bool     `json:"mandatory_complete"`
+	ReasonCodes              []string `json:"reason_codes"`
 }
 
 // AstrodomeDatasetNumericalError contains diagnostics defined by the pinned
@@ -449,7 +449,7 @@ func decodeAstrodomeDatasetBytes(encoded []byte) (AstrodomeDataset, error) {
 func mapAstrodomeSurface(source forecast.AstrodomeScienceSiteInputs) AstrodomeDatasetSurfaceCommon {
 	return AstrodomeDatasetSurfaceCommon{
 		WindSpeed10MMS: source.WindSpeed10MMS, WindGust10MMS: source.WindGust10MMS,
-		FogState: source.FogState, PrecipitationRateMMPerHour: source.PrecipitationRateMMPerHour,
+		FogHeuristic: source.FogHeuristic, PrecipitationRateMMPerHour: source.PrecipitationRateMMPerHour,
 		ForecastLeadHours: source.ForecastLeadHours,
 	}
 }
@@ -464,7 +464,7 @@ func mapAstrodomeQuality(source forecast.AstrodomeScienceNode) AstrodomeDatasetQ
 		topClosure = 1
 	}
 	return AstrodomeDatasetQuality{
-		LeadQuality: source.Quality.LeadQuality, GeometryCoverage: source.Quality.GeometryCoverage,
+		LeadTimeQualityHeuristic: source.Quality.LeadTimeQualityHeuristic, GeometryCoverage: source.Quality.GeometryCoverage,
 		TurbulencePathCoverage:  source.Quality.TurbulencePathCoverage,
 		CloudPathCoverage:       source.Quality.CloudPathCoverage,
 		HumidityPathCoverage:    cloneFloat(source.Quality.HumidityPathCoverage),
@@ -494,7 +494,7 @@ func astrodomeQualityReasons(source forecast.AstrodomeScienceNode) []string {
 	appendReason(source.Quality.CloudPathCoverage < 1, "cloud_coverage_limited")
 	appendReason(source.Quality.HumidityPathCoverage == nil, "humidity_unavailable")
 	appendReason(source.Quality.TemporalResolutionHours > 1, "coarse_temporal_resolution")
-	appendReason(source.Quality.LeadQuality < 0.85, "forecast_lead_limited")
+	appendReason(source.Quality.LeadTimeQualityHeuristic < 0.85, "forecast_lead_limited")
 	if !source.Available && len(reasons) == 0 {
 		reasons = append(reasons, "mandatory_data_incomplete")
 	}

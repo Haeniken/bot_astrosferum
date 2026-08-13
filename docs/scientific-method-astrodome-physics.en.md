@@ -3,7 +3,7 @@
 [← Main scientific method](scientific-method.en.md) ·
 [Certified geometry and root isolation →](scientific-method-astrodome-numerical-roots.en.md)
 
-**Status:** part of the canonical scientific method, version 2.0. Splitting the
+**Status:** part of the canonical scientific method, version 2.1. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 
@@ -445,7 +445,7 @@ The immutable source identity contains provider, product, grid, run base time,
 run ID, manifest digest, and `astrodome-icon-primitives-v2`. Any identity
 change during reconstruction invalidates the node.
 
-The separate calculation-request schema is v3. It carries the fixed science
+The separate calculation-request schema is v4. It carries the fixed science
 and path versions, the apparent-direction contract, and
 `science_calibration_sha256`: SHA-256 of the canonical JSON serialization of
 the complete validated `AstrodomeScienceCalibration`. The same configured

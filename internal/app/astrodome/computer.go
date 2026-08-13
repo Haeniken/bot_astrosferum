@@ -44,6 +44,98 @@ type Computer struct {
 
 var _ directional.AstrodomeDatasetComputer = (*Computer)(nil)
 
+// ComputeRefractedHorizon applies the Astrodome primitive reconstruction,
+// full Ciddor ray trace, native event partition, and shared science kernel to
+// the exact eight-ray Horizon ring. It is deliberately a second presentation
+// grid over one physical implementation, not a separate Horizon model.
+func (computer *Computer) ComputeRefractedHorizon(
+	ctx context.Context,
+	source directional.SourceIdentity,
+	location forecast.Location,
+) (result []forecast.HorizonFrame, surfaceHeightM float64, resultErr error) {
+	if computer == nil {
+		return nil, 0, errors.New("astrodome computer is required")
+	}
+	if err := forecast.ValidateCoordinates(location.Latitude, location.Longitude); err != nil {
+		return nil, 0, err
+	}
+	loaded, err := iconeu.LoadCurrentDomeManifest(computer.dataRoot)
+	if err != nil {
+		return nil, 0, fmt.Errorf("load current ICON-EU directional manifest: %w", err)
+	}
+	if source.Provider != "ICON-EU" || source.RunID != loaded.RunID ||
+		source.GridProfile != forecast.HorizonRefractionGridProfile ||
+		source.GeometryDigest != forecast.HorizonRefractionGeometryDigest() {
+		return nil, 0, directional.CodedError{Code: "source_mismatch", Err: errors.New("horizon source differs from the pinned refracted request")}
+	}
+	leaseManager, err := model.NewRunLeaseManager(filepath.Join(computer.dataRoot, "state", "run-leases"))
+	if err != nil {
+		return nil, 0, err
+	}
+	lease, err := leaseManager.AcquireShared(ctx, "icon-eu", loaded.RunID, model.RunRetentionLeaseDigest)
+	if err != nil {
+		return nil, 0, fmt.Errorf("acquire ICON-EU Horizon run retention lease: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, lease.Close()) }()
+	volume, err := iconeu.NewDomeVolume(computer.dataRoot, computer.tempRoot, loaded, computer.ecCodesWorkers)
+	if err != nil {
+		return nil, 0, err
+	}
+	refractionCalibration := forecast.DefaultAstrodomeRefractionCalibration()
+	footprint, err := volume.PreloadHorizonRefractionFootprint(ctx, location, refractionCalibration, computer.residentLimitBytes)
+	if err != nil {
+		return nil, 0, directional.CodedError{Code: "footprint_unavailable", Err: err}
+	}
+	defer func() { resultErr = errors.Join(resultErr, footprint.Close()) }()
+	reconstructor, err := forecast.NewAstrodomePrimitiveReconstructor(footprint)
+	if err != nil {
+		return nil, 0, err
+	}
+	surfaceHeightM, err = footprint.AstrodomeSurfaceHeightAt(ctx, location)
+	if err != nil {
+		return nil, 0, err
+	}
+	observerHeightM := surfaceHeightM + forecast.AstrodomeRefractionApertureHeightAGLM
+	refractivityCalibration := forecast.DefaultAstrodomeRefractivityCalibration()
+	nodeDefinitions := forecast.HorizonRefractionNodes()
+	identity := footprint.Identity()
+	frames := make([]forecast.HorizonFrame, 0, 72)
+	for _, step := range loaded.ModelSteps {
+		validAt := step.ValidAt.UTC()
+		// f000 has no physical one-hour precipitation interval. Horizon retains
+		// exactly 72 native hours f001..f072 rather than synthesising one.
+		leadHour := int(validAt.Sub(loaded.BaseTime.UTC()) / time.Hour)
+		if leadHour < 1 || leadHour > 72 {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		site, err := footprint.AstrodomeScienceSiteAt(ctx, validAt, location)
+		if err != nil {
+			return nil, 0, err
+		}
+		field, err := forecast.NewAstrodomeReconstructedRefractivityField(reconstructor, validAt, refractivityCalibration)
+		if err != nil {
+			return nil, 0, err
+		}
+		nodes := make([]forecast.AstrodomeScienceNode, len(nodeDefinitions))
+		if err := computer.computeFrameNodes(ctx, footprint, reconstructor, field, location, observerHeightM,
+			validAt, identity, nodeDefinitions, nodes, site, refractionCalibration, computer.scienceCalibration); err != nil {
+			return nil, 0, err
+		}
+		results, err := forecast.HorizonResultsFromAstrodomeNodes(nodes, site.FogHeuristic)
+		if err != nil {
+			return nil, 0, err
+		}
+		frames = append(frames, forecast.HorizonFrame{ValidAt: validAt, Results: results})
+	}
+	if len(frames) != 72 {
+		return nil, 0, fmt.Errorf("refracted Horizon produced %d frames, want 72", len(frames))
+	}
+	return frames, surfaceHeightM, nil
+}
+
 func NewComputer(config ComputerConfig) (*Computer, error) {
 	if strings.TrimSpace(config.DataRoot) == "" {
 		return nil, errors.New("astrodome computer data root is required")
@@ -379,8 +471,8 @@ func astrodomeUnavailableNode(
 
 func astrodomeUnavailableQuality(site forecast.AstrodomeScienceSiteInputs) forecast.AstrodomeScienceQuality {
 	return forecast.AstrodomeScienceQuality{
-		LeadQuality:             forecast.AstrodomeForecastLeadQuality(site.ForecastLeadHours),
-		TemporalResolutionHours: 1,
-		Category:                forecast.AstrodomeScienceQualityUnavailable,
+		LeadTimeQualityHeuristic: forecast.AstrodomeForecastLeadTimeQualityHeuristic(site.ForecastLeadHours),
+		TemporalResolutionHours:  1,
+		Category:                 forecast.AstrodomeScienceQualityUnavailable,
 	}
 }

@@ -75,7 +75,7 @@ func TestExtractSurfaceFrameNormalizesUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Frame.TemperatureC != 10 || data.Frame.DewPointSpreadC() != 2 || data.Frame.RelativeHumidityPercent != 87 || data.Frame.LowCloudCoverPercent != 60 || data.Frame.MidCloudCoverPercent != 35 || data.Frame.HighCloudCoverPercent != 20 || data.Frame.WindSpeedMS != 5 || data.Frame.PressureHPA != 1013.25 || data.Frame.VisibilityKM != 39.876 || data.Frame.PrecipitableWaterMM != 17.77246094 || data.Frame.CloudLiquidPathKgM2 != 0.081 || data.Frame.CloudIcePathKgM2 != 0.027 || data.Frame.MixedLayerDepthM != 725 || !data.Frame.CloudCondensateAvailable || !data.Frame.TransparencyAvailable || data.AccumulatedPrecipMM != 1.5 {
+	if data.Frame.TemperatureC != 10 || data.Frame.DewPointSpreadC() != 2 || data.Frame.RelativeHumidityPercent != 87 || data.Frame.LowCloudCoverPercent != 60 || data.Frame.MidCloudCoverPercent != 35 || data.Frame.HighCloudCoverPercent != 20 || data.Frame.WindSpeedMS != 5 || data.Frame.PressureHPA != 1013.25 || data.Frame.VisibilityKM != 39.876 || data.Frame.PrecipitableWaterMM != 17.77246094 || data.Frame.CloudLiquidPathKgM2 != 0.081 || data.Frame.CloudIcePathKgM2 != 0.027 || data.Frame.MixedLayerDepthM != 725 || !data.Frame.CloudCondensateAvailable || !data.Frame.FogHeuristicAvailable || !data.Frame.TransparencyHeuristicAvailable || data.AccumulatedPrecipMM != 1.5 {
 		t.Fatalf("unexpected normalized frame: %+v total=%v", data.Frame, data.AccumulatedPrecipMM)
 	}
 }
@@ -87,7 +87,7 @@ func TestExtractSurfaceWithoutVisibilityRemainsFiniteAndJSONSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Frame.VisibilityKM != 0 || data.Frame.TransparencyAvailable || data.Frame.FogRisk() != 0 {
+	if data.Frame.VisibilityKM != 0 || data.Frame.FogHeuristicAvailable || data.Frame.TransparencyHeuristicAvailable || data.Frame.FogHeuristic() != 0 {
 		t.Fatalf("unexpected missing-visibility frame: %+v", data.Frame)
 	}
 	if _, err := json.Marshal(data.Frame); err != nil {
@@ -178,29 +178,46 @@ func TestHourlySurfaceDetectsFieldSetUpgrade(t *testing.T) {
 	}
 }
 
-func TestTransparencyProxyIsConservativeAndUnavailableForLegacyData(t *testing.T) {
+func TestTransparencyHeuristicIsConservativeAndUnavailableForLegacyData(t *testing.T) {
 	legacy := forecast.SurfaceFrame{CloudCoverPercent: 5}
-	if _, available := legacy.TransparencyProxyPercent(); available {
+	if _, available := legacy.TransparencyHeuristicPercent(); available {
 		t.Fatal("legacy frame unexpectedly has transparency inputs")
 	}
 	clear := forecast.SurfaceFrame{
 		CloudCoverPercent: 5, LowCloudCoverPercent: 5, MidCloudCoverPercent: 5, HighCloudCoverPercent: 5,
-		VisibilityKM: 50, PrecipitableWaterMM: 5, TransparencyAvailable: true,
+		VisibilityKM: 50, PrecipitableWaterMM: 5, FogHeuristicAvailable: true, TransparencyHeuristicAvailable: true,
 	}
 	cloudy := clear
 	cloudy.HighCloudCoverPercent = 80
-	clearScore, _ := clear.TransparencyProxyPercent()
-	cloudyScore, _ := cloudy.TransparencyProxyPercent()
+	clearScore, _ := clear.TransparencyHeuristicPercent()
+	cloudyScore, _ := cloudy.TransparencyHeuristicPercent()
 	if clearScore < 90 || cloudyScore >= clearScore || cloudyScore > 20 {
 		t.Fatalf("unexpected transparency scores: clear=%.1f cloudy=%.1f", clearScore, cloudyScore)
 	}
 }
 
-func TestFogRiskRequiresLowVisibilityAndSaturation(t *testing.T) {
-	high := forecast.SurfaceFrame{VisibilityKM: .8, RelativeHumidityPercent: 97, TemperatureC: 8, DewPointC: 7}
-	possible := forecast.SurfaceFrame{VisibilityKM: 3, RelativeHumidityPercent: 92, TemperatureC: 8, DewPointC: 6}
-	dryHaze := forecast.SurfaceFrame{VisibilityKM: .5, RelativeHumidityPercent: 60, TemperatureC: 8, DewPointC: 0}
-	if high.FogRisk() != 2 || possible.FogRisk() != 1 || dryHaze.FogRisk() != 0 {
-		t.Fatalf("unexpected fog risks: %d/%d/%d", high.FogRisk(), possible.FogRisk(), dryHaze.FogRisk())
+func TestFogHeuristicRequiresLowVisibilityAndSaturation(t *testing.T) {
+	high := forecast.SurfaceFrame{VisibilityKM: .8, RelativeHumidityPercent: 97, TemperatureC: 8, DewPointC: 7, FogHeuristicAvailable: true}
+	possible := forecast.SurfaceFrame{VisibilityKM: 3, RelativeHumidityPercent: 92, TemperatureC: 8, DewPointC: 6, FogHeuristicAvailable: true}
+	dryHaze := forecast.SurfaceFrame{VisibilityKM: .5, RelativeHumidityPercent: 60, TemperatureC: 8, DewPointC: 0, FogHeuristicAvailable: true}
+	if high.FogHeuristic() != 2 || possible.FogHeuristic() != 1 || dryHaze.FogHeuristic() != 0 {
+		t.Fatalf("unexpected fog heuristic states: %d/%d/%d", high.FogHeuristic(), possible.FogHeuristic(), dryHaze.FogHeuristic())
+	}
+}
+
+func TestSurfaceVisibilityWithoutPWVKeepsFogHeuristicAvailable(t *testing.T) {
+	values := map[string]float64{
+		"2t": 281.15, "2d": 280.15, "2r": 97, "CLCT": 5, "tp": 0,
+		"10u": 1, "10v": 1, "prmsl": 101325, "mld": 500, "vis": 800,
+	}
+	extracted, err := surfaceFromValues(values, time.Unix(1, 0), "surface.grib2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !extracted.Frame.FogHeuristicAvailable || extracted.Frame.FogHeuristic() != 2 {
+		t.Fatalf("visibility-only fog input was not retained: %+v", extracted.Frame)
+	}
+	if extracted.Frame.TransparencyHeuristicAvailable {
+		t.Fatal("transparency heuristic was available without PWV")
 	}
 }

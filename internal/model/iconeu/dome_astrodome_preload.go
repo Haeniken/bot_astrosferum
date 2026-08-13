@@ -248,12 +248,58 @@ func (volume *DomeVolume) PreloadAstrodomeFootprint(
 	if err := request.Refraction.Validate(); err != nil {
 		return nil, err
 	}
-	limit := request.ResidentLimitBytes
+	nodes, err := request.Profile.Nodes()
+	if err != nil {
+		return nil, err
+	}
+	return volume.preloadAstrodomeNodeFootprint(ctx, request.Observer, nodes, request.Refraction, request.ResidentLimitBytes)
+}
+
+// PreloadHorizonRefractionFootprint pins the same native primitive corridor as
+// Astrodome, but only for the eight canonical apparent-elevation 10-degree
+// rays. It changes the angular sampling, never the refraction or science
+// equations.
+func (volume *DomeVolume) PreloadHorizonRefractionFootprint(
+	ctx context.Context,
+	observer forecast.Location,
+	refraction forecast.AstrodomeRefractionCalibration,
+	residentLimitBytes uint64,
+) (*DomeAstrodomeFootprint, error) {
+	if volume == nil {
+		return nil, errors.New("ICON-EU Astrodome volume is required")
+	}
+	if err := forecast.ValidateCoordinates(observer.Latitude, observer.Longitude); err != nil {
+		return nil, err
+	}
+	if err := refraction.Validate(); err != nil {
+		return nil, err
+	}
+	return volume.preloadAstrodomeNodeFootprint(
+		ctx,
+		observer,
+		forecast.HorizonRefractionNodes(),
+		refraction,
+		residentLimitBytes,
+	)
+}
+
+func (volume *DomeVolume) preloadAstrodomeNodeFootprint(
+	ctx context.Context,
+	observer forecast.Location,
+	nodes []forecast.AstrodomeGridNode,
+	refraction forecast.AstrodomeRefractionCalibration,
+	residentLimitBytes uint64,
+) (*DomeAstrodomeFootprint, error) {
+	limit := residentLimitBytes
 	if limit == 0 {
 		limit = DomeAstrodomeDefaultResidentLimitBytes
 	}
-	addresses, envelopePathM, err := volume.domeAstrodomeFootprintAddresses(ctx, request.Observer, request.Profile,
-		request.Refraction.MaximumPathLengthM)
+	addresses, envelopePathM, err := volume.domeAstrodomeNodeFootprintAddresses(
+		ctx,
+		observer,
+		nodes,
+		refraction.MaximumPathLengthM,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -366,18 +412,14 @@ func domeAstrodomeSourceColumnPlanDigest(
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func (volume *DomeVolume) domeAstrodomeFootprintAddresses(
+func (volume *DomeVolume) domeAstrodomeNodeFootprintAddresses(
 	ctx context.Context,
 	observer forecast.Location,
-	profile forecast.AstrodomeGridProfile,
+	nodes []forecast.AstrodomeGridNode,
 	maximumPathM float64,
 ) ([]domeColumnAddress, float64, error) {
 	if !finiteDomeVolume(maximumPathM) || maximumPathM <= 0 {
 		return nil, 0, errors.New("ICON-EU Astrodome footprint path bound is invalid")
-	}
-	nodes, err := profile.Nodes()
-	if err != nil {
-		return nil, 0, err
 	}
 	maximumTopM, err := volume.domeAstrodomeMaximumTopHeight(ctx)
 	if err != nil {

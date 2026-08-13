@@ -113,7 +113,7 @@ func TestValidateHorizonInputCanonicalizesEveryFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runTime.Equal(input.Frames[0].ValidAt) {
+	if !runTime.Equal(input.Frames[0].ValidAt.Add(-time.Hour)) {
 		t.Fatalf("run time = %s", runTime)
 	}
 	for frameIndex, frame := range frames {
@@ -125,7 +125,7 @@ func TestValidateHorizonInputCanonicalizesEveryFrame(t *testing.T) {
 	}
 }
 
-func TestValidateHorizonInputRequiresF000ThroughF072(t *testing.T) {
+func TestValidateHorizonInputRequiresF001ThroughF072(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*HorizonInput)
@@ -136,17 +136,17 @@ func TestValidateHorizonInputRequiresF000ThroughF072(t *testing.T) {
 			mutate: func(input *HorizonInput) {
 				input.Frames = input.Frames[:1]
 			},
-			want: "exactly 73 hourly frames",
+			want: "exactly 72 hourly frames",
 		},
 		{
 			name: "hourly gap",
 			mutate: func(input *HorizonInput) {
 				input.Frames[37].ValidAt = input.Frames[37].ValidAt.Add(time.Hour)
 			},
-			want: "run term f037",
+			want: "run term f038",
 		},
 		{
-			name: "not f000",
+			name: "not f001",
 			mutate: func(input *HorizonInput) {
 				for index := range input.Frames {
 					input.Frames[index].ValidAt = input.Frames[index].ValidAt.Add(time.Hour)
@@ -155,7 +155,7 @@ func TestValidateHorizonInputRequiresF000ThroughF072(t *testing.T) {
 					}
 				}
 			},
-			want: "run term f000",
+			want: "run term f001",
 		},
 		{
 			name: "duplicate direction",
@@ -174,9 +174,9 @@ func TestValidateHorizonInputRequiresF000ThroughF072(t *testing.T) {
 		{
 			name: "wrong elevation",
 			mutate: func(input *HorizonInput) {
-				input.Frames[7].Results[7].GeometricElevationDegrees = 15
+				input.Frames[7].Results[7].ApparentElevationDegrees = 15
 			},
-			want: "is not at 10 degrees",
+			want: "is not at apparent 10 degrees",
 		},
 	}
 	for _, test := range tests {
@@ -198,12 +198,12 @@ func TestHorizonMetadataIsLocalizedAndUsesActualRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	russian := horizonMetadataLabels(input, frames, Options{Language: "ru"})
-	if !strings.Contains(russian.title, "72 часа") || !strings.Contains(russian.utcRange, "f000…f072") ||
+	if !strings.Contains(russian.title, "72 часа") || !strings.Contains(russian.utcRange, "f001…f072") ||
 		!strings.Contains(russian.localRange, "MSK (UTC+3)") || !strings.Contains(russian.periodNote, "актуальность указана в подписи") {
 		t.Fatalf("unexpected Russian labels: %+v", russian)
 	}
 	english := horizonMetadataLabels(input, frames, Options{Language: "en"})
-	if !strings.Contains(english.title, "72 hours") || !strings.Contains(english.utcRange, "73 terms") ||
+	if !strings.Contains(english.title, "72 hours") || !strings.Contains(english.utcRange, "72 terms") ||
 		!strings.Contains(english.localRange, "MSK (UTC+3)") || !strings.Contains(english.periodNote, "live freshness") {
 		t.Fatalf("unexpected English labels: %+v", english)
 	}
@@ -213,11 +213,11 @@ func TestHorizonMetadataIsLocalizedAndUsesActualRanges(t *testing.T) {
 }
 
 func TestHorizonMissingDataHasExplicitCue(t *testing.T) {
-	missing := forecast.HorizonResult{Available: false, Confidence: 0, DataQuality: forecast.HorizonDataUnavailable}
+	missing := forecast.HorizonResult{Available: false, DataQualityHeuristic: 0, DataQuality: forecast.HorizonDataUnavailable}
 	if got := horizonScoreLabel(missing); got != "—" {
 		t.Fatalf("missing score = %q", got)
 	}
-	if got := horizonConfidenceColor(missing); got != horizonQualityBad {
+	if got := horizonDataQualityColor(missing); got != horizonQualityBad {
 		t.Fatalf("missing quality color = %#v", got)
 	}
 	input := horizonRenderFixture()
@@ -225,7 +225,7 @@ func TestHorizonMissingDataHasExplicitCue(t *testing.T) {
 	input.Frames[31].Results[4].ValidAt = input.Frames[31].ValidAt
 	input.Frames[31].Results[4].Direction = forecast.HorizonSouth
 	input.Frames[31].Results[4].AzimuthDegrees = 180
-	input.Frames[31].Results[4].GeometricElevationDegrees = forecast.HorizonGeometricElevationDegrees
+	input.Frames[31].Results[4].ApparentElevationDegrees = forecast.AstrodomeMinimumElevationDegrees
 	input.Frames[31].Results[4].LimitingFactor = forecast.HorizonFactorUnavailable
 	if _, _, err := validateHorizonInput(input); err != nil {
 		t.Fatalf("explicit unavailable cell should remain renderable: %v", err)
@@ -263,7 +263,18 @@ func TestHorizonLabelsAndLimiterSummaryAreLocalized(t *testing.T) {
 	if got := horizonLimiterLabel(forecast.HorizonFactorSeeing, Options{Language: "en"}); got != "optical seeing" {
 		t.Fatalf("English seeing limiter = %q", got)
 	}
+	if got := horizonLimiterLabel(forecast.HorizonFactorPrecipitation, Options{Language: "ru"}); got != "осадки" {
+		t.Fatalf("Russian precipitation limiter = %q", got)
+	}
+	if got := horizonLimiterLabel(forecast.HorizonFactorPrecipitation, Options{Language: "en"}); got != "precipitation" {
+		t.Fatalf("English precipitation limiter = %q", got)
+	}
 	input := horizonRenderFixture()
+	input.Frames[0].Results[0].LimitingFactor = forecast.HorizonFactorPrecipitation
+	if _, _, err := validateHorizonInput(input); err != nil {
+		t.Fatalf("precipitation-limited Horizon result must remain renderable: %v", err)
+	}
+	input.Frames[0].Results[0].LimitingFactor = forecast.HorizonFactorCloud
 	frames, _, err := validateHorizonInput(input)
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +282,13 @@ func TestHorizonLabelsAndLimiterSummaryAreLocalized(t *testing.T) {
 	factor, hours := dominantHorizonLimiter(frames, 0)
 	if factor != forecast.HorizonFactorCloud || hours != horizonFrameCount {
 		t.Fatalf("dominant limiter = %q for %d hours", factor, hours)
+	}
+	for frameIndex := range frames {
+		frames[frameIndex].Results[0].LimitingFactor = forecast.HorizonFactorPrecipitation
+	}
+	factor, hours = dominantHorizonLimiter(frames, 0)
+	if factor != forecast.HorizonFactorPrecipitation || hours != horizonFrameCount {
+		t.Fatalf("precipitation-dominant limiter = %q for %d hours", factor, hours)
 	}
 }
 
@@ -288,20 +306,20 @@ func horizonRenderFixture() HorizonInput {
 	}
 	frames := make([]forecast.HorizonFrame, horizonFrameCount)
 	for frameIndex := range frames {
-		validAt := runTime.Add(time.Duration(frameIndex) * time.Hour)
+		validAt := runTime.Add(time.Duration(frameIndex+1) * time.Hour)
 		results := make([]forecast.HorizonResult, 0, forecast.HorizonDirectionCount)
 		for directionIndex, direction := range forecast.HorizonDirections() {
 			available := directionIndex != forecast.HorizonDirectionCount-1 || frameIndex%9 != 0
-			quality := forecast.HorizonDataGoodCoarse
-			confidence := 0.84 - float64(directionIndex)*0.04
+			quality := forecast.HorizonDataGood
+			dataQualityHeuristic := 0.84 - float64(directionIndex)*0.04
 			if !available {
 				quality = forecast.HorizonDataUnavailable
-				confidence = 0
+				dataQualityHeuristic = 0
 			}
 			results = append(results, forecast.HorizonResult{
 				ValidAt: validAt, Direction: direction, AzimuthDegrees: float64(directionIndex * 45),
-				GeometricElevationDegrees: forecast.HorizonGeometricElevationDegrees,
-				Index:                     1 + mathMod(float64(frameIndex+directionIndex), 9), Available: available, Confidence: confidence,
+				ApparentElevationDegrees: forecast.AstrodomeMinimumElevationDegrees,
+				Index:                    1 + mathMod(float64(frameIndex+directionIndex), 9), Available: available, DataQualityHeuristic: dataQualityHeuristic,
 				DataQuality: quality, LimitingFactor: factors[directionIndex],
 			})
 		}

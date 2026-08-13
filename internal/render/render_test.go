@@ -142,7 +142,7 @@ func TestFogPictogramIsThickAndVisible(t *testing.T) {
 	}
 }
 
-func TestWeatherIconIncludesFogRiskPictogram(t *testing.T) {
+func TestWeatherIconIncludesFogHeuristicPictogram(t *testing.T) {
 	tests := []struct {
 		name  string
 		frame forecast.SurfaceFrame
@@ -150,12 +150,12 @@ func TestWeatherIconIncludesFogRiskPictogram(t *testing.T) {
 	}{
 		{
 			name:  "possible",
-			frame: forecast.SurfaceFrame{VisibilityKM: 3, RelativeHumidityPercent: 92, TemperatureC: 8, DewPointC: 6, TransparencyAvailable: true},
+			frame: forecast.SurfaceFrame{VisibilityKM: 3, RelativeHumidityPercent: 92, TemperatureC: 8, DewPointC: 6, FogHeuristicAvailable: true},
 			shade: weatherCyan,
 		},
 		{
 			name:  "high",
-			frame: forecast.SurfaceFrame{VisibilityKM: 0.5, RelativeHumidityPercent: 98, TemperatureC: 8, DewPointC: 7.5, TransparencyAvailable: true},
+			frame: forecast.SurfaceFrame{VisibilityKM: 0.5, RelativeHumidityPercent: 98, TemperatureC: 8, DewPointC: 7.5, FogHeuristicAvailable: true},
 			shade: weatherOrange,
 		},
 	}
@@ -178,24 +178,24 @@ func TestWeatherIconIncludesFogRiskPictogram(t *testing.T) {
 	}
 }
 
-func TestSeeingConfidenceUsesTextInsideBars(t *testing.T) {
+func TestSeeingLeadTimeQualityHeuristicUsesTextInsideBars(t *testing.T) {
 	diagnostics, err := forecast.ComputeDiagnostics(forecast.SyntheticVerticalFixture())
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels, err := seeingConfidenceLabels(diagnostics, magma(96))
+	labels, err := seeingLeadTimeQualityHeuristicLabels(diagnostics, magma(96))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(labels.Labels) != len(diagnostics.SeeingIndex) {
-		t.Fatalf("confidence label count = %d, want %d", len(labels.Labels), len(diagnostics.SeeingIndex))
+		t.Fatalf("lead-time quality label count = %d, want %d", len(labels.Labels), len(diagnostics.SeeingIndex))
 	}
 	if labels.Labels[0] != "96%" || labels.Labels[len(labels.Labels)-1] != "67%" {
-		t.Fatalf("unexpected confidence labels: first=%q last=%q", labels.Labels[0], labels.Labels[len(labels.Labels)-1])
+		t.Fatalf("unexpected lead-time quality labels: first=%q last=%q", labels.Labels[0], labels.Labels[len(labels.Labels)-1])
 	}
 	for _, point := range labels.XYs {
 		if point.Y <= 0 {
-			t.Fatalf("confidence label is outside its seeing bar: %+v", point)
+			t.Fatalf("lead-time quality label is outside its seeing bar: %+v", point)
 		}
 	}
 }
@@ -205,12 +205,12 @@ func TestOverallLabelsExposeHybridInputsAndFogSeverity(t *testing.T) {
 		{
 			Index: 6.4, SeeingArcsec: 2.21, CoherenceTimeMS: 3.14,
 			PhysicalSeeing: true, PhysicalCoherence: true, GroundLayerPhysics: true,
-			CloudTransmissionPercent: 55.2, FogRisk: 1,
+			CloudTransmissionPercent: 55.2, FogHeuristic: 1,
 		},
 		{
 			Index: 3.2, SeeingArcsec: 1.04, CoherenceTimeMS: 2.01,
 			PhysicalSeeing: true, PhysicalCoherence: true,
-			CloudTransmissionPercent: 19.7, FogRisk: 2,
+			CloudTransmissionPercent: 19.7, FogHeuristic: 2,
 		},
 	}
 	top, inside, err := overallIndexLabels(frames, magma(96), Options{Language: "en"})

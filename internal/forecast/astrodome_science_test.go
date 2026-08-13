@@ -411,7 +411,7 @@ func TestAstrodomeScienceBreakpointCompactionUsesSharedRootCluster(t *testing.T)
 func TestAstrodomeScienceStrictContractAndGuardDerivedFloors(t *testing.T) {
 	t.Parallel()
 
-	if AstrodomeScienceVersion != "astrodome-science-kernel-v29" ||
+	if AstrodomeScienceVersion != "astrodome-science-kernel-v30-explicit-heuristics" ||
 		AstrodomeSciencePathContractVersion != "astrodome-science-path-v23" {
 		t.Fatalf("strict science versions = %q, %q",
 			AstrodomeScienceVersion, AstrodomeSciencePathContractVersion)
@@ -1887,7 +1887,7 @@ func astrodomeScienceFixture(t testing.TB, volume *astrodomeTestVolume, validAt 
 	}
 	site := AstrodomeScienceSiteInputs{
 		SourceIdentity: volume.identity, ValidAt: validAt,
-		WindSpeed10MMS: 2, WindGust10MMS: 3, FogState: AstrodomeScienceFogNone,
+		WindSpeed10MMS: 2, WindGust10MMS: 3, FogHeuristic: AstrodomeScienceFogNone,
 		PrecipitationRateMMPerHour: 0,
 		PrecipitationIntervalStart: validAt.Add(-time.Hour), PrecipitationIntervalEnd: validAt,
 		ForecastLeadHours: 12,

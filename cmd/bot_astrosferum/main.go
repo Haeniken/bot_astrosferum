@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/app"
+	"bot_astrosferum/internal/app/astrodome"
 	"bot_astrosferum/internal/app/bot"
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/astronomy"
@@ -37,6 +38,10 @@ import (
 const version = "0.1.0-dev"
 
 type accountResultDiscardMessenger struct{}
+
+func directionalVolumeRequired(cfg config.Config) bool {
+	return cfg.HorizonAnalysis.Enabled || cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
+}
 
 func (accountResultDiscardMessenger) SendMessage(context.Context, int64, string, bool) error {
 	return nil
@@ -131,25 +136,10 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
-	pointStore := iconeu.NewCachedStore(
-		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
-		int64(cfg.App.PointCacheMemoryLimit), logf,
-	)
 	started := time.Now()
-	cloud, err := pointStore.Cloud(ctx, location)
+	manifest, err := iconeu.LoadCurrentDomeManifest(cfg.Paths.Data)
 	if err != nil {
 		return err
-	}
-	plan, err := forecast.NewHorizonPlan(location, cloud.SurfaceElevationM)
-	if err != nil {
-		return err
-	}
-	horizonStore := iconeu.NewHorizonStore(
-		cfg.Paths.Data, filepath.Join(cfg.Paths.Temp, "horizon-batch-cli"),
-		cfg.HorizonAnalysis.CDOWorkers, logf,
-	)
-	if !horizonStore.Supports(plan) {
-		return errors.New("horizon footprint is outside ICON-EU")
 	}
 	executionGate, err := directional.NewExecutionGate(
 		filepath.Join(cfg.Paths.Data, "state", "run-leases"),
@@ -163,46 +153,53 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, executionLease.Close()) }()
-	currentRun, err := horizonStore.CurrentRunID()
-	if err != nil || currentRun != cloud.RunID {
-		return errors.New("ICON-EU horizon run changed before calculation")
-	}
-	snapshots, err := horizonStore.Series(ctx, cloud.RunID, plan)
+	scienceCalibration, err := app.AstrodomeScienceCalibration(cfg.Algorithms)
 	if err != nil {
 		return err
 	}
-	frames, err := forecast.ComputeHorizonSeries(ctx, snapshots, plan, app.OverallCalibration(cfg.Algorithms))
+	computer, err := astrodome.NewComputer(astrodome.ComputerConfig{
+		DataRoot: cfg.Paths.Data, TempRoot: filepath.Join(cfg.Paths.Temp, "astrodome"),
+		ECCodesWorkers: cfg.HorizonAnalysis.CDOWorkers, ResidentLimitBytes: uint64(cfg.Astrodome.ResidentLimit),
+		ScienceCalibration: scienceCalibration, Logf: logf,
+	})
 	if err != nil {
 		return err
 	}
-	currentRun, err = horizonStore.CurrentRunID()
-	if err != nil || currentRun != cloud.RunID {
-		return errors.New("ICON-EU horizon run changed before rendering")
+	source := directional.SourceIdentity{
+		Provider: "ICON-EU", RunID: manifest.RunID,
+		GridProfile:    forecast.HorizonRefractionGridProfile,
+		GeometryDigest: forecast.HorizonRefractionGeometryDigest(),
+	}
+	frames, surfaceElevationM, err := computer.ComputeRefractedHorizon(ctx, source, location)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(*output), 0o750); err != nil {
 		return fmt.Errorf("create horizon output directory: %w", err)
 	}
 	if err := render.Horizon(ctx, *output, render.HorizonInput{
-		Location: location, Provider: "ICON-EU", RunID: cloud.RunID,
+		Location: location, Provider: "ICON-EU", RunID: manifest.RunID,
 		Grid: iconeu.Coverage().GridName, Frames: frames,
 	}, render.Options{Language: *language}); err != nil {
 		return err
 	}
-	currentRun, err = horizonStore.CurrentRunID()
-	if err != nil || currentRun != cloud.RunID {
+	currentManifest, err := iconeu.LoadCurrentDomeManifest(cfg.Paths.Data)
+	if err != nil || currentManifest.RunID != manifest.RunID || currentManifest.ManifestSHA256 != manifest.ManifestSHA256 {
 		_ = os.Remove(*output)
 		return errors.New("ICON-EU horizon run changed during rendering")
 	}
 	return writeJSON(stdout, struct {
-		RunID      string    `json:"run_id"`
-		PeriodFrom time.Time `json:"period_from"`
-		PeriodTo   time.Time `json:"period_to"`
-		Frames     int       `json:"frames"`
-		Duration   string    `json:"duration"`
-		File       string    `json:"file"`
+		RunID             string    `json:"run_id"`
+		PeriodFrom        time.Time `json:"period_from"`
+		PeriodTo          time.Time `json:"period_to"`
+		Frames            int       `json:"frames"`
+		Duration          string    `json:"duration"`
+		File              string    `json:"file"`
+		SurfaceElevationM float64   `json:"model_surface_elevation_m"`
 	}{
-		RunID: cloud.RunID, PeriodFrom: frames[0].ValidAt, PeriodTo: frames[len(frames)-1].ValidAt,
+		RunID: manifest.RunID, PeriodFrom: frames[0].ValidAt, PeriodTo: frames[len(frames)-1].ValidAt,
 		Frames: len(frames), Duration: time.Since(started).Round(time.Millisecond).String(), File: *output,
+		SurfaceElevationM: surfaceElevationM,
 	})
 }
 
@@ -495,11 +492,12 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	// The flag controls the public rollout. Administrators must retain a fully
-	// operational preview path while public access is disabled.
-	astrodomeOperational := cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
+	// Horizon uses the same immutable Dome volume and full-refraction kernel,
+	// independently of whether the Astrodome page itself is publicly enabled;
+	// configured administrators still retain the existing preview path.
+	directionalVolumeOperational := directionalVolumeRequired(cfg)
 	var astrodomeDiskBudget *model.DiskBudget
-	if astrodomeOperational {
+	if directionalVolumeOperational {
 		astrodomeDiskBudget, err = newAstrodomeDiskBudget(cfg)
 		if err != nil {
 			return err
@@ -684,7 +682,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		Client: syncClient, DataRoot: cfg.Paths.Data,
 		PollInterval: cfg.Sync.PollInterval.Duration, KeepRuns: cfg.Providers.ICONEU.KeepRuns,
 		MaxStaleAge: cfg.Providers.ICONEU.MaxStaleAge.Duration,
-		DomeEnabled: astrodomeOperational, DomeBudget: astrodomeDiskBudget,
+		DomeEnabled: directionalVolumeOperational, DomeBudget: astrodomeDiskBudget,
 		Logf: func(format string, values ...any) { writeLog(stderr, format, values...) },
 	}
 	go scheduler.Run(ctx)

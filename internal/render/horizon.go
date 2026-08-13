@@ -22,7 +22,7 @@ const (
 	// because the Horizon PNG has its own cache and presentation lifecycle.
 	HorizonRenderVersion = "horizon-render-v5-hourly-72h-decimal-scores"
 
-	horizonFrameCount   = 73
+	horizonFrameCount   = 72
 	horizonLeft         = 155
 	horizonRight        = 25
 	horizonSolarBandTop = 264
@@ -46,7 +46,7 @@ var (
 )
 
 // HorizonInput contains presentation metadata and the complete immutable
-// f000..f072 ICON-EU run. Rendering deliberately has no model or network
+// f001..f072 ICON-EU run. Rendering deliberately has no model or network
 // access. There is no generated-at field, so the chart never invents one.
 type HorizonInput struct {
 	Location forecast.Location
@@ -127,7 +127,7 @@ func Horizon(ctx context.Context, destination string, input HorizonInput, option
 			}
 			draw.Draw(canvas, image.Rect(x0, y0, x1, y1), &image.Uniform{C: shade}, image.Point{}, draw.Src)
 			qualityTop := y1 - 7
-			draw.Draw(canvas, image.Rect(x0+1, qualityTop, x1-1, y1-1), &image.Uniform{C: horizonConfidenceColor(result)}, image.Point{}, draw.Src)
+			draw.Draw(canvas, image.Rect(x0+1, qualityTop, x1-1, y1-1), &image.Uniform{C: horizonDataQualityColor(result)}, image.Point{}, draw.Src)
 			textShade := contrastColor(shade)
 			if !result.Available {
 				textShade = horizonText
@@ -153,8 +153,8 @@ func Horizon(ctx context.Context, destination string, input HorizonInput, option
 			"The bottom strip shows input-data quality with forecast lead time; it is not an outcome probability."), horizonMuted)
 	drawText(canvas, fonts.small, 34, 1300,
 		localized(options,
-			"Рельеф оценивается по грубой модельной поверхности ICON HHL.",
-			"Terrain is estimated from the coarse ICON HHL model surface."), horizonMuted)
+			"ICON HHL задаёт нижнюю границу модели, а не измеренный локальный горизонт.",
+			"ICON HHL is the model boundary, not a surveyed local horizon."), horizonMuted)
 	drawText(canvas, fonts.tiny, 34, HorizonHeight-20,
 		fmt.Sprintf("%.4f, %.4f · %s · %s", input.Location.Latitude, input.Location.Longitude, forecast.HorizonAlgorithmVersion, HorizonRenderVersion), horizonMuted)
 
@@ -193,13 +193,13 @@ func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Tim
 		return nil, time.Time{}, fmt.Errorf("horizon run ID must be YYYYMMDDHH: %w", err)
 	}
 	if len(input.Frames) != horizonFrameCount {
-		return nil, time.Time{}, fmt.Errorf("horizon chart requires exactly %d hourly frames (f000..f072)", horizonFrameCount)
+		return nil, time.Time{}, fmt.Errorf("horizon chart requires exactly %d hourly frames (f001..f072)", horizonFrameCount)
 	}
 	frames := make([]validatedHorizonFrame, len(input.Frames))
 	for frameIndex, frame := range input.Frames {
-		expected := runTime.Add(time.Duration(frameIndex) * time.Hour)
+		expected := runTime.Add(time.Duration(frameIndex+1) * time.Hour)
 		if frame.ValidAt.IsZero() || !frame.ValidAt.Equal(expected) {
-			return nil, time.Time{}, fmt.Errorf("horizon frame %d must be run term f%03d at %s", frameIndex, frameIndex, expected.Format(time.RFC3339))
+			return nil, time.Time{}, fmt.Errorf("horizon frame %d must be run term f%03d at %s", frameIndex, frameIndex+1, expected.Format(time.RFC3339))
 		}
 		if len(frame.Results) != forecast.HorizonDirectionCount {
 			return nil, time.Time{}, fmt.Errorf("horizon frame %d requires exactly %d directions", frameIndex, forecast.HorizonDirectionCount)
@@ -209,14 +209,14 @@ func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Tim
 			if !result.ValidAt.Equal(frame.ValidAt) {
 				return nil, time.Time{}, fmt.Errorf("horizon frame %d contains a result at another valid time", frameIndex)
 			}
-			if math.Abs(result.GeometricElevationDegrees-forecast.HorizonGeometricElevationDegrees) > 1e-6 {
-				return nil, time.Time{}, fmt.Errorf("horizon result %q is not at %.0f degrees", result.Direction, forecast.HorizonGeometricElevationDegrees)
+			if math.Abs(result.ApparentElevationDegrees-forecast.AstrodomeMinimumElevationDegrees) > 1e-6 {
+				return nil, time.Time{}, fmt.Errorf("horizon result %q is not at apparent %.0f degrees", result.Direction, forecast.AstrodomeMinimumElevationDegrees)
 			}
 			if result.Available && (math.IsNaN(result.Index) || math.IsInf(result.Index, 0) || result.Index < 1 || result.Index > 10) {
 				return nil, time.Time{}, fmt.Errorf("horizon result %q index must be between 1 and 10", result.Direction)
 			}
-			if math.IsNaN(result.Confidence) || math.IsInf(result.Confidence, 0) || result.Confidence < 0 || result.Confidence > 1 {
-				return nil, time.Time{}, fmt.Errorf("horizon result %q confidence must be between 0 and 1", result.Direction)
+			if math.IsNaN(result.DataQualityHeuristic) || math.IsInf(result.DataQualityHeuristic, 0) || result.DataQualityHeuristic < 0 || result.DataQualityHeuristic > 1 {
+				return nil, time.Time{}, fmt.Errorf("horizon result %q data-quality heuristic must be between 0 and 1", result.Direction)
 			}
 			if !knownHorizonDataQuality(result.DataQuality) {
 				return nil, time.Time{}, fmt.Errorf("horizon result %q has unknown data quality %q", result.Direction, result.DataQuality)
@@ -250,7 +250,7 @@ func horizonMetadataLabels(input HorizonInput, frames []validatedHorizonFrame, o
 		title: localized(options, "Условия у горизонта на высоте 10° · 72 часа", "Horizon conditions at 10° elevation · 72 hours"),
 		run: fmt.Sprintf(localized(options, "%s run %s UTC · Сетка: %s", "%s run %s UTC · Grid: %s"),
 			strings.TrimSpace(input.Provider), strings.TrimSpace(input.RunID), strings.TrimSpace(input.Grid)),
-		utcRange: fmt.Sprintf(localized(options, "UTC: %s — %s · 73 срока f000…f072", "UTC: %s — %s · 73 terms f000…f072"),
+		utcRange: fmt.Sprintf(localized(options, "UTC: %s — %s · 72 срока f001…f072", "UTC: %s — %s · 72 terms f001…f072"),
 			first.UTC().Format("02.01.2006 15:04"), last.UTC().Format("02.01.2006 15:04")),
 		localRange: fmt.Sprintf(localized(options, "Местное время: %s — %s · %s", "Local time: %s — %s · %s"),
 			first.In(zone).Format("02.01.2006 15:04"), last.In(zone).Format("02.01.2006 15:04"), timeZoneLabel),
@@ -374,7 +374,7 @@ func dominantHorizonLimiter(frames []validatedHorizonFrame, directionIndex int) 
 		counts[factor]++
 	}
 	order := []forecast.HorizonLimitingFactor{
-		forecast.HorizonFactorCloud, forecast.HorizonFactorSeeing, forecast.HorizonFactorCoherence,
+		forecast.HorizonFactorPrecipitation, forecast.HorizonFactorCloud, forecast.HorizonFactorSeeing, forecast.HorizonFactorCoherence,
 		forecast.HorizonFactorFog, forecast.HorizonFactorSurfaceWind, forecast.HorizonFactorTerrain,
 		forecast.HorizonFactorNone, forecast.HorizonFactorUnavailable,
 	}
@@ -401,7 +401,7 @@ func horizonScoreLabel(result forecast.HorizonResult) string {
 	return fmt.Sprintf("%.1f", value)
 }
 
-func horizonConfidenceColor(result forecast.HorizonResult) color.RGBA {
+func horizonDataQualityColor(result forecast.HorizonResult) color.RGBA {
 	if !result.Available || result.DataQuality == forecast.HorizonDataUnavailable {
 		return horizonQualityBad
 	}
@@ -410,7 +410,7 @@ func horizonConfidenceColor(result forecast.HorizonResult) color.RGBA {
 		return horizonQualityLow
 	case forecast.HorizonDataUsable:
 		return horizonQualityUsable
-	case forecast.HorizonDataGoodCoarse:
+	case forecast.HorizonDataGood:
 		return horizonQualityGood
 	default:
 		return horizonQualityBad
@@ -419,7 +419,7 @@ func horizonConfidenceColor(result forecast.HorizonResult) color.RGBA {
 
 func knownHorizonDataQuality(quality forecast.HorizonDataQuality) bool {
 	switch quality {
-	case forecast.HorizonDataUnavailable, forecast.HorizonDataLimited, forecast.HorizonDataUsable, forecast.HorizonDataGoodCoarse:
+	case forecast.HorizonDataUnavailable, forecast.HorizonDataLimited, forecast.HorizonDataUsable, forecast.HorizonDataGood:
 		return true
 	default:
 		return false
@@ -430,7 +430,7 @@ func knownHorizonLimitingFactor(factor forecast.HorizonLimitingFactor) bool {
 	switch factor {
 	case forecast.HorizonFactorNone, forecast.HorizonFactorUnavailable, forecast.HorizonFactorTerrain,
 		forecast.HorizonFactorCloud, forecast.HorizonFactorSeeing, forecast.HorizonFactorCoherence,
-		forecast.HorizonFactorFog, forecast.HorizonFactorSurfaceWind:
+		forecast.HorizonFactorFog, forecast.HorizonFactorSurfaceWind, forecast.HorizonFactorPrecipitation:
 		return true
 	default:
 		return false
@@ -462,13 +462,15 @@ func horizonLimiterLabel(factor forecast.HorizonLimitingFactor, options Options)
 		forecast.HorizonFactorNone: "нет", forecast.HorizonFactorUnavailable: "нет данных",
 		forecast.HorizonFactorTerrain: "рельеф (грубо)", forecast.HorizonFactorCloud: "эффективная облачная преграда",
 		forecast.HorizonFactorSeeing: "оптический сиинг", forecast.HorizonFactorCoherence: "время когерентности τ₀",
-		forecast.HorizonFactorFog: "туман", forecast.HorizonFactorSurfaceWind: "приземный ветер",
+		forecast.HorizonFactorFog: "эвристика тумана", forecast.HorizonFactorSurfaceWind: "приземный ветер",
+		forecast.HorizonFactorPrecipitation: "осадки",
 	}
 	labelsEN := map[forecast.HorizonLimitingFactor]string{
 		forecast.HorizonFactorNone: "none", forecast.HorizonFactorUnavailable: "unavailable data",
 		forecast.HorizonFactorTerrain: "coarse terrain", forecast.HorizonFactorCloud: "effective cloud obstruction",
 		forecast.HorizonFactorSeeing: "optical seeing", forecast.HorizonFactorCoherence: "coherence time τ₀",
-		forecast.HorizonFactorFog: "fog", forecast.HorizonFactorSurfaceWind: "surface wind",
+		forecast.HorizonFactorFog: "fog heuristic", forecast.HorizonFactorSurfaceWind: "surface wind",
+		forecast.HorizonFactorPrecipitation: "precipitation",
 	}
 	label := labelsEN[factor]
 	if options.Language == "ru" {

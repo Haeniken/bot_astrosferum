@@ -95,7 +95,7 @@ func TestAstrodomeUnavailableNodePreservesDatasetIdentity(t *testing.T) {
 		node.AzimuthDegrees == nil || *node.AzimuthDegrees != azimuth ||
 		node.Quality.Category != forecast.AstrodomeScienceQualityUnavailable ||
 		node.Quality.TemporalResolutionHours != 1 ||
-		node.Quality.LeadQuality != forecast.AstrodomeForecastLeadQuality(36) {
+		node.Quality.LeadTimeQualityHeuristic != forecast.AstrodomeForecastLeadTimeQualityHeuristic(36) {
 		t.Fatalf("unavailable preview node = %+v", node)
 	}
 }

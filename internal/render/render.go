@@ -236,7 +236,7 @@ func seeingBars(fileName string, series forecast.VerticalSeries, diagnostics for
 	p := plot.New()
 	stylePlot(p)
 	timeZoneLabel := forecast.TimeZoneLabel(series.Location.TimeZone, diagnostics.Times[0])
-	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Прогнозный индекс сиинга по ветру (прототип 1–10)\n%s · Условная уверенность зависит только от дальности срока и не входит в общий индекс пригодности", "(%.2f, %.2f) Forecast Wind Seeing Index (prototype 1–10)\n%s · Confidence is conditional on lead time only; it is not part of Overall Astronomy Index"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
+	p.Title.Text = fmt.Sprintf(localized(options, "(%.2f, %.2f) Прогнозный индекс сиинга по ветру (прототип 1–10)\n%s · Эвристика качества по сроку зависит только от заблаговременности; это не вероятность и она не входит в Overall", "(%.2f, %.2f) Forecast Wind Seeing Index (prototype 1–10)\n%s · Lead-time quality heuristic depends only on forecast lead; it is not a probability or part of Overall Astronomy Index"), series.Location.Latitude, series.Location.Longitude, timeZoneLabel)
 	p.X.Label.Text = footer(series, timeZoneLabel, options)
 	p.Y.Label.Text = localized(options, "Прогнозный индекс (1–10)", "Forecast index (1–10)")
 	p.X.Min, p.X.Max = -0.6, float64(len(diagnostics.Times))-0.4
@@ -277,11 +277,11 @@ func seeingBars(fileName string, series forecast.VerticalSeries, diagnostics for
 		return fmt.Errorf("create seeing labels: %w", err)
 	}
 	p.Add(labels)
-	confidence, err := seeingConfidenceLabels(diagnostics, barPalette)
+	leadTimeQualityHeuristic, err := seeingLeadTimeQualityHeuristicLabels(diagnostics, barPalette)
 	if err != nil {
-		return fmt.Errorf("create seeing confidence labels: %w", err)
+		return fmt.Errorf("create seeing leadTimeQualityHeuristic labels: %w", err)
 	}
-	p.Add(confidence)
+	p.Add(leadTimeQualityHeuristic)
 	return saveAtomic(p, options, fileName)
 }
 
@@ -361,7 +361,7 @@ func seeingLabels(diagnostics forecast.Diagnostics) (*plotter.Labels, error) {
 	return labels, nil
 }
 
-func seeingConfidenceLabels(diagnostics forecast.Diagnostics, colors palette.Palette) (*plotter.Labels, error) {
+func seeingLeadTimeQualityHeuristicLabels(diagnostics forecast.Diagnostics, colors palette.Palette) (*plotter.Labels, error) {
 	points := make(plotter.XYs, 0, len(diagnostics.SeeingIndex))
 	strings := make([]string, 0, len(diagnostics.SeeingIndex))
 	styles := make([]text.Style, 0, len(diagnostics.SeeingIndex))
@@ -370,7 +370,7 @@ func seeingConfidenceLabels(diagnostics forecast.Diagnostics, colors palette.Pal
 			continue
 		}
 		points = append(points, plotter.XY{X: float64(index), Y: 0.32})
-		strings = append(strings, fmt.Sprintf("%.0f%%", diagnostics.Confidence[index]*100))
+		strings = append(strings, fmt.Sprintf("%.0f%%", diagnostics.LeadTimeQualityHeuristic[index]*100))
 		labelFont := font.From(plot.DefaultFont, vg.Points(8))
 		labelFont.Weight = xfont.WeightSemiBold
 		styles = append(styles, text.Style{

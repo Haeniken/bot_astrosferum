@@ -11,7 +11,7 @@ const AstrodomePrimitiveInputContractVersion = "astrodome-icon-primitives-v2"
 
 // AstrodomePrimitiveField identifies a native meteorological quantity, never
 // a derived science product. In particular, seeing, tau0, transmission,
-// Overall, quality, and confidence are deliberately absent from this type.
+// Overall and quality diagnostics are deliberately absent from this type.
 type AstrodomePrimitiveField uint64
 
 const (

@@ -114,8 +114,8 @@ func TestOverallIndexIgnoresDewButPenalizesHighFog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withDew[0].Index != baseline[0].Index || withDew[0].HighFog {
-		t.Fatalf("dew-only frame changed index: baseline=%v dew=%v fog=%v", baseline[0].Index, withDew[0].Index, withDew[0].HighFog)
+	if withDew[0].Index != baseline[0].Index || withDew[0].HighFogHeuristic {
+		t.Fatalf("dew-only frame changed index: baseline=%v dew=%v fog=%v", baseline[0].Index, withDew[0].Index, withDew[0].HighFogHeuristic)
 	}
 
 	fog := surface
@@ -126,8 +126,8 @@ func TestOverallIndexIgnoresDewButPenalizesHighFog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !withFog[0].HighFog || !(withFog[0].Index < baseline[0].Index) {
-		t.Fatalf("high fog did not reduce index: baseline=%v fog=%v high=%v", baseline[0].Index, withFog[0].Index, withFog[0].HighFog)
+	if !withFog[0].HighFogHeuristic || !(withFog[0].Index < baseline[0].Index) {
+		t.Fatalf("high fog did not reduce index: baseline=%v fog=%v high=%v", baseline[0].Index, withFog[0].Index, withFog[0].HighFogHeuristic)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestOverallIndexUsesDefaultPrecipitationThresholdForExplicitCalibration(t *
 
 func TestOverallIndexMarksMissingOptionalVisibilityAsPartial(t *testing.T) {
 	surface := clearSyntheticSurface()
-	surface.Frames[0].TransparencyAvailable = false
+	surface.Frames[0].FogHeuristicAvailable = false
 	surface.Frames[0].VisibilityKM = 0
 	frames, err := ComputeHourlyOverallIndex(
 		SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
@@ -183,11 +183,33 @@ func TestOverallIndexMarksMissingOptionalVisibilityAsPartial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing optional visibility broke the forecast: %v", err)
 	}
-	if frames[0].FogAssessmentAvailable || frames[0].DataCompleteness != OverallDataPartial {
+	if frames[0].FogHeuristicAvailable || frames[0].DataCompleteness != OverallDataPartial {
 		t.Fatalf("missing visibility was presented as complete: %+v", frames[0])
 	}
-	if !frames[1].FogAssessmentAvailable || frames[1].DataCompleteness != OverallDataComplete {
+	if !frames[1].FogHeuristicAvailable || frames[1].DataCompleteness != OverallDataComplete {
 		t.Fatalf("complete comparison frame was not marked complete: %+v", frames[1])
+	}
+}
+
+func TestOverallFogAndTransparencyAvailabilityAreIndependent(t *testing.T) {
+	surface := clearSyntheticSurface()
+	surface.Frames[0].FogHeuristicAvailable = true
+	surface.Frames[0].TransparencyHeuristicAvailable = false
+	surface.Frames[0].VisibilityKM = 0.5
+	surface.Frames[0].RelativeHumidityPercent = 98
+	surface.Frames[0].TemperatureC = 8
+	surface.Frames[0].DewPointC = 7.5
+	frames, err := ComputeHourlyOverallIndex(
+		SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !frames[0].FogHeuristicAvailable || !frames[0].HighFogHeuristic || frames[0].FogHeuristic != 2 {
+		t.Fatalf("VIS-based fog heuristic was coupled to missing PWV transparency input: %+v", frames[0])
+	}
+	if _, available := surface.Frames[0].TransparencyHeuristicPercent(); available {
+		t.Fatal("transparency heuristic remained available without PWV")
 	}
 }
 

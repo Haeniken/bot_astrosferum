@@ -181,14 +181,15 @@ func surfaceFromValues(values map[string]float64, validAt time.Time, sourceName 
 		HighCloudCoverPercent:   clampSurface(values["CLCH"], 0, 100),
 		WindSpeedMS:             math.Hypot(u, v),
 		WindGustMS:              math.Max(0, gust), PressureHPA: values["prmsl"] / 100,
-		WindDirectionDegrees:     math.Mod(math.Atan2(-u, -v)*180/math.Pi+360, 360),
-		VisibilityKM:             visibilityKM,
-		PrecipitableWaterMM:      math.Max(0, values["TQV"]),
-		CloudLiquidPathKgM2:      math.Max(0, values["TQC"]),
-		CloudIcePathKgM2:         math.Max(0, values["TQI"]),
-		MixedLayerDepthM:         mixedLayerDepthM,
-		CloudCondensateAvailable: hasCloudLiquidPath && hasCloudIcePath,
-		TransparencyAvailable:    hasVisibility && hasWaterVapour,
+		WindDirectionDegrees:           math.Mod(math.Atan2(-u, -v)*180/math.Pi+360, 360),
+		VisibilityKM:                   visibilityKM,
+		PrecipitableWaterMM:            math.Max(0, values["TQV"]),
+		CloudLiquidPathKgM2:            math.Max(0, values["TQC"]),
+		CloudIcePathKgM2:               math.Max(0, values["TQI"]),
+		MixedLayerDepthM:               mixedLayerDepthM,
+		CloudCondensateAvailable:       hasCloudLiquidPath && hasCloudIcePath,
+		FogHeuristicAvailable:          hasVisibility,
+		TransparencyHeuristicAvailable: hasVisibility && hasWaterVapour,
 	}
 	return ExtractedSurface{Frame: frame, AccumulatedPrecipMM: math.Max(0, values["tp"])}, nil
 }

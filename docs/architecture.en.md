@@ -6,7 +6,7 @@ The optional ICON-EU Horizon extension is implemented as a configuration-gated
 application capability. The directional atmospheric Astrodome calculator and
 authenticated account API are deployed here; the public application is owned
 by the independent `site-astrosferum` repository. The current production writer is
-production-v2 with science-kernel v29/path v23; the immutable v28/v22 full run
+production-v2 with science-kernel v30/path v23; the immutable v28/v22 full run
 remains the preceding measured baseline. Repeated cold/warm resource and
 observational gates remain open before public rollout.
 External sources last checked: 2026-07-28; last revision: 2026-08-11
@@ -486,8 +486,8 @@ in section 29, not the ordinary point cache.
 Provider-specific point cache keys:
 
 ```text
-ICON-EU:     point-v6-native-cloud-mass-mh/<run>/<grid-cell>.gob.gz
-ICON Global: point-v2-native-cloud/<run>/<grid-cell>.gob.gz
+ICON-EU:     point-v7-explicit-heuristics/<run>/<grid-cell>.gob.gz
+ICON Global: point-v3-explicit-heuristics/<run>/<grid-cell>.gob.gz
 ```
 
 ## 14. Normalization and quality checks
@@ -503,7 +503,8 @@ Before calculations:
 - reject physically impossible values;
 - preserve the hourly surface/cloud timeline and interpolate the three-hour
   pressure-level profile only to those valid times;
-- carry source and confidence metadata forward.
+- carry source provenance, availability masks, and explicitly named
+  deterministic quality heuristics forward.
 
 If one optional field is unavailable, its metric becomes `unavailable` or
 `partial`; the complete response should not fail because a nonessential layer
@@ -608,7 +609,10 @@ penalty = weighted_mean(available feature penalties)
 seeing  = clamp(1, 10, 10 - 9 * penalty)
 ```
 
-Unavailable-feature weights are excluded from the denominator, while confidence drops. Output includes `confidence: low|medium|high`. Thresholds and weights are versioned and included in cache hashes.
+Unavailable-feature weights are excluded from the denominator. The separate
+`LeadTimeQualityHeuristic` is derived only from forecast lead time and is
+displayed as a ranking aid; it is neither a probability nor a confidence
+interval. Thresholds and weights are versioned and included in cache hashes.
 
 Until compared with DIMM/MASS or observing logs, this is a comparative
 heuristic forecast. Overall does not multiply by it: vector shear already
@@ -651,7 +655,9 @@ The bot must not output an uncalibrated percentage probability. It reports `low 
 - low cloud and precipitation;
 - recent temperature and spread trends.
 
-If `T_G` is unavailable, spread/RH/wind are used and confidence is reduced. Thresholds are configuration/domain logic, never platform-adapter logic.
+If `T_G` is unavailable, spread/RH/wind are used and the missing input remains
+explicit in provenance; no statistical confidence is invented. Thresholds are
+configuration/domain logic, never platform-adapter logic.
 
 Required response example:
 
@@ -724,7 +730,7 @@ is absent from public ICON-EU Open Data, while available `CLCT_MOD` is a
 visualization field that DWD documents as ignoring cirrus when only high cloud
 is present—unacceptable for astronomy.
 
-Possible/high fog multiplies by `0.75/0.10`. Surface wind is only a mild
+Possible/high fog-heuristic signals multiply by `0.75/0.10`. Surface wind is only a mild
 practical factor: smoothstep starts at `8.5 m/s` mean wind and `12 m/s` gust,
 reaches its maximum at `15/22 m/s`, and the total penalty is capped at 20%.
 With defaults `w_seeing=1` and `w_cloud=2`:
@@ -851,7 +857,7 @@ The atlas year is explicitly pinned by `providers.light_pollution.atlas_year` / 
 
 The MVP renders seven images:
 
-1. **72-hour hourly weather** — weather, dew/fog risk, transparency percentage, and flow-direction arrows. Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto are ordered by distance from the observer's central body: Sun and Moon first, followed by the planetary sequence from Mercury through Pluto. The PNG rows show minute-level rise/set icons and times; the interactive site also shows each exact hourly altitude. Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
+1. **72-hour hourly weather** — weather, dew warning, fog heuristic, transparency heuristic, and flow-direction arrows. Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, and Pluto are ordered by distance from the observer's central body: Sun and Moon first, followed by the planetary sequence from Mercury through Pluto. The PNG rows show minute-level rise/set icons and times; the interactive site also shows each exact hourly altitude. Moon phase stays separate. The background and its legend distinguish day, bright twilight (`0…−12°`), astronomical twilight (`−12…−18°`), and night (`<−18°`). Boundaries use the computed solar-altitude crossing and are rasterized at their sub-hour pixel position rather than rounded to a model term.
 2. **Overall Astronomy Index** — enlarged hourly `1…10` stacked bars. The
    lower segment is retained suitability; colored segments above it are the
    exact Shapley allocation of loss from optical turbulence, effective cloud
@@ -867,7 +873,7 @@ The MVP renders seven images:
 4. **Wind speed vs pressure/time** — wind-speed heatmap in m/s.
 5. **Vertical vector wind shear** — `hypot(Δu,Δv)/|Δz|` in m/s/km.
 6. **Wind direction delta** — adjacent-level minimum angle; weak wind below `2 m/s` is displayed as `0°`.
-7. **Forecast Wind Seeing Index** — the retained wind-only `1…10` diagnostic; in-bar text such as `96%` shows the lead-time confidence heuristic.
+7. **Forecast Wind Seeing Index** — the retained wind-only `1…10` diagnostic; in-bar text such as `96%` shows `LeadTimeQualityHeuristic`, not statistical confidence.
 
 PNG contract:
 
@@ -884,9 +890,9 @@ PNG contract:
 - stable color scales within one renderer version;
 - no `Pickering Scale` label until physically calibrated.
 
-The weather legend also includes two fog levels. High risk requires direct `ICON VIS <1 km`, `RH ≥95%`, and `T−Td ≤1.5°C`; possible fog uses `VIS <5 km`, `RH ≥90%`, and `T−Td ≤2.5°C`. Saturation guards against calling smoke, dry haze, or precipitation fog solely from low visibility. The 1 km boundary follows the [WMO International Cloud Atlas](https://cloudatlas.wmo.int/fog-compared-with-mist.html). Official `CLCL/CLCM/CLCH` cover remains white below `10%`, blue at `10–49%`, and orange at `≥50%`; [ESO notes](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html) that even thin cirrus can vary transparency by more than 10%.
+The weather legend includes two uncalibrated fog-heuristic levels. A high signal requires direct `ICON VIS <1 km`, `RH ≥95%`, and `T−Td ≤1.5°C`; a possible signal uses `VIS <5 km`, `RH ≥90%`, and `T−Td ≤2.5°C`. They are warnings rather than categorical fog diagnoses and are not calibrated for local relief, coasts, site elevation, or fog mechanism. Saturation guards against calling smoke, dry haze, or precipitation fog solely from low visibility. The 1 km boundary follows the [WMO International Cloud Atlas](https://cloudatlas.wmo.int/fog-compared-with-mist.html). Official `CLCL/CLCM/CLCH` cover remains white below `10%`, blue at `10–49%`, and orange at `≥50%`; [ESO notes](https://www.eso.org/sci/observing/phase2/ObsConditions.CRIRES.html) that even thin cirrus can vary transparency by more than 10%.
 
-The displayed `Transparency %` row is a versioned heuristic, not physical transmission. Its dominant factor is the maximum of `CLCT/CLCL/CLCM/CLCH`, refined by surface horizontal visibility `VIS` and total-column water vapour `TQV`/PWV. For `transparency-proxy-v0`, `C=max(CLCT,CLCL,CLCM,CLCH)`, `V=clip((VIS_km−5)/45)`, `W=1−clip((PWV_mm−5)/35)`, and the result is `100·(1−C/100)·(0.65+0.25V+0.10W)`. The coefficients are an uncalibrated KISS ordering aid, so the legend and `/start` retain the proxy qualification even though the compact row label says “Transparency %”.
+The displayed `Transparency heuristic, %` row is a versioned ordering rule, not physical transmission. Its dominant factor is the maximum of `CLCT/CLCL/CLCM/CLCH`, refined by surface horizontal visibility `VIS` and total-column water vapour `TQV`/PWV. For the current contract, `C=max(CLCT,CLCL,CLCM,CLCH)`, `V=clip((VIS_km−5)/45)`, `W=1−clip((PWV_mm−5)/35)`, and the result is `100·(1−C/100)·(0.65+0.25V+0.10W)`. The coefficients are an uncalibrated ordering aid; neither the UI nor `/start` calls it optical transmission.
 
 DWD defines [`VIS` in metres and `TQV` in kg/m²](https://isabel.dwd.de/DWD/publikationen/dokumentation/grib/DWD_GRIB2_PARAMETER.htm); kg/m² is numerically equivalent to mm PWV. True optical transparency needs direct AOD/extinction observations: [DWD derives AOD and PWV through Sun, Moon, and stellar photometry](https://www.dwd.de/EN/research/observing_atmosphere/lindenberg_column/radiation/photometry.html). The proxy is therefore only for comparing hours in one forecast and is unsuitable for absolute photometry.
 
@@ -979,7 +985,7 @@ Redis provides no useful benefit for one process.
 | Point outside ICON-EU coverage | Use ICON Global and disclose the selected model |
 | ICON-Ru research source unavailable | Production unaffected; no production adapter depends on it |
 | GEOS-CF unavailable or stale | Reference-V ring becomes partial/unavailable; generic ICON forecast and Overall continue unchanged |
-| Some upper levels missing | Missing cells and lower confidence |
+| Some upper levels missing | Missing cells and lower structural completeness |
 | One chart cannot render or upload | Send the summary and every successful chart; report failures after attempting all attachments |
 | Telegram unavailable | VK continues, and vice versa |
 | Container restarts | Each adapter requests a fresh long-poll cursor from its platform; no local offset file is maintained |
@@ -1287,7 +1293,7 @@ Exit criterion: one fixture plus a reviewed “required field → actual GRIB ke
 - provider, grid, run, and freshness are visible;
 - weather, dew, and fog information is visible in the first chart;
 - one readable `3200×1360` weather PNG, one `4320×1600` Overall PNG, one `3200×1100` cloud PNG, and four `1280×960` PNGs are produced;
-- seeing is called a forecast index and includes confidence;
+- seeing is called a forecast index and is accompanied by the explicitly named, non-statistical `LeadTimeQualityHeuristic`;
 - incomplete runs never publish;
 - current model manifests survive restart; platform cursors are reacquired from the APIs;
 - tokens are absent from Git and logs;
@@ -1374,27 +1380,22 @@ normalized into the same application action.
 
 ### 29.3. Full hourly period from one immutable run
 
-The heatmap uses the fixed `f000..f072` interval of the immutable ICON-EU run:
-73 hourly terms spanning 72 hours, not a selected “best” hour. All eight
+The heatmap uses the fixed native `f001..f072` intervals of the immutable
+ICON-EU run: 72 hourly cells, not a selected “best” hour. `f000` has no
+preceding physical one-hour precipitation interval. All eight
 directions share exactly the same time axis. Daylight,
 bright twilight (`0…−12°`), astronomical twilight, and night are visually marked at the computed sub-hour crossing positions; polar day
 remains a valid, visibly daylight-only period rather than triggering a special
 time selection. The caption identifies the run, live freshness, and complete
 valid-time interval so elapsed early terms remain explicit.
 
-The model adapter pins the whole period to one ICON-EU run. It batches every
-required pressure-level `U/V/T/Z` step, every hourly surface, cloud, TKE, MH,
-and visibility step, and the shared HHL geometry across all lookup cells. Raw
-three-hour pressure variables are linearly interpolated only between bracketing
-terms of that same run onto the hourly grid; HMNSP/TKE, `Cn2`, seeing, `tau0`,
-and the index are recomputed after interpolation and are never themselves
-interpolated. There is no extrapolation beyond `f072`, across a missing edge,
-or across a run boundary. Lookup coordinates in
-the same `0.0625 deg` output cell are deduplicated. Horizon prepares one
-request-scoped CDO nearest-neighbour remapping plan: `gennn` creates the
-read-only weights once and every field/step reuses them through `remap`. CDO
-writes tabular values directly; no intermediate per-point GRIB copies are
-retained. The scientific
+The model adapter pins the whole period to one ICON-EU run and preloads the
+exact eight-ray apparent-10-degree footprint from native Astrodome primitives.
+For every hour it constructs the same Ciddor refractivity field, full
+Dormand--Prince ray, native horizontal/HHL event partition, and shared science
+node as the Astrodome; prepared seeing, `tau0`, transmission, Overall, and
+quality are never interpolated. CDO remapping weights are generated once per
+immutable footprint and reused. The scientific
 equations and limitations are specified in
 [the Horizon section of the scientific method](scientific-method.en.md#7-directional-horizon-analysis).
 
@@ -1440,7 +1441,7 @@ workers. The current composition implements this boundary:
   independent.
 
 Each extracted CDO table is normalized as its bounded subprocess finishes and the
-raw table is released; only the normalized 73-frame result remains for the
+raw table is released; only the normalized 72-frame result remains for the
 calculation. The directional worker's Compose hard limit is configured with
 `ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` (`24g` by default), and its lower Go
 heap target with `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` (`12GiB` by default).
@@ -1459,8 +1460,8 @@ one optional calculation class.
 ### 29.5. Cache and cleanup
 
 The Horizon cache is separate from the ordinary point/render caches. Its identity
-includes E5 coordinates, rounded observer HHL, provider and run ID, the fixed
-`window=f000-f072-hourly`, Horizon algorithm version, fixed geometry parameters,
+includes E5 coordinates, rounded observer HHL,
+provider and run ID, the fixed `window=f001-f072-native-hourly`, Horizon algorithm version, fixed geometry parameters,
 the complete calibration shared with Overall (`ASTRO_OVERALL_*` and
 `ASTRO_CLOUD_*` inputs), renderer algorithm version, and language. A calibration
 change therefore produces a different key rather than reusing an old result.
@@ -1468,8 +1469,8 @@ The key material is hashed for the path, so raw coordinates do not appear in
 filenames or logs. A cache hit is valid only for the exact immutable run and
 calculation contract.
 
-The scientific marker is `horizon-spherical-los-tke-hmnsp99-v7`; the application
-cache schema is `horizon-cache-v2-interactive`. Changing either a formula or the
+The scientific marker is `horizon-refracted-astrodome-kernel-v8`; the application
+cache schema is `horizon-cache-v3-full-refraction`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 
 PNG and metadata are published by staging plus atomic rename. Retention is
@@ -1549,7 +1550,7 @@ and numerical tolerances are in
 Physical breakpoints are first-class path inputs, not incidental products of
 adaptive quadrature. The current identities are
 `astrodome-science-path-v23` and
-`astrodome-science-kernel-v29`. The maximum physical- and horizontal-event root
+`astrodome-science-kernel-v30-explicit-heuristics`. The maximum physical- and horizontal-event root
 localisation radius is 0.2 mm. Bit-identical represented `pathM` coordinates form
 one compound geometric breakpoint even when their event identities differ;
 the sorted union of event identities is retained and every associated
@@ -1684,7 +1685,7 @@ span. The standard-rule boundaries are
 $L_{GL2,\min}=0.002366025403786804672\ \mathrm{m}$,
 $L_{GL3,\min}=0.004436491673108144934\ \mathrm{m}$,
 $L_{GL5,\min}=0.010658690662000389306\ \mathrm{m}$, and
-$L_{K15,\min}=0.11703258434509156429\ \mathrm{m}$. Kernel v29 uses independent
+$L_{K15,\min}=0.11703258434509156429\ \mathrm{m}$. Kernel v30 uses independent
 GL2/GL1, GL3/GL2, and GL5/GL3 between their successive boundaries and G7/K15
 above the K15 boundary; a two-numerical-endpoint child always uses G7/K15. A
 physical panel with $L_{GL2,\min}<L$ uses GL2/GL1. At or below that boundary,
@@ -1694,7 +1695,7 @@ is the sum of midpoint-panel lengths plus the union length of accepted endpoint
 slivers; exactly 1 m is accepted and any greater value fails closed. Such a
 node has `data_quality=limited`, `quadrature_convergence=0`, a non-zero
 `approximation_length_m`, and reason `short_path_approximation`.
-Kernel v29 retains removal of the former
+Kernel v30 retains removal of the former
 moment-fitted Q5/Q3 path because endpoint guards could make its signed weights
 arbitrarily ill-conditioned; exact coefficient construction did not bound
 errors in the nonlinear integrand. All selected higher/lower-rule differences
@@ -1730,7 +1731,7 @@ predicate are mandatory, and any mismatch fails closed. The envelope is
 conservative across the active raw stencil but does not take a maximum over an
 entire tier or atmospheric column.
 
-Kernel v29 keeps that envelope separate from the sampled reconstructed CLC.
+Kernel v30 keeps that envelope separate from the sampled reconstructed CLC.
 Each `(native horizontal cell, AGL tier)` block accumulates its own liquid and
 ice optical depths and the corresponding embedded numerical allowances.
 `cloud_transmission_nominal` uses the reconstructed CLC samples and nominal
@@ -1781,7 +1782,7 @@ The preceding v28/v22 measured profile is factual: on immutable ICON-EU run
 129 nodes for 72 native hours took 33 min 14 s end to end, with peak cgroup
 memory of 15,127,642,112 bytes. Of 9,288 node-hours, 9,284 were available and
 four sub-GL2 physical spans failed closed as `integration_nonconvergence`.
-It is a historical baseline, not a measurement of the current v29/v23 writer.
+It is a historical baseline, not a measurement of the current v30/v23 writer.
 Operational scheduling advertises 30 minutes as guidance, but production configures both the Astrodome
 job and bot-to-worker request deadlines as `0s`: the estimate does not terminate
 a healthy calculation. Explicit cancellation, coordinator shutdown, and
@@ -1819,10 +1820,10 @@ running-job count.
 Completed language-neutral datasets are gzip-compressed and atomically
 published. Their identity includes coordinates, run and manifest digest,
 72-hour window, grid/digest, primitive contract, geometry/refraction/science
-versions, and calibration. Calculation-request schema v3 also binds the
+versions, ephemerides, and calibration. Calculation-request schema v4 also binds the
 science-path version, apparent-direction contract, and SHA-256 of the complete
 configured science calibration; the same digest is retained in the dataset.
-The narrow `astrodome-dataset-writer-v4-celestial-distance-aspect` identity also participates in the
+The narrow `astrodome-dataset-writer-v5-explicit-heuristics` identity also participates in the
 calculation cache key, so a writer correction regenerates the payload without
 claiming a different scientific formula or dataset schema.
 An earlier request or a bot/worker calibration mismatch fails closed rather
@@ -1855,7 +1856,7 @@ continues to see only owner-scoped 96-hour results. Anonymous access is
 read-only: it does not expose saved points, job admission, status, cancellation,
 or any owner-scoped result.
 The fixture, stored-visualization decoder, current writer, calculator, browser,
-and cache accept only v29/v23 with an explicitly supported pinned grid profile;
+and cache accept only v30/v23 with an explicitly supported pinned grid profile;
 the production web writer uses `production-v2`. An older fixture is not migrated
 or reinterpreted and must be replaced by a successful current calculation.
 The serialized high-quality value is `good`.
@@ -1929,7 +1930,7 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v4-celestial-distance-aspect` or `horizon-interactive-v1` JSON; the
+versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v3-full-refraction` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
 weather and cloud retain one exact native hourly axis, Overall retains a
 narrower exact subset of that axis when pressure-profile support ends earlier, while
@@ -1938,27 +1939,27 @@ axis; none is resampled from another. Overall may cover a narrower exact subset
 when the current surface/cloud window extends beyond pressure-profile support.
 Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
-`forecast-interactive-v4-celestial-distance-aspect` also pins `algorithms.overall` as
-`overall-astronomy-index-v1`, `algorithms.cloud_obstruction` as
+`forecast-interactive-v5-explicit-heuristics` also pins `algorithms.overall` as
+`overall-astronomy-index-v2-fog-heuristic-availability`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
 `algorithms.overall_calibration_sha256` and the exact
-`celestial-horizontal-distance-aspect-jpl-meeus-v2` ephemeris identity. It carries ten
+`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3` ephemeris identity. It carries ten
 canonical tracks whose samples match the exact weather-hour axis. The browser
 validates this provenance before drawing and uses spherical interpolation only
 to densify dashed presentation paths; selected-hour values remain the stored
 server samples. The separate Johnson-V diagnostic retains
 NASA GEOS-CF AOD550/total-column-ozone provenance and is not reinterpreted as
 an Overall factor.
-`horizon-interactive-v1` pins the Horizon cache `artifact_key`, observer
+`horizon-interactive-v3-full-refraction` pins the Horizon cache `artifact_key`, observer
 model-surface elevation, ICON-EU provider/run/grid, Horizon science version,
-and the canonical Overall-calibration SHA-256. Its first frame is model `f000`
-and the 73 serialized frames keep the exact hourly source axis. Continuous
-server-derived solar-phase intervals cover `f000−30 min .. f072+30 min` and
+and the canonical Overall-calibration SHA-256. Its first frame is model `f001`
+and the 72 serialized frames keep the exact hourly source axis. Continuous
+server-derived solar-phase intervals cover `f001−30 min .. f072+30 min` and
 come from the same five-minute boundary solver as the static chart. The
 coordinator passes the exact science cache key through the worker protocol;
 the worker must recompute an equal key before it can publish a result. Browser code
-may convert a supplied confidence fraction to percent for display, but does
-not derive scientific confidence or quality.
+may convert supplied lead-time or composite data-quality heuristics to percent
+for display, but does not derive them or present them as probabilities.
 Non-finite internal placeholders become JSON `null`, never zero, and the axes
 retain UTC instants plus the coordinate's IANA time zone. The dispatcher
 publishes owner-scoped status and file endpoints and retains terminal results
@@ -2024,7 +2025,7 @@ Grid, physics, acquisition contracts, and the shared coordinator/worker
 boundary are implemented here. OIDC/session/CSRF handlers, the site API,
 WebGL2/Canvas client, and deployment templates are implemented in the private
 `site-astrosferum` repository, and the controlled site plus anonymous
-read-only reference fixture are deployed. Production-v2/v29/v23 is the current writer; its complete
+read-only reference fixture are deployed. Production-v2/v30/v23 is the current writer; its complete
 current-run release measurement is recorded only after an immutable full
 rerender. The preceding v28/v22 baseline measured 9,284 available of 9,288
 node-hours in 33 min 14 s. The first five-hour finer-grid

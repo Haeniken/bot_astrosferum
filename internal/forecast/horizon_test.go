@@ -14,7 +14,7 @@ func TestHorizonPlanUsesExactSphericalIntersectionAndMidpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.AlgorithmVersion != HorizonAlgorithmVersion || len(plan.Directions) != 8 {
+	if plan.AlgorithmVersion != HorizonStraightReferenceAlgorithmVersion || len(plan.Directions) != 8 {
 		t.Fatalf("unexpected horizon plan header: %+v", plan)
 	}
 	wantSurfaceEnd, err := HorizonSurfaceDistanceAtHeight(0, HorizonAtmosphereTopM)
@@ -56,6 +56,21 @@ func TestHorizonPlanUsesExactSphericalIntersectionAndMidpoints(t *testing.T) {
 		if !(last.RayHeightM < HorizonAtmosphereTopM) {
 			t.Fatalf("%s final midpoint is not inside atmosphere: %v", direction.Direction, last.RayHeightM)
 		}
+	}
+}
+
+func TestStraightReferencePlanCannotClaimPublishedHorizonVersion(t *testing.T) {
+	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
+	if plan.AlgorithmVersion == HorizonAlgorithmVersion {
+		t.Fatalf("straight reference plan claims published Horizon version %q", HorizonAlgorithmVersion)
+	}
+	plan.AlgorithmVersion = HorizonAlgorithmVersion
+	if _, err := ComputeHorizon(
+		homogeneousHorizonSnapshot(plan, time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC), 0, 0),
+		plan,
+		testHorizonCalibration(),
+	); err == nil {
+		t.Fatal("straight reference calculator accepted the published full-refraction version")
 	}
 }
 
@@ -364,8 +379,8 @@ func TestComputeHorizonKeepsSparseNativeProfilesUsableAndPenalizesCoverage(t *te
 		if !(result.TurbulenceProfileCoverage > 0 && result.TurbulenceProfileCoverage < 1) {
 			t.Fatalf("bounded 50 hPa top extension was not disclosed for %s: %v", result.Direction, result.TurbulenceProfileCoverage)
 		}
-		if result.Confidence >= horizonMaximumConfidence {
-			t.Fatalf("coarse sparse profile retained maximum confidence in %s: %v", result.Direction, result.Confidence)
+		if result.DataQualityHeuristic >= horizonMaximumDataQualityHeuristic {
+			t.Fatalf("coarse sparse profile retained maximum data-quality heuristic in %s: %v", result.Direction, result.DataQualityHeuristic)
 		}
 	}
 }
@@ -387,7 +402,7 @@ func TestComputeHorizonUsesObserverLocalFogForEveryDirection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, result := range clear {
-		if result.FogRisk != 0 {
+		if result.FogHeuristic != 0 {
 			t.Fatalf("remote sample fog leaked into %s: %+v", result.Direction, result)
 		}
 	}
@@ -399,7 +414,7 @@ func TestComputeHorizonUsesObserverLocalFogForEveryDirection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, result := range foggy {
-		if result.FogRisk != 2 || !result.HighFog || !(result.Index < clear[index].Index) {
+		if result.FogHeuristic != 2 || !result.HighFogHeuristic || !(result.Index < clear[index].Index) {
 			t.Fatalf("observer fog not common/effective in %s: clear=%v fog=%+v", result.Direction, clear[index].Index, result)
 		}
 	}
@@ -415,7 +430,7 @@ func TestComputeHorizonUnavailableAndCoarseTerrainCannotLookGood(t *testing.T) {
 		t.Fatal(err)
 	}
 	if results[0].Available || results[0].Index != 1 || results[0].DataQuality != HorizonDataUnavailable ||
-		results[0].LimitingFactor != HorizonFactorUnavailable || results[0].Confidence != 0 {
+		results[0].LimitingFactor != HorizonFactorUnavailable || results[0].DataQualityHeuristic != 0 {
 		t.Fatalf("incomplete direction became usable: %+v", results[0])
 	}
 
@@ -429,32 +444,32 @@ func TestComputeHorizonUnavailableAndCoarseTerrainCannotLookGood(t *testing.T) {
 	if !blocked[3].Available || !blocked[3].TerrainBlocked || blocked[3].Index != 1 || blocked[3].LimitingFactor != HorizonFactorTerrain {
 		t.Fatalf("coarse terrain block was not an explicit veto: %+v", blocked[3])
 	}
-	if blocked[3].Confidence > horizonMaximumConfidence {
-		t.Fatalf("coarse terrain confidence exceeded cap: %v", blocked[3].Confidence)
+	if blocked[3].DataQualityHeuristic > horizonMaximumDataQualityHeuristic {
+		t.Fatalf("coarse terrain data-quality heuristic exceeded cap: %v", blocked[3].DataQualityHeuristic)
 	}
 }
 
 func TestHorizonDataQualityUsesLeadTimeWithCompletenessAsLowerBound(t *testing.T) {
 	tests := []struct {
-		name           string
-		available      bool
-		confidence     float64
-		leadConfidence float64
-		want           HorizonDataQuality
+		name                     string
+		available                bool
+		dataQualityHeuristic     float64
+		leadTimeQualityHeuristic float64
+		want                     HorizonDataQuality
 	}{
 		{"unavailable", false, 0.85, 0.96, HorizonDataUnavailable},
 		{"weak profile remains limited", true, 0.59, 0.96, HorizonDataLimited},
-		{"early lead is good", true, 0.70, 0.96, HorizonDataGoodCoarse},
+		{"early lead is good", true, 0.70, 0.96, HorizonDataGood},
 		{"middle lead is usable", true, 0.70, 0.80, HorizonDataUsable},
 		{"late lead is limited", true, 0.70, 0.74, HorizonDataLimited},
-		{"good threshold is inclusive", true, 0.70, horizonGoodLeadConfidence, HorizonDataGoodCoarse},
-		{"usable threshold is inclusive", true, 0.70, horizonUsableLeadConfidence, HorizonDataUsable},
+		{"good threshold is inclusive", true, 0.70, horizonGoodLeadQualityHeuristic, HorizonDataGood},
+		{"usable threshold is inclusive", true, 0.70, horizonUsableLeadQualityHeuristic, HorizonDataUsable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := horizonDataQuality(test.available, test.confidence, test.leadConfidence); got != test.want {
+			if got := horizonDataQuality(test.available, test.dataQualityHeuristic, test.leadTimeQualityHeuristic); got != test.want {
 				t.Fatalf("horizonDataQuality(%v, %v, %v) = %q, want %q",
-					test.available, test.confidence, test.leadConfidence, got, test.want)
+					test.available, test.dataQualityHeuristic, test.leadTimeQualityHeuristic, got, test.want)
 			}
 		})
 	}
@@ -475,7 +490,7 @@ func TestComputeHorizonReturnsEightOrderedReadableDirectionsAndFactors(t *testin
 		if result.Direction != fixed.direction || result.AzimuthDegrees != fixed.azimuth || result.LimitingFactor == "" || len(result.LimitingFactors) == 0 {
 			t.Fatalf("direction %d is not ordered/readable: %+v", index, result)
 		}
-		if result.Confidence > horizonMaximumConfidence || result.DataQuality == "" {
+		if result.DataQualityHeuristic > horizonMaximumDataQualityHeuristic || result.DataQuality == "" {
 			t.Fatalf("direction %s has invalid quality: %+v", result.Direction, result)
 		}
 	}
@@ -534,6 +549,48 @@ func TestComputeHorizonAllowsRoundedObserverElevationButRejectsDifferentGeometry
 	}
 }
 
+func TestHorizonAdapterReclassifiesQualityAfterRingCoverage(t *testing.T) {
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	nodes := make([]AstrodomeScienceNode, HorizonDirectionCount)
+	for index := range nodes {
+		azimuth := float64(index) * 45
+		nodes[index] = AstrodomeScienceNode{
+			Available: index == 0, State: AstrodomeScienceNodeUnavailable,
+			ValidAt: now, ElevationDegrees: AstrodomeMinimumElevationDegrees,
+			AzimuthDegrees:      &azimuth,
+			GeometryMode:        AstrodomeScienceGeometryRefractionFull,
+			RayGeometryVersion:  AstrodomeRefractionGeometryVersion,
+			RefractionVersion:   AstrodomeRefractionIntegratorVersion,
+			RefractivityVersion: AstrodomeCiddorVersion,
+			Quality:             AstrodomeScienceQuality{LeadTimeQualityHeuristic: 0.96, Category: AstrodomeScienceQualityGood},
+		}
+	}
+	value, seeing, transmission := 1.0, 1.5, 0.9
+	nodes[0].Available = true
+	nodes[0].State = AstrodomeScienceNodeAvailable
+	nodes[0].Overall = &value
+	nodes[0].Seeing500Arcsec = &seeing
+	nodes[0].IntegratedCn2 = &AstrodomeScienceIntegralEstimate{Value: value}
+	nodes[0].WindWeightedCn2 = &AstrodomeScienceIntegralEstimate{Value: value}
+	nodes[0].CloudTransmissionConservative = &transmission
+	nodes[0].CloudTransmissionNominal = &transmission
+	nodes[0].Factors = &AstrodomeScienceFactors{
+		SeeingQuality: 1, CoherenceQuality: 1, Turbulence: 1,
+		Cloud: 1, SurfaceWind: 1, Fog: 1, Precipitation: 1,
+	}
+	nodes[0].Quality.GeometryCoverage = 1
+	nodes[0].Quality.TurbulencePathCoverage = 1
+	nodes[0].Quality.CloudPathCoverage = 1
+
+	results, err := HorizonResultsFromAstrodomeNodes(nodes, AstrodomeScienceFogNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].DataQualityHeuristic != 1.0/HorizonDirectionCount || results[0].DataQuality != HorizonDataLimited {
+		t.Fatalf("ring coverage retained inconsistent quality: heuristic=%v category=%q", results[0].DataQualityHeuristic, results[0].DataQuality)
+	}
+}
+
 func mustTestHorizonPlan(t *testing.T, stepM float64) HorizonPlan {
 	t.Helper()
 	plan, err := newHorizonPlan(Location{Latitude: 45, Longitude: 10, TimeZone: "UTC"}, 0, stepM, HorizonAtmosphereTopM)
@@ -552,7 +609,7 @@ func testHorizonCalibration() OverallIndexCalibration {
 func homogeneousHorizonSnapshot(plan HorizonPlan, validAt time.Time, liquidKgKg, coverPercent float64) HorizonSnapshot {
 	observerSurface := SurfaceFrame{
 		ValidAt: validAt, TemperatureC: 10, DewPointC: 0, RelativeHumidityPercent: 50,
-		VisibilityKM: 50, TransparencyAvailable: true,
+		VisibilityKM: 50, FogHeuristicAvailable: true, TransparencyHeuristicAvailable: true,
 		WindSpeedMS: 3, WindGustMS: 5,
 	}
 	snapshot := HorizonSnapshot{
@@ -580,7 +637,7 @@ func homogeneousHorizonSnapshot(plan HorizonPlan, validAt time.Time, liquidKgKg,
 				})
 			}
 			directionSnapshot.Samples[sampleIndex] = HorizonSampleSnapshot{
-				Vertical: VerticalFrame{ValidAt: validAt, Confidence: 0.9, Levels: []VerticalLevel{
+				Vertical: VerticalFrame{ValidAt: validAt, LeadTimeQualityHeuristic: 0.9, Levels: []VerticalLevel{
 					{PressureHPA: 700, HeightM: height - 1000, TemperatureK: 260, UMS: 8, VMS: 3},
 					{PressureHPA: 600, HeightM: height + 1000, TemperatureK: 250, UMS: 8, VMS: 3},
 				}},

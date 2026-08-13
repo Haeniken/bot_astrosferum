@@ -16,7 +16,7 @@ import (
 	"bot_astrosferum/internal/render"
 )
 
-const renderCacheVersion = "shared-render-v23-celestial-distance-aspect"
+const renderCacheVersion = "shared-render-v24-explicit-heuristics"
 
 func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.SurfaceSeries, cloud forecast.CloudSeries, composition forecast.AtmosphericCompositionSeries, sky astronomy.Series, options render.Options, calibration forecast.OverallIndexCalibration) string {
 	firstSurface, lastSurface := time.Time{}, time.Time{}
@@ -35,7 +35,7 @@ func forecastRenderCacheKey(vertical forecast.VerticalSeries, surface forecast.S
 		"composition=" + composition.Provider + "/" + composition.Product + "/" + composition.RunID + "/" + composition.BaseTime.UTC().Format(time.RFC3339) + "/" + composition.Grid + "/" + compositionFrameCacheIdentity(composition.Frames),
 		"reference_v=" + forecast.ReferenceVBandContractVersion + "/" + forecast.ReferenceVBandAtmosphereVersion + "/" + forecast.ReferenceVBandBenchmarkVersion + "/" + forecast.ReferenceVBandPassbandID,
 		"grid=" + vertical.Grid,
-		fmt.Sprintf("location=%.6f,%.6f,%s", vertical.Location.Latitude, vertical.Location.Longitude, vertical.Location.TimeZone),
+		forecastLocationCacheIdentity(vertical.Location),
 		"surface_period=" + firstSurface.UTC().Format(time.RFC3339) + "/" + lastSurface.UTC().Format(time.RFC3339),
 		"cloud_period=" + firstCloud.UTC().Format(time.RFC3339) + "/" + lastCloud.UTC().Format(time.RFC3339),
 		"algorithm=" + vertical.AlgorithmVersion,
@@ -67,6 +67,10 @@ func compositionFrameCacheIdentity(frames []forecast.AtmosphericCompositionFrame
 	}
 	digest := sha256.Sum256([]byte(identity.String()))
 	return hex.EncodeToString(digest[:])
+}
+
+func forecastLocationCacheIdentity(location forecast.Location) string {
+	return fmt.Sprintf("location=%.6f,%.6f,%s", location.Latitude, location.Longitude, location.TimeZone)
 }
 
 func cachedRenderResult(directory string) render.Result {

@@ -7,6 +7,14 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
+func TestWGS84ObserverFactorsAtReferenceEllipsoid(t *testing.T) {
+	equator := forecast.Location{Latitude: 0, Longitude: 0, TimeZone: "UTC"}
+	rhoCos, rhoSin := wgs84ObserverFactors(equator)
+	if rhoCos != 1 || rhoSin != 0 {
+		t.Fatalf("WGS84 equatorial surface factors = %.15f, %.15f", rhoCos, rhoSin)
+	}
+}
+
 func TestSaintPetersburgEventsUseCoordinateTimezone(t *testing.T) {
 	location, err := forecast.NewLocation(59.9386, 30.3141, "Europe/Moscow")
 	if err != nil {

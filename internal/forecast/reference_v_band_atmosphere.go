@@ -247,9 +247,9 @@ func ComputeReferenceVBandAtmosphere(
 		diagnostic.OperationallyUnavailable = true
 		diagnostic.OperationalReason = "precipitation"
 		result.Available = false
-	} else if overall.HighFog {
+	} else if overall.HighFogHeuristic {
 		diagnostic.OperationallyUnavailable = true
-		diagnostic.OperationalReason = "high_fog_risk"
+		diagnostic.OperationalReason = "high_fog_heuristic"
 		result.Available = false
 	}
 	diagnostic.Result = result

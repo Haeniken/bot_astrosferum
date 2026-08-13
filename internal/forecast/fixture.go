@@ -29,9 +29,9 @@ func SyntheticVerticalFixture() VerticalSeries {
 			}
 		}
 		frames[frameIndex] = VerticalFrame{
-			ValidAt:    base.Add(time.Duration(frameIndex) * 3 * time.Hour),
-			Levels:     levels,
-			Confidence: clamp(0.96-float64(frameIndex)*0.012, 0.62, 0.96),
+			ValidAt:                  base.Add(time.Duration(frameIndex) * 3 * time.Hour),
+			Levels:                   levels,
+			LeadTimeQualityHeuristic: clamp(0.96-float64(frameIndex)*0.012, 0.62, 0.96),
 		}
 	}
 	location, _ := NewLocation(59.9386, 30.3141, "Europe/Moscow")

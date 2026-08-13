@@ -259,6 +259,23 @@ func (profile AstrodomeGridProfile) Nodes() ([]AstrodomeGridNode, error) {
 	return nodes, nil
 }
 
+// HorizonRefractionNodes returns the fixed Horizon presentation ring. Every
+// direction is an apparent direction at the observer aperture, matching the
+// Astrodome refraction coordinate instead of the retired straight geometric
+// ray convention.
+func HorizonRefractionNodes() []AstrodomeGridNode {
+	nodes := make([]AstrodomeGridNode, HorizonDirectionCount)
+	for index, fixed := range fixedHorizonDirections {
+		azimuth := fixed.azimuth
+		nodes[index] = AstrodomeGridNode{
+			Index: index, RingIndex: 0, AzimuthIndex: index,
+			ElevationDegrees: AstrodomeMinimumElevationDegrees,
+			AzimuthDegrees:   &azimuth,
+		}
+	}
+	return nodes
+}
+
 // NewAstrodomeValidTimes creates the exact 72-frame hourly UTC axis beginning
 // at firstValidAt. Input acquisition may use extra bracketing steps, but they
 // are not part of this user-facing axis.

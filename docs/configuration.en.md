@@ -189,7 +189,7 @@ return owner-scoped status and a versioned interactive JSON dataset retained
 for 96 hours; they reuse the configured queues, preserve the prepared
 scientific values exactly, skip PNG rasterization on a website-only cache miss,
 and do not send platform messages. Forecast JSON pins
-`overall-astronomy-index-v1`, `effective-cloud-obstruction-v1`, and the SHA-256
+`overall-astronomy-index-v2-fog-heuristic-availability`, `effective-cloud-obstruction-v1`, and the SHA-256
 of the complete Overall calibration used for that result. The site may use a dedicated
 least-privilege PostgreSQL role, but stopping or removing it must not affect
 Telegram, VK, model synchronization, ordinary forecasts, Horizon, or
@@ -204,7 +204,7 @@ Astronomy Index, the optional Horizon directional index, and Astrodome. The repo
 defaults below are the recommended production profile; change them as one
 reviewed calibration set rather than tuning individual values casually. The
 complete calibration is part of each Horizon/Astrodome cache key. Astrodome
-calculation-request schema v3 carries the SHA-256 of its canonical complete
+calculation-request schema v4 carries the SHA-256 of its canonical complete
 calibration, the worker rejects a bot/worker digest mismatch, and the dataset
 retains the same digest as provenance. A change therefore produces a new
 identity instead of reusing a result calculated with old values. Invalid or
@@ -216,7 +216,7 @@ inconsistent values stop the application during configuration validation.
 | `ASTRO_OVERALL_CLOUD_WEIGHT` | `2.0` | Exponent applied to modeled cloud transmission; larger values make cloud obstruction dominate more strongly. |
 | `ASTRO_OVERALL_COHERENCE_TIME_WEIGHT` | `0.25` | Bounded weight of wind-sensitive coherence time `tau0`; `0` disables this guard and `1` applies it fully. |
 | `ASTRO_OVERALL_OPTICAL_TURBULENCE_MAX_PENALTY` | `0.25` | Maximum combined loss from the seeing/`tau0` utility term. It preserves at least a `0.75` factor and does not clip the physical diagnostics. |
-| `ASTRO_OVERALL_POSSIBLE_FOG_FACTOR` / `ASTRO_OVERALL_HIGH_FOG_FACTOR` | `0.75` / `0.10` | Multipliers for possible/high fog. Smaller factors impose a stronger penalty. |
+| `ASTRO_OVERALL_POSSIBLE_FOG_FACTOR` / `ASTRO_OVERALL_HIGH_FOG_FACTOR` | `0.75` / `0.10` | Multipliers for the possible/high `FogHeuristic` warning levels. Smaller factors impose a stronger penalty; these are not calibrated fog probabilities. |
 | `ASTRO_OVERALL_PRECIPITATION_DETECT_MM` | `0.05` | Detection threshold for deterministic hourly precipitation. At or above it, ordinary Overall applies a binary operational veto and returns index 1; intensity is deliberately not converted into a smooth penalty. This field is retained in the shared calibration identity but the current directional Horizon calculation does not ingest precipitation. |
 | `ASTRO_OVERALL_GOOD_SEEING_ARCSEC` / `ASTRO_OVERALL_BAD_SEEING_ARCSEC` | `0.5` / `2.0` | Best and poor reference limits for logarithmically mapping modeled seeing to quality. |
 | `ASTRO_OVERALL_BEST_COHERENCE_TIME_MS` / `ASTRO_OVERALL_BAD_COHERENCE_TIME_MS` | `5.2` / `1.6` | Best and poor reference limits for mapping `tau0` to its guard factor. |

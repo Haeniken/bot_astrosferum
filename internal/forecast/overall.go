@@ -18,7 +18,7 @@ const (
 	DefaultOverallPrecipitationDetectMM = 0.05
 	// OverallIndexAlgorithmVersion identifies the scientific interpretation of
 	// OverallIndexFrame independently from any renderer or transport.
-	OverallIndexAlgorithmVersion = "overall-astronomy-index-v1"
+	OverallIndexAlgorithmVersion = "overall-astronomy-index-v2-fog-heuristic-availability"
 )
 
 const (
@@ -254,14 +254,14 @@ type OverallIndexFrame struct {
 	SurfaceWindFactorPercent        float64                         `json:"surface_wind_factor_percent"`
 	PrecipitationMM                 float64                         `json:"precipitation_mm"`
 	PrecipitationVeto               bool                            `json:"precipitation_veto"`
-	FogRisk                         int                             `json:"fog_risk"`
-	HighFog                         bool                            `json:"high_fog"`
-	FogAssessmentAvailable          bool                            `json:"fog_assessment_available"`
+	FogHeuristic                    int                             `json:"fog_heuristic"`
+	HighFogHeuristic                bool                            `json:"high_fog_heuristic"`
+	FogHeuristicAvailable           bool                            `json:"fog_heuristic_available"`
 	DataCompleteness                OverallDataCompleteness         `json:"data_completeness"`
 	PenaltyLossFraction             float64                         `json:"penalty_loss_fraction"`
 	PenaltyContributions            []OverallPenaltyContribution    `json:"penalty_contributions"`
 	ReferenceVBand                  *ReferenceVBandDiagnostic       `json:"reference_v_band,omitempty"`
-	Confidence                      float64                         `json:"confidence"`
+	LeadTimeQualityHeuristic        float64                         `json:"lead_time_quality_heuristic"`
 }
 
 // ComputeHourlyOverallIndex combines a single physical turbulence integral
@@ -290,7 +290,7 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		if index > 0 && !frame.ValidAt.After(surface.Frames[index-1].ValidAt) {
 			return nil, fmt.Errorf("surface frame times must be strictly increasing")
 		}
-		windIndex, _, confidence, available := interpolateUpperAirDiagnostics(diagnostics, frame.ValidAt)
+		windIndex, _, leadTimeQualityHeuristic, available := interpolateUpperAirDiagnostics(diagnostics, frame.ValidAt)
 		if !available {
 			continue
 		}
@@ -346,10 +346,10 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		opticalTurbulenceFactor := boundedOpticalTurbulenceFactor(seeingFraction, coherenceFraction, calibration)
 		surfaceWindFactor := surfaceWindFactor(frame, calibration)
 		cloudObstructionFactor := math.Pow(cloudFactor, calibration.CloudWeight)
-		fogAssessmentAvailable := frame.TransparencyAvailable
+		fogAssessmentAvailable := frame.FogHeuristicAvailable
 		fogRisk := 0
 		if fogAssessmentAvailable {
-			fogRisk = frame.FogRisk()
+			fogRisk = frame.FogHeuristic()
 		}
 		fogFactor := 1.0
 		switch fogRisk {
@@ -409,10 +409,10 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 			SurfaceWindFactorPercent:       surfaceWindFactor * 100,
 			PrecipitationMM:                frame.PrecipitationMM,
 			PrecipitationVeto:              precipitationVeto,
-			FogRisk:                        fogRisk, HighFog: highFog,
-			FogAssessmentAvailable: fogAssessmentAvailable, DataCompleteness: dataCompleteness,
+			FogHeuristic:                   fogRisk, HighFogHeuristic: highFog,
+			FogHeuristicAvailable: fogAssessmentAvailable, DataCompleteness: dataCompleteness,
 			PenaltyLossFraction: penaltyLoss, PenaltyContributions: penaltyContributions,
-			Confidence: confidence,
+			LeadTimeQualityHeuristic: leadTimeQualityHeuristic,
 		})
 		if surfacePressureAvailable {
 			result[len(result)-1].SurfacePressureProvenance = ModelSurfacePressureProvenance
@@ -561,7 +561,7 @@ func validateOverallSurfaceFrame(frame SurfaceFrame) error {
 			return fmt.Errorf("available cloud condensate paths must be finite and non-negative")
 		}
 	}
-	if frame.TransparencyAvailable {
+	if frame.FogHeuristicAvailable {
 		if !finite(frame.TemperatureC) || !finite(frame.DewPointC) {
 			return fmt.Errorf("temperature and dew point must be finite when fog assessment is available")
 		}
@@ -713,7 +713,7 @@ func interpolateVerticalProfile(series VerticalSeries, target time.Time) ([]Vert
 
 // InterpolateVerticalFrame returns raw pressure-level state on an intermediate
 // model hour. Only the linear state variables (height, temperature and wind)
-// and deterministic input confidence are interpolated. Nonlinear Cn2, seeing,
+// and the deterministic lead-time quality heuristic are interpolated. Nonlinear Cn2, seeing,
 // coherence time and suitability indices must be recomputed from this frame.
 func InterpolateVerticalFrame(series VerticalSeries, target time.Time) (VerticalFrame, bool) {
 	levels, available := interpolateVerticalProfile(series, target)
@@ -731,15 +731,15 @@ func InterpolateVerticalFrame(series VerticalSeries, target time.Time) (Vertical
 	}
 	left := right - 1
 	span := series.Frames[right].ValidAt.Sub(series.Frames[left].ValidAt)
-	if span <= 0 || !finite(series.Frames[left].Confidence) || !finite(series.Frames[right].Confidence) {
+	if span <= 0 || !finite(series.Frames[left].LeadTimeQualityHeuristic) || !finite(series.Frames[right].LeadTimeQualityHeuristic) {
 		return VerticalFrame{}, false
 	}
 	fraction := float64(target.Sub(series.Frames[left].ValidAt)) / float64(span)
 	return VerticalFrame{
 		ValidAt: target,
 		Levels:  levels,
-		Confidence: series.Frames[left].Confidence +
-			fraction*(series.Frames[right].Confidence-series.Frames[left].Confidence),
+		LeadTimeQualityHeuristic: series.Frames[left].LeadTimeQualityHeuristic +
+			fraction*(series.Frames[right].LeadTimeQualityHeuristic-series.Frames[left].LeadTimeQualityHeuristic),
 	}, true
 }
 
@@ -756,7 +756,7 @@ func interpolateUpperAirDiagnostics(diagnostics Diagnostics, target time.Time) (
 	}
 	right := sort.Search(len(diagnostics.Times), func(index int) bool { return !diagnostics.Times[index].Before(target) })
 	if right < len(diagnostics.Times) && diagnostics.Times[right].Equal(target) {
-		return diagnostics.SeeingIndex[right], diagnostics.OpticalSeeingArcsec[right], diagnostics.Confidence[right], true
+		return diagnostics.SeeingIndex[right], diagnostics.OpticalSeeingArcsec[right], diagnostics.LeadTimeQualityHeuristic[right], true
 	}
 	if right == 0 || right == len(diagnostics.Times) {
 		return 0, math.NaN(), 0, false
@@ -772,6 +772,6 @@ func interpolateUpperAirDiagnostics(diagnostics Diagnostics, target time.Time) (
 	if finite(diagnostics.OpticalSeeingArcsec[left]) && finite(diagnostics.OpticalSeeingArcsec[right]) {
 		seeingArcsec = diagnostics.OpticalSeeingArcsec[left] + fraction*(diagnostics.OpticalSeeingArcsec[right]-diagnostics.OpticalSeeingArcsec[left])
 	}
-	confidence := diagnostics.Confidence[left] + fraction*(diagnostics.Confidence[right]-diagnostics.Confidence[left])
-	return windIndex, seeingArcsec, confidence, true
+	leadTimeQualityHeuristic := diagnostics.LeadTimeQualityHeuristic[left] + fraction*(diagnostics.LeadTimeQualityHeuristic[right]-diagnostics.LeadTimeQualityHeuristic[left])
+	return windIndex, seeingArcsec, leadTimeQualityHeuristic, true
 }

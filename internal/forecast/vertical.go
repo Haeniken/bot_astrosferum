@@ -20,9 +20,9 @@ type VerticalLevel struct {
 }
 
 type VerticalFrame struct {
-	ValidAt    time.Time       `json:"valid_at"`
-	Levels     []VerticalLevel `json:"levels"`
-	Confidence float64         `json:"confidence"`
+	ValidAt                  time.Time       `json:"valid_at"`
+	Levels                   []VerticalLevel `json:"levels"`
+	LeadTimeQualityHeuristic float64         `json:"lead_time_quality_heuristic"`
 }
 
 // VerticalSeries is provider-neutral input for vertical diagnostics and charts.
@@ -40,15 +40,15 @@ type VerticalSeries struct {
 }
 
 type Diagnostics struct {
-	Times               []time.Time `json:"times"`
-	PressureHPA         []float64   `json:"pressure_hpa"`
-	HeightKM            []float64   `json:"height_km"`
-	WindSpeedMS         [][]float64 `json:"wind_speed_ms"`
-	VectorShearMSPerKM  [][]float64 `json:"vector_shear_ms_per_km"`
-	DirectionDelta      [][]float64 `json:"direction_delta_deg"`
-	SeeingIndex         []float64   `json:"seeing_index"`
-	OpticalSeeingArcsec []float64   `json:"optical_seeing_arcsec"`
-	Confidence          []float64   `json:"confidence"`
+	Times                    []time.Time `json:"times"`
+	PressureHPA              []float64   `json:"pressure_hpa"`
+	HeightKM                 []float64   `json:"height_km"`
+	WindSpeedMS              [][]float64 `json:"wind_speed_ms"`
+	VectorShearMSPerKM       [][]float64 `json:"vector_shear_ms_per_km"`
+	DirectionDelta           [][]float64 `json:"direction_delta_deg"`
+	SeeingIndex              []float64   `json:"seeing_index"`
+	OpticalSeeingArcsec      []float64   `json:"optical_seeing_arcsec"`
+	LeadTimeQualityHeuristic []float64   `json:"lead_time_quality_heuristic"`
 }
 
 func (series VerticalSeries) Validate() error {
@@ -95,8 +95,8 @@ func (series VerticalSeries) Validate() error {
 		if len(frame.Levels) != len(pressures) {
 			return fmt.Errorf("frame %d has %d levels, expected %d", frameIndex, len(frame.Levels), len(pressures))
 		}
-		if !finite(frame.Confidence) || frame.Confidence < 0 || frame.Confidence > 1 {
-			return fmt.Errorf("frame %d confidence must be between 0 and 1", frameIndex)
+		if !finite(frame.LeadTimeQualityHeuristic) || frame.LeadTimeQualityHeuristic < 0 || frame.LeadTimeQualityHeuristic > 1 {
+			return fmt.Errorf("frame %d lead-time quality heuristic must be between 0 and 1", frameIndex)
 		}
 		for levelIndex, level := range frame.Levels {
 			if level.PressureHPA != pressures[levelIndex] {
@@ -127,15 +127,15 @@ func ComputeDiagnostics(series VerticalSeries) (Diagnostics, error) {
 	levelCount := len(series.Frames[0].Levels)
 	frameCount := len(series.Frames)
 	result := Diagnostics{
-		Times:               make([]time.Time, frameCount),
-		PressureHPA:         make([]float64, levelCount),
-		HeightKM:            make([]float64, levelCount),
-		WindSpeedMS:         matrix(levelCount, frameCount),
-		VectorShearMSPerKM:  matrix(levelCount, frameCount),
-		DirectionDelta:      matrix(levelCount, frameCount),
-		SeeingIndex:         make([]float64, frameCount),
-		OpticalSeeingArcsec: make([]float64, frameCount),
-		Confidence:          make([]float64, frameCount),
+		Times:                    make([]time.Time, frameCount),
+		PressureHPA:              make([]float64, levelCount),
+		HeightKM:                 make([]float64, levelCount),
+		WindSpeedMS:              matrix(levelCount, frameCount),
+		VectorShearMSPerKM:       matrix(levelCount, frameCount),
+		DirectionDelta:           matrix(levelCount, frameCount),
+		SeeingIndex:              make([]float64, frameCount),
+		OpticalSeeingArcsec:      make([]float64, frameCount),
+		LeadTimeQualityHeuristic: make([]float64, frameCount),
 	}
 	for levelIndex, level := range series.Frames[0].Levels {
 		result.PressureHPA[levelIndex] = level.PressureHPA
@@ -147,7 +147,7 @@ func ComputeDiagnostics(series VerticalSeries) (Diagnostics, error) {
 
 	for frameIndex, frame := range series.Frames {
 		result.Times[frameIndex] = frame.ValidAt
-		result.Confidence[frameIndex] = frame.Confidence
+		result.LeadTimeQualityHeuristic[frameIndex] = frame.LeadTimeQualityHeuristic
 		for levelIndex, level := range frame.Levels {
 			if math.IsNaN(level.UMS) {
 				result.WindSpeedMS[levelIndex][frameIndex] = math.NaN()
