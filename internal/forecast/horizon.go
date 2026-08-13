@@ -2,9 +2,6 @@ package forecast
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -12,13 +9,12 @@ import (
 )
 
 const (
-	// HorizonAlgorithmVersion identifies the published full-refraction product.
-	HorizonAlgorithmVersion      = "horizon-refracted-astrodome-kernel-v8"
-	HorizonRefractionGridProfile = "horizon-8x10deg-refracted-v2"
-	// HorizonStraightReferenceAlgorithmVersion identifies the retained
-	// straight-ray reference/test calculator. It is deliberately incompatible
-	// with current Horizon artifacts and cannot be published as v8.
-	HorizonStraightReferenceAlgorithmVersion = "horizon-spherical-los-tke-hmnsp99-v7"
+	// HorizonAlgorithmVersion identifies the published fast spherical
+	// straight-line-of-sight product. It is intentionally distinct from the
+	// full-refraction Astrodome kernel and from the retired Horizon v7 cache
+	// identity, even though it retains the validated v7 equations.
+	HorizonAlgorithmVersion = "horizon-spherical-straight-los-tke-hmnsp99-v9"
+	HorizonGridProfile      = "horizon-8x10deg-straight-v3"
 
 	HorizonEarthRadiusM              = 6371008.8
 	HorizonGeometricElevationDegrees = 10.0
@@ -104,10 +100,10 @@ type HorizonPlan struct {
 	Directions                []HorizonDirectionPlan `json:"directions"`
 }
 
-// NewHorizonPlan builds the retained straight-ray reference/admission plan:
+// NewHorizonPlan builds the published straight-ray Horizon plan:
 // eight azimuths at geometric elevation 10 degrees, with 0.5 km
 // surface-distance boundaries up to the straight-ray intersection with
-// 22.3 km absolute altitude. It is not the published v8 science geometry.
+// 22.3 km absolute altitude.
 func NewHorizonPlan(observer Location, observerSurfaceElevationM float64) (HorizonPlan, error) {
 	return newHorizonPlan(observer, observerSurfaceElevationM, HorizonSurfaceSegmentLengthM, HorizonAtmosphereTopM)
 }
@@ -135,7 +131,7 @@ func newHorizonPlan(observer Location, observerSurfaceElevationM, surfaceStepM, 
 	}
 	endSurfaceDistanceM := HorizonEarthRadiusM * endAngle
 	plan := HorizonPlan{
-		AlgorithmVersion:          HorizonStraightReferenceAlgorithmVersion,
+		AlgorithmVersion:          HorizonAlgorithmVersion,
 		Observer:                  observer,
 		ObserverSurfaceElevationM: observerSurfaceElevationM,
 		GeometricElevationDegrees: HorizonGeometricElevationDegrees,
@@ -356,7 +352,7 @@ type HorizonResult struct {
 	ValidAt                     time.Time                `json:"valid_at"`
 	Direction                   HorizonDirection         `json:"direction"`
 	AzimuthDegrees              float64                  `json:"azimuth_degrees"`
-	ApparentElevationDegrees    float64                  `json:"apparent_elevation_degrees"`
+	GeometricElevationDegrees   float64                  `json:"geometric_elevation_degrees"`
 	Index                       float64                  `json:"index"`
 	SeeingArcsec                float64                  `json:"seeing_arcsec"`
 	CoherenceTimeMS             float64                  `json:"coherence_time_ms"`
@@ -385,7 +381,7 @@ type HorizonResult struct {
 }
 
 // HorizonFrame is the eight-direction result for one forecast hour. A normal
-// user-visible full-refraction Horizon series contains the immutable ICON-EU
+// user-visible straight-ray Horizon series contains the immutable ICON-EU
 // model-run period f001..f072. The missing f000 term is not synthesised because
 // it has no preceding physical one-hour precipitation interval.
 type HorizonFrame struct {
@@ -402,9 +398,9 @@ type horizonDirectionComputation struct {
 	totalPathM             float64
 }
 
-// ComputeHorizon evaluates the retained v7 straight-ray reference inputs.
+// ComputeHorizon evaluates the published straight-ray Horizon inputs.
 // Invalid or incomplete directional input produces an explicit unavailable
-// result at index 1; this function cannot emit a current v8 artifact.
+// result at index 1.
 func ComputeHorizon(snapshot HorizonSnapshot, plan HorizonPlan, calibration OverallIndexCalibration) ([]HorizonResult, error) {
 	return computeHorizon(context.Background(), snapshot, plan, calibration)
 }
@@ -419,6 +415,14 @@ func computeHorizon(ctx context.Context, snapshot HorizonSnapshot, plan HorizonP
 	if err := validateHorizonPlan(plan); err != nil {
 		return nil, err
 	}
+	return computeHorizonForValidatedPlan(ctx, snapshot, plan, calibration)
+}
+
+// computeHorizonForValidatedPlan contains the numerical evaluator after the
+// published geometry contract has been checked. Keeping it separate lets
+// package-local convergence tests compare unpublished panel spacings without
+// allowing those plans through ComputeHorizon under the production version.
+func computeHorizonForValidatedPlan(ctx context.Context, snapshot HorizonSnapshot, plan HorizonPlan, calibration OverallIndexCalibration) ([]HorizonResult, error) {
 	if snapshot.ValidAt.IsZero() {
 		return nil, fmt.Errorf("horizon snapshot valid time is required")
 	}
@@ -432,9 +436,10 @@ func computeHorizon(ctx context.Context, snapshot HorizonSnapshot, plan HorizonP
 		snapshot.ObserverSurface.VisibilityKM,
 		snapshot.ObserverSurface.WindSpeedMS,
 		snapshot.ObserverSurface.WindGustMS,
+		snapshot.ObserverSurface.PrecipitationMM,
 	} {
 		if !finite(value) {
-			return nil, fmt.Errorf("horizon observer fog/wind inputs must be finite")
+			return nil, fmt.Errorf("horizon observer surface inputs must be finite")
 		}
 	}
 	if !finite(snapshot.ObserverSurfaceElevationM) ||
@@ -448,6 +453,14 @@ func computeHorizon(ctx context.Context, snapshot HorizonSnapshot, plan HorizonP
 	}
 	fogHeuristic := snapshot.ObserverSurface.FogHeuristic()
 	observerWindFactor := surfaceWindFactor(snapshot.ObserverSurface, calibration)
+	precipitationDetectMM := calibration.PrecipitationDetectMM
+	if precipitationDetectMM == 0 {
+		precipitationDetectMM = DefaultOverallPrecipitationDetectMM
+	}
+	precipitationFactor := 1.0
+	if snapshot.ObserverSurface.PrecipitationMM >= precipitationDetectMM {
+		precipitationFactor = 0
+	}
 	computations := make([]horizonDirectionComputation, len(plan.Directions))
 	resolvableDirections := 0
 	for index, directionPlan := range plan.Directions {
@@ -455,7 +468,7 @@ func computeHorizon(ctx context.Context, snapshot HorizonSnapshot, plan HorizonP
 			ctx,
 			snapshot.ValidAt, plan.Observer, plan.ObserverSurfaceElevationM, directionPlan,
 			snapshotDirections[directionPlan.Direction], fogHeuristic,
-			observerWindFactor, calibration,
+			observerWindFactor, precipitationFactor, calibration,
 		)
 		if err != nil {
 			return nil, err
@@ -508,8 +521,8 @@ func ComputeHorizonSeries(ctx context.Context, snapshots []HorizonSnapshot, plan
 	if ctx == nil {
 		return nil, fmt.Errorf("horizon calculation context is required")
 	}
-	if len(snapshots) < 2 || len(snapshots) > 73 {
-		return nil, fmt.Errorf("horizon series needs between 2 and 73 hourly snapshots")
+	if len(snapshots) != 72 {
+		return nil, fmt.Errorf("horizon series needs exactly 72 hourly snapshots (f001..f072)")
 	}
 	frames := make([]HorizonFrame, len(snapshots))
 	for index, snapshot := range snapshots {
@@ -549,11 +562,11 @@ func horizonSnapshotDirections(snapshot HorizonSnapshot, plan HorizonPlan) (map[
 	return result, nil
 }
 
-func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Location, observerSurfaceElevationM float64, plan HorizonDirectionPlan, snapshot HorizonDirectionSnapshot, fogHeuristic int, observerWindFactor float64, calibration OverallIndexCalibration) (horizonDirectionComputation, error) {
+func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Location, observerSurfaceElevationM float64, plan HorizonDirectionPlan, snapshot HorizonDirectionSnapshot, fogHeuristic int, observerWindFactor, precipitationFactor float64, calibration OverallIndexCalibration) (horizonDirectionComputation, error) {
 	result := HorizonResult{
 		ValidAt: validAt, Direction: plan.Direction, AzimuthDegrees: plan.AzimuthDegrees,
-		ApparentElevationDegrees: HorizonGeometricElevationDegrees,
-		Index:                    1, FogHeuristic: fogHeuristic, HighFogHeuristic: fogHeuristic == 2,
+		GeometricElevationDegrees: HorizonGeometricElevationDegrees,
+		Index:                     1, FogHeuristic: fogHeuristic, HighFogHeuristic: fogHeuristic == 2,
 		TerrainAssessment: HorizonTerrainModelHHL, DataQuality: HorizonDataUnavailable,
 		LimitingFactor: HorizonFactorUnavailable, LimitingFactors: []HorizonLimitingFactor{HorizonFactorUnavailable},
 	}
@@ -571,17 +584,12 @@ func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Lo
 	var integratedCn2, windWeightedCn2 float64
 	cloudBlocks := make(map[horizonCloudBlockKey]horizonCloudBlock)
 	var tierMaximumCover [3]float64
-	var terrainResolvedPathM, terrainWeightedLeadQuality float64
 	for index, geometry := range plan.Samples {
 		if err := ctx.Err(); err != nil {
 			return horizonDirectionComputation{}, err
 		}
 		data := snapshot.Samples[index]
 		if data.Surface.ValidAt.Equal(validAt) && finite(data.SurfaceElevationM) {
-			terrainResolvedPathM += geometry.LOSPathLengthM
-			if data.Vertical.ValidAt.Equal(validAt) && finite(data.Vertical.LeadTimeQualityHeuristic) && data.Vertical.LeadTimeQualityHeuristic >= 0 && data.Vertical.LeadTimeQualityHeuristic <= 1 {
-				terrainWeightedLeadQuality += data.Vertical.LeadTimeQualityHeuristic * geometry.LOSPathLengthM
-			}
 			if data.SurfaceElevationM >= geometry.RayHeightM {
 				computation.result.TerrainBlocked = true
 			}
@@ -618,27 +626,25 @@ func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Lo
 		computation.cloudQualityPathM += cloudQuality * ds
 		computation.weightedLeadQuality += data.Vertical.LeadTimeQualityHeuristic * ds
 	}
-	if computation.result.TerrainBlocked {
-		computation.resolvedPathM = terrainResolvedPathM
-		computation.weightedLeadQuality = terrainWeightedLeadQuality
-		computation.result.ResolvedPathFraction = clamp(terrainResolvedPathM/computation.totalPathM, 0, 1)
-		computation.result.PathCoverage = computation.result.ResolvedPathFraction
-		computation.result.TurbulenceProfileCoverage = computation.result.PathCoverage
-		computation.result.CloudProfileCoverage = computation.result.PathCoverage
-		computation.result.Available = computation.result.ResolvedPathFraction >= horizonMinimumCompletePathRatio
-		computation.result.Index = 1
-		computation.result.LimitingFactor = HorizonFactorTerrain
-		computation.result.LimitingFactors = []HorizonLimitingFactor{HorizonFactorTerrain}
-		if !computation.result.Available {
-			computation.result.LimitingFactors = append(computation.result.LimitingFactors, HorizonFactorUnavailable)
-		}
-		return computation, nil
-	}
 	computation.result.ResolvedPathFraction = clamp(computation.resolvedPathM/computation.totalPathM, 0, 1)
 	computation.result.TurbulenceProfileCoverage = clamp(computation.turbulenceQualityPathM/computation.totalPathM, 0, 1)
 	computation.result.CloudProfileCoverage = clamp(computation.cloudQualityPathM/computation.totalPathM, 0, 1)
 	computation.result.PathCoverage = math.Min(computation.result.TurbulenceProfileCoverage, computation.result.CloudProfileCoverage)
 	if computation.result.ResolvedPathFraction < horizonMinimumCompletePathRatio {
+		if computation.result.TerrainBlocked {
+			computation.result.LimitingFactor = HorizonFactorTerrain
+			computation.result.LimitingFactors = []HorizonLimitingFactor{
+				HorizonFactorTerrain,
+				HorizonFactorUnavailable,
+			}
+			if precipitationFactor < 1-1e-9 {
+				computation.result.LimitingFactor = HorizonFactorPrecipitation
+				computation.result.LimitingFactors = append(
+					[]HorizonLimitingFactor{HorizonFactorPrecipitation},
+					computation.result.LimitingFactors...,
+				)
+			}
+		}
 		return computation, nil
 	}
 
@@ -685,7 +691,7 @@ func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Lo
 		fogFactor = calibration.HighFogFactor
 	}
 	normalized := opticalTurbulenceFactor *
-		math.Pow(transmission, calibration.CloudWeight) * observerWindFactor * fogFactor
+		math.Pow(transmission, calibration.CloudWeight) * observerWindFactor * fogFactor * precipitationFactor
 
 	computation.result.Available = true
 	computation.result.SeeingArcsec = metrics.SeeingArcsec
@@ -705,6 +711,12 @@ func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Lo
 		seeingLimiterFactor, coherenceLimiterFactor,
 		math.Pow(transmission, calibration.CloudWeight), fogFactor, observerWindFactor,
 	)
+	if precipitationFactor < 1-1e-9 {
+		computation.result.LimitingFactors = append(
+			[]HorizonLimitingFactor{HorizonFactorPrecipitation},
+			computation.result.LimitingFactors...,
+		)
+	}
 	computation.result.LimitingFactor = computation.result.LimitingFactors[0]
 	return computation, nil
 }
@@ -1033,162 +1045,8 @@ func horizonDataQuality(available bool, dataQualityHeuristic, leadQualityHeurist
 	}
 }
 
-// HorizonRefractionGeometryDigest binds queue and cache identities to the
-// exact eight-ray apparent-direction contract. It contains no meteorological
-// or finished science values.
-func HorizonRefractionGeometryDigest() string {
-	descriptor := fmt.Sprintf(
-		"horizon-refraction-grid-v1|directions=N,NE,E,SE,S,SW,W,NW|azimuth_step=45|apparent_elevation=%.17g|coordinate=%s|surface=%s|wavelength=%.17g|ray=%s|refraction=%s|refractivity=%s",
-		AstrodomeMinimumElevationDegrees,
-		AstrodomeDirectionCoordinate,
-		AstrodomeDirectionReferenceSurface,
-		AstrodomeDirectionReferenceWavelengthM,
-		AstrodomeRefractionGeometryVersion,
-		AstrodomeRefractionIntegratorVersion,
-		AstrodomeCiddorVersion,
-	)
-	digest := sha256.Sum256([]byte(descriptor))
-	return "sha256:" + hex.EncodeToString(digest[:])
-}
-
-// HorizonResultsFromAstrodomeNodes is a presentation adapter over the shared
-// physical Astrodome kernel. It performs no atmospheric interpolation or
-// alternate seeing/cloud/Overall calculation.
-func HorizonResultsFromAstrodomeNodes(nodes []AstrodomeScienceNode, fogHeuristic AstrodomeScienceFogHeuristic) ([]HorizonResult, error) {
-	if len(nodes) != HorizonDirectionCount {
-		return nil, fmt.Errorf("refracted Horizon needs %d science nodes", HorizonDirectionCount)
-	}
-	results := make([]HorizonResult, len(nodes))
-	availableDirections := 0
-	for index, node := range nodes {
-		result, err := horizonResultFromAstrodomeNode(fixedHorizonDirections[index], node, fogHeuristic)
-		if err != nil {
-			return nil, fmt.Errorf("adapt refracted Horizon direction %s: %w", fixedHorizonDirections[index].direction, err)
-		}
-		results[index] = result
-		if result.Available {
-			availableDirections++
-		}
-	}
-	resolvableFraction := float64(availableDirections) / HorizonDirectionCount
-	for index := range results {
-		results[index].ResolvableDirectionFraction = resolvableFraction
-		if results[index].Available {
-			results[index].DataQualityHeuristic = math.Min(results[index].DataQualityHeuristic, resolvableFraction)
-			results[index].DataQuality = horizonDataQuality(
-				true,
-				results[index].DataQualityHeuristic,
-				results[index].LeadTimeQualityHeuristic,
-			)
-		}
-	}
-	return results, nil
-}
-
-func horizonResultFromAstrodomeNode(fixed struct {
-	direction HorizonDirection
-	azimuth   float64
-}, node AstrodomeScienceNode, fogHeuristic AstrodomeScienceFogHeuristic) (HorizonResult, error) {
-	result := HorizonResult{
-		ValidAt: node.ValidAt, Direction: fixed.direction, AzimuthDegrees: fixed.azimuth,
-		ApparentElevationDegrees: AstrodomeMinimumElevationDegrees,
-		Index:                    1, TerrainAssessment: HorizonTerrainModelHHL,
-		DataQuality: HorizonDataUnavailable, LimitingFactor: HorizonFactorUnavailable,
-		LimitingFactors:          []HorizonLimitingFactor{HorizonFactorUnavailable},
-		LeadTimeQualityHeuristic: node.Quality.LeadTimeQualityHeuristic,
-	}
-	if node.AzimuthDegrees == nil || math.Abs(*node.AzimuthDegrees-fixed.azimuth) > 1e-9 ||
-		math.Abs(node.ElevationDegrees-AstrodomeMinimumElevationDegrees) > 1e-9 ||
-		node.GeometryMode != AstrodomeScienceGeometryRefractionFull ||
-		node.RayGeometryVersion != AstrodomeRefractionGeometryVersion ||
-		node.RefractionVersion != AstrodomeRefractionIntegratorVersion ||
-		node.RefractivityVersion != AstrodomeCiddorVersion {
-		return result, errors.New("science node does not use the pinned full-refraction geometry")
-	}
-	if !node.Available {
-		result.TerrainBlocked = node.State == AstrodomeScienceNodeTerrainBlocked
-		if result.TerrainBlocked {
-			result.LimitingFactor = HorizonFactorTerrain
-			result.LimitingFactors = []HorizonLimitingFactor{HorizonFactorTerrain, HorizonFactorUnavailable}
-		}
-		return result, nil
-	}
-	if node.Overall == nil || node.Seeing500Arcsec == nil || node.IntegratedCn2 == nil ||
-		node.WindWeightedCn2 == nil || node.CloudTransmissionConservative == nil ||
-		node.CloudTransmissionNominal == nil || node.Factors == nil {
-		return result, errors.New("available science node omits a mandatory Horizon value")
-	}
-	result.Available = true
-	result.Index = *node.Overall
-	result.SeeingArcsec = *node.Seeing500Arcsec
-	result.CoherenceTimeUnbounded = node.Tau0UnboundedAbove
-	if node.Tau0500MS != nil {
-		result.CoherenceTimeMS = *node.Tau0500MS
-	} else if node.Tau0ConservativeScoreMS != nil {
-		result.CoherenceTimeMS = *node.Tau0ConservativeScoreMS
-	}
-	result.IntegratedCn2 = node.IntegratedCn2.Value
-	result.WindWeightedCn2 = node.WindWeightedCn2.Value
-	if node.LiquidOpticalDepth != nil {
-		result.CloudOpticalDepth += node.LiquidOpticalDepth.Value
-	}
-	if node.IceOpticalDepth != nil {
-		result.CloudOpticalDepth += node.IceOpticalDepth.Value
-	}
-	result.CloudTransmission = *node.CloudTransmissionConservative
-	result.CloudTransmissionPercent = 100 * result.CloudTransmission
-	result.CloudUnresolvedGuard = *node.CloudTransmissionConservative < *node.CloudTransmissionNominal-1e-12
-	result.ResolvedPathFraction = node.Quality.GeometryCoverage
-	result.TurbulenceProfileCoverage = node.Quality.TurbulencePathCoverage
-	result.CloudProfileCoverage = node.Quality.CloudPathCoverage
-	result.PathCoverage = math.Min(node.Quality.GeometryCoverage,
-		math.Min(node.Quality.TurbulencePathCoverage, node.Quality.CloudPathCoverage))
-	result.DataQualityHeuristic = math.Min(node.Quality.LeadTimeQualityHeuristic, result.PathCoverage)
-	result.FogHeuristic = astrodomeFogHeuristicInteger(fogHeuristic)
-	result.HighFogHeuristic = result.FogHeuristic == 2
-	result.TerrainBlocked = node.State == AstrodomeScienceNodeTerrainBlocked
-	result.DataQuality = horizonDataQualityFromAstrodome(node.Quality.Category)
-	result.LimitingFactors = horizonLimitingFactors(
-		result.TerrainBlocked,
-		node.Factors.SeeingQuality,
-		node.Factors.CoherenceQuality,
-		node.Factors.Cloud,
-		node.Factors.Fog,
-		node.Factors.SurfaceWind,
-	)
-	if node.Factors.Precipitation < 1-1e-9 {
-		result.LimitingFactors = append([]HorizonLimitingFactor{HorizonFactorPrecipitation}, result.LimitingFactors...)
-	}
-	result.LimitingFactor = result.LimitingFactors[0]
-	return result, nil
-}
-
-func horizonDataQualityFromAstrodome(category AstrodomeScienceQualityCategory) HorizonDataQuality {
-	switch category {
-	case AstrodomeScienceQualityGood:
-		return HorizonDataGood
-	case AstrodomeScienceQualityUsable:
-		return HorizonDataUsable
-	case AstrodomeScienceQualityLimited:
-		return HorizonDataLimited
-	default:
-		return HorizonDataUnavailable
-	}
-}
-
-func astrodomeFogHeuristicInteger(heuristic AstrodomeScienceFogHeuristic) int {
-	switch heuristic {
-	case AstrodomeScienceFogHigh:
-		return 2
-	case AstrodomeScienceFogPossible:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func validateHorizonPlan(plan HorizonPlan) error {
-	if plan.AlgorithmVersion != HorizonStraightReferenceAlgorithmVersion {
+	if plan.AlgorithmVersion != HorizonAlgorithmVersion {
 		return fmt.Errorf("horizon plan algorithm version %q is unsupported", plan.AlgorithmVersion)
 	}
 	if err := ValidateCoordinates(plan.Observer.Latitude, plan.Observer.Longitude); err != nil {
@@ -1200,7 +1058,8 @@ func validateHorizonPlan(plan HorizonPlan) error {
 	if plan.Observer.Longitude >= 180 || !finite(plan.ObserverSurfaceElevationM) ||
 		plan.ObserverSurfaceElevationM >= HorizonAtmosphereTopM ||
 		plan.GeometricElevationDegrees != HorizonGeometricElevationDegrees ||
-		plan.AtmosphereTopM != HorizonAtmosphereTopM || !finite(plan.SurfaceSegmentLengthM) || plan.SurfaceSegmentLengthM <= 0 {
+		plan.AtmosphereTopM != HorizonAtmosphereTopM ||
+		plan.SurfaceSegmentLengthM != HorizonSurfaceSegmentLengthM {
 		return fmt.Errorf("horizon plan does not use the fixed normalized geometry")
 	}
 	if len(plan.Directions) != len(fixedHorizonDirections) {
@@ -1231,7 +1090,7 @@ func validateHorizonPlan(plan HorizonPlan) error {
 	}
 	expected, err := newHorizonPlan(
 		plan.Observer, plan.ObserverSurfaceElevationM,
-		plan.SurfaceSegmentLengthM, plan.AtmosphereTopM,
+		HorizonSurfaceSegmentLengthM, HorizonAtmosphereTopM,
 	)
 	if err != nil {
 		return fmt.Errorf("rebuild horizon plan: %w", err)

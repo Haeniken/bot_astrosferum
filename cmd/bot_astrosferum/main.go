@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/app"
-	"bot_astrosferum/internal/app/astrodome"
 	"bot_astrosferum/internal/app/bot"
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/astronomy"
@@ -39,8 +38,8 @@ const version = "0.1.0-dev"
 
 type accountResultDiscardMessenger struct{}
 
-func directionalVolumeRequired(cfg config.Config) bool {
-	return cfg.HorizonAnalysis.Enabled || cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
+func astrodomeVolumeRequired(cfg config.Config) bool {
+	return cfg.Astrodome.Enabled || len(cfg.Platforms.Telegram.AdminIDs) > 0
 }
 
 func (accountResultDiscardMessenger) SendMessage(context.Context, int64, string, bool) error {
@@ -137,9 +136,24 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	logf := func(format string, values ...any) { writeLog(stderr, format, values...) }
 	started := time.Now()
-	manifest, err := iconeu.LoadCurrentDomeManifest(cfg.Paths.Data)
+	pointStore := iconeu.NewCachedStore(
+		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
+		int64(cfg.App.PointCacheMemoryLimit), logf,
+	)
+	cloud, err := pointStore.Cloud(ctx, location)
 	if err != nil {
 		return err
+	}
+	plan, err := forecast.NewHorizonPlan(location, cloud.SurfaceElevationM)
+	if err != nil {
+		return err
+	}
+	horizonStore := iconeu.NewHorizonStore(
+		cfg.Paths.Data, filepath.Join(cfg.Paths.Temp, "horizon-batch-cli"),
+		cfg.HorizonAnalysis.CDOWorkers, logf,
+	)
+	if !horizonStore.Supports(plan) {
+		return errors.New("horizon footprint is outside ICON-EU")
 	}
 	executionGate, err := directional.NewExecutionGate(
 		filepath.Join(cfg.Paths.Data, "state", "run-leases"),
@@ -153,24 +167,18 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, executionLease.Close()) }()
-	scienceCalibration, err := app.AstrodomeScienceCalibration(cfg.Algorithms)
+	currentRun, err := horizonStore.CurrentRunID()
+	if err != nil || currentRun != cloud.RunID {
+		return errors.New("ICON-EU horizon run changed before calculation")
+	}
+	snapshots, err := horizonStore.Series(ctx, cloud.RunID, plan)
 	if err != nil {
 		return err
 	}
-	computer, err := astrodome.NewComputer(astrodome.ComputerConfig{
-		DataRoot: cfg.Paths.Data, TempRoot: filepath.Join(cfg.Paths.Temp, "astrodome"),
-		ECCodesWorkers: cfg.HorizonAnalysis.CDOWorkers, ResidentLimitBytes: uint64(cfg.Astrodome.ResidentLimit),
-		ScienceCalibration: scienceCalibration, Logf: logf,
-	})
-	if err != nil {
-		return err
+	if len(snapshots) != 72 {
+		return errors.New("ICON-EU horizon series is incomplete")
 	}
-	source := directional.SourceIdentity{
-		Provider: "ICON-EU", RunID: manifest.RunID,
-		GridProfile:    forecast.HorizonRefractionGridProfile,
-		GeometryDigest: forecast.HorizonRefractionGeometryDigest(),
-	}
-	frames, surfaceElevationM, err := computer.ComputeRefractedHorizon(ctx, source, location)
+	frames, err := forecast.ComputeHorizonSeries(ctx, snapshots, plan, app.OverallCalibration(cfg.Algorithms))
 	if err != nil {
 		return err
 	}
@@ -178,13 +186,13 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		return fmt.Errorf("create horizon output directory: %w", err)
 	}
 	if err := render.Horizon(ctx, *output, render.HorizonInput{
-		Location: location, Provider: "ICON-EU", RunID: manifest.RunID,
+		Location: location, Provider: "ICON-EU", RunID: cloud.RunID,
 		Grid: iconeu.Coverage().GridName, Frames: frames,
 	}, render.Options{Language: *language}); err != nil {
 		return err
 	}
-	currentManifest, err := iconeu.LoadCurrentDomeManifest(cfg.Paths.Data)
-	if err != nil || currentManifest.RunID != manifest.RunID || currentManifest.ManifestSHA256 != manifest.ManifestSHA256 {
+	currentRun, err = horizonStore.CurrentRunID()
+	if err != nil || currentRun != cloud.RunID {
 		_ = os.Remove(*output)
 		return errors.New("ICON-EU horizon run changed during rendering")
 	}
@@ -197,9 +205,9 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		File              string    `json:"file"`
 		SurfaceElevationM float64   `json:"model_surface_elevation_m"`
 	}{
-		RunID: manifest.RunID, PeriodFrom: frames[0].ValidAt, PeriodTo: frames[len(frames)-1].ValidAt,
+		RunID: cloud.RunID, PeriodFrom: frames[0].ValidAt, PeriodTo: frames[len(frames)-1].ValidAt,
 		Frames: len(frames), Duration: time.Since(started).Round(time.Millisecond).String(), File: *output,
-		SurfaceElevationM: surfaceElevationM,
+		SurfaceElevationM: cloud.SurfaceElevationM,
 	})
 }
 
@@ -492,10 +500,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	// Horizon uses the same immutable Dome volume and full-refraction kernel,
-	// independently of whether the Astrodome page itself is publicly enabled;
-	// configured administrators still retain the existing preview path.
-	directionalVolumeOperational := directionalVolumeRequired(cfg)
+	// The fast straight-ray Horizon uses the ordinary immutable ICON-EU point
+	// bundles. Only Astrodome and its administrator preview require the much
+	// larger native three-dimensional Dome volume.
+	directionalVolumeOperational := astrodomeVolumeRequired(cfg)
 	var astrodomeDiskBudget *model.DiskBudget
 	if directionalVolumeOperational {
 		astrodomeDiskBudget, err = newAstrodomeDiskBudget(cfg)

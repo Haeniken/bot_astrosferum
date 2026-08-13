@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-08-12
-Stage: Stage 3 live ICON → Telegram and VK; full-refraction Horizon implemented pending a new production gate; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v30/v23 current; v28/v22 full-run retained as the measured baseline
+Date: 2026-08-13
+Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v9 deployed and production-verified; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v30/v23 current; v28/v22 full-run retained as the measured baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -120,10 +120,11 @@ implementation consists of:
 - an atomic bounded disk cache with startup, periodic, and post-publication
   cleanup; short-lived hard-link leases keep an admitted PNG stable across
   eviction and abandoned staging/lease artifacts are removed at startup;
-- eight apparent-10-degree azimuths using the same Ciddor refractivity field,
-  event-aware Dormand--Prince ray, native HHL/horizontal partition, and physical
-  science kernel as Astrodome; prepared seeing, `tau0`, cloud obstruction,
-  index, and quality are never interpolated;
+- eight azimuths using a spherical straight line of sight launched at geometric
+  elevation `10°`, partitioned into 500-m ground-track panels up to 22.3 km
+  MSL; Astrodome alone retains the Ciddor/Dormand--Prince refracted path, while
+  prepared seeing, `tau0`, cloud obstruction, index, and quality are never
+  interpolated in either product;
 - ICON-EU-only footprint checks and immutable `f001..f072` acquisition:
   exact hourly surface/cloud/TKE/MH/visibility, same-run linear interpolation
   of raw three-hour pressure `U/V/T/Z`, and batched CDO extraction of
@@ -159,8 +160,27 @@ implementation consists of:
   physical slant seeing and `tau0` remain unchanged, while reference anchors
   use the exact path ratio raised to the Fried `3/5` power.
 
-The production validation below predates full-refraction Horizon v8 and is
-retained only as a historical straight-path performance baseline. It used ICON-EU run `2026072218` and ICON
+The current v9 production gate passed on 2026-08-13 against immutable ICON-EU
+run `2026081300` (manifest SHA-256
+`8f329b58721a4244d13725e6c02d6610b87e7e1af05d85a576c6822dd5f49cc6`).
+It published exactly 72 frames `f001..f072` from 01:00 UTC on 13 August through
+00:00 UTC on 16 August. The cold control calculation used 213 deduplicated
+footprint points, completed all 169 extraction batches with zero partial
+values, spent `2 min 3.285 s` in directional series extraction and
+`3 min 20.792 s` end-to-end, and produced a non-empty `3200×1400` PNG with
+SHA-256 `77b36fd53a4cf258d2fe59f9f71f164cf74555930256f7622522517763e97a06`.
+The gate used ecCodes `2.45.0` and CDO `2.5.4`; therefore it exercises the
+batched real `TOT_PREC packingError` path rather than only a synthetic fixture.
+An ordinary seven-chart non-regression render then completed from the same run
+in `65 s` and produced all seven non-empty PNG files. Doctor, startup logs,
+PostgreSQL, directional-worker and website health/readiness passed; stopping
+the site left the bot, worker and PostgreSQL running independently, after which
+the site returned healthy. The full Go test/vet/build, pinned golangci-lint
+`2.12.2`, govulncheck `1.6.0`, and 20 browser-contract Node tests passed from
+isolated production source trees.
+
+The older validation below measured the retired v7 straight path and is
+retained only as a historical latency baseline. It used ICON-EU run `2026072218` and ICON
 Global run `2026072212`. At the saved Plavsk point, the first ordinary
 seven-chart calculation took `83.097 s`, the warm calculation took `9.193 s`,
 and the former 73-frame Horizon calculation took `123.541 s`. An ordinary
@@ -169,7 +189,7 @@ below the `14.193 s` non-regression threshold. The Global smoke produced seven
 charts in `174.586 s`; its Horizon command failed closed and created no PNG.
 Post-deployment doctor, PostgreSQL readiness, current-run identity, startup
 logs, restart/OOM state, bounded-cache cleanup, and secret/coordinate log scans
-all passed.
+all passed for that historical gate.
 
 Every deployment validates repository tests, race/vet/lint/build, one real
 current-run ICON-EU calculation, the explicit ICON Global no-button/no-job
@@ -301,7 +321,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v3-full-refraction` JSON
+  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v4-straight-ray` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:

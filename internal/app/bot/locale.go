@@ -42,8 +42,8 @@ func startHelp(language userLanguage, includeHorizon bool) string {
 		return help
 	}
 	item := language.text(
-		"8. «Горизонт» (только ICON-EU) — рефракционный расчёт f001…f072 на видимой высоте 10° по 8 азимутам: индекс, главный ограничитель и качество данных.",
-		"8. “Horizon” (ICON-EU only) — a refracted f001…f072 calculation at 10° apparent elevation in eight azimuths: index, principal limiter, and input-data quality.",
+		"8. «Горизонт» (только ICON-EU) — быстрый расчёт прямого луча f001…f072 на геометрической высоте 10° по 8 азимутам: индекс, главный ограничитель и качество данных.",
+		"8. “Horizon” (ICON-EU only) — a fast straight-ray f001…f072 calculation at 10° geometric elevation in eight azimuths: index, principal limiter, and input-data quality.",
 	)
 	return strings.Replace(help, marker, "\n\n"+item+marker, 1)
 }

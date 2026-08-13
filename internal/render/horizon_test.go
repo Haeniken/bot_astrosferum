@@ -174,9 +174,9 @@ func TestValidateHorizonInputRequiresF001ThroughF072(t *testing.T) {
 		{
 			name: "wrong elevation",
 			mutate: func(input *HorizonInput) {
-				input.Frames[7].Results[7].ApparentElevationDegrees = 15
+				input.Frames[7].Results[7].GeometricElevationDegrees = 15
 			},
-			want: "is not at apparent 10 degrees",
+			want: "is not at geometric 10 degrees",
 		},
 	}
 	for _, test := range tests {
@@ -225,7 +225,7 @@ func TestHorizonMissingDataHasExplicitCue(t *testing.T) {
 	input.Frames[31].Results[4].ValidAt = input.Frames[31].ValidAt
 	input.Frames[31].Results[4].Direction = forecast.HorizonSouth
 	input.Frames[31].Results[4].AzimuthDegrees = 180
-	input.Frames[31].Results[4].ApparentElevationDegrees = forecast.AstrodomeMinimumElevationDegrees
+	input.Frames[31].Results[4].GeometricElevationDegrees = forecast.HorizonGeometricElevationDegrees
 	input.Frames[31].Results[4].LimitingFactor = forecast.HorizonFactorUnavailable
 	if _, _, err := validateHorizonInput(input); err != nil {
 		t.Fatalf("explicit unavailable cell should remain renderable: %v", err)
@@ -318,8 +318,8 @@ func horizonRenderFixture() HorizonInput {
 			}
 			results = append(results, forecast.HorizonResult{
 				ValidAt: validAt, Direction: direction, AzimuthDegrees: float64(directionIndex * 45),
-				ApparentElevationDegrees: forecast.AstrodomeMinimumElevationDegrees,
-				Index:                    1 + mathMod(float64(frameIndex+directionIndex), 9), Available: available, DataQualityHeuristic: dataQualityHeuristic,
+				GeometricElevationDegrees: forecast.HorizonGeometricElevationDegrees,
+				Index:                     1 + mathMod(float64(frameIndex+directionIndex), 9), Available: available, DataQualityHeuristic: dataQualityHeuristic,
 				DataQuality: quality, LimitingFactor: factors[directionIndex],
 			})
 		}

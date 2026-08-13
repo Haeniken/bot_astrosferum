@@ -37,6 +37,14 @@ func verticalFromBatch(values map[batchValueKey]float64, step StepFile, sourceNa
 }
 
 func surfaceFromBatch(values map[batchValueKey]float64, validAt time.Time, sourceName string) (forecast.SurfaceFrame, error) {
+	extracted, err := surfaceExtractedFromBatch(values, validAt, sourceName)
+	if err != nil {
+		return forecast.SurfaceFrame{}, err
+	}
+	return extracted.Frame, nil
+}
+
+func surfaceExtractedFromBatch(values map[batchValueKey]float64, validAt time.Time, sourceName string) (ExtractedSurface, error) {
 	normalized := make(map[string]float64, len(surfaceFields))
 	expected := make(map[string]struct{}, len(surfaceFields))
 	for _, field := range surfaceFields {
@@ -45,18 +53,18 @@ func surfaceFromBatch(values map[batchValueKey]float64, validAt time.Time, sourc
 	for key, value := range values {
 		name := canonicalSurfaceShortName(key.name)
 		if _, ok := expected[name]; !ok {
-			return forecast.SurfaceFrame{}, fmt.Errorf("%s has unexpected surface field %q", sourceName, key.name)
+			return ExtractedSurface{}, fmt.Errorf("%s has unexpected surface field %q", sourceName, key.name)
 		}
 		if _, duplicate := normalized[name]; duplicate {
-			return forecast.SurfaceFrame{}, fmt.Errorf("%s repeats surface field %q", sourceName, name)
+			return ExtractedSurface{}, fmt.Errorf("%s repeats surface field %q", sourceName, name)
 		}
 		normalized[name] = value
 	}
 	extracted, err := surfaceFromValues(normalized, validAt, sourceName)
 	if err != nil {
-		return forecast.SurfaceFrame{}, err
+		return ExtractedSurface{}, err
 	}
-	return extracted.Frame, nil
+	return extracted, nil
 }
 
 func cloudHeightsFromBatch(values map[batchValueKey]float64, sourceName string) (map[int]float64, error) {

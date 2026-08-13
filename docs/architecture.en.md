@@ -1323,8 +1323,9 @@ forecast. It compares the eight fixed azimuths `N, NE, E, SE, S, SW, W, NW` at
 a fixed `10 deg` geometric-elevation reference for every available hourly term in
 the 72-hour ICON-EU period. It returns one compact time-by-direction heatmap and
 summary; it does not regenerate or duplicate the ordinary weather charts.
-The localized button displays the configured measured estimate (for example,
-`Horizon (~3 min)`); this is scheduling guidance, not the job timeout.
+The localized button displays a configured estimate; this is scheduling
+guidance, not the job timeout. The straight-ray value is set from its measured
+production smoke rather than inherited from the retired refracted path.
 
 This action is deliberately **ICON-EU-only**. The button may be offered only
 when all of the following are true:
@@ -1389,13 +1390,13 @@ remains a valid, visibly daylight-only period rather than triggering a special
 time selection. The caption identifies the run, live freshness, and complete
 valid-time interval so elapsed early terms remain explicit.
 
-The model adapter pins the whole period to one ICON-EU run and preloads the
-exact eight-ray apparent-10-degree footprint from native Astrodome primitives.
-For every hour it constructs the same Ciddor refractivity field, full
-Dormand--Prince ray, native horizontal/HHL event partition, and shared science
-node as the Astrodome; prepared seeing, `tau0`, transmission, Overall, and
-quality are never interpolated. CDO remapping weights are generated once per
-immutable footprint and reused. The scientific
+The model adapter pins the whole period to one ICON-EU run and extracts the
+exact midpoint footprint of eight spherical straight rays launched at 10°
+geometric elevation. Raw pressure state is interpolated to hourly terms before
+seeing, `tau0`, transmission, Overall and quality are fully recomputed; finished
+values are never interpolated. CDO remapping weights are generated once per
+immutable footprint and reused. Astrodome retains its independent full Ciddor/
+Dormand--Prince refracted path. The scientific
 equations and limitations are specified in
 [the Horizon section of the scientific method](scientific-method.en.md#7-directional-horizon-analysis).
 
@@ -1461,7 +1462,7 @@ one optional calculation class.
 
 The Horizon cache is separate from the ordinary point/render caches. Its identity
 includes E5 coordinates, rounded observer HHL,
-provider and run ID, the fixed `window=f001-f072-native-hourly`, Horizon algorithm version, fixed geometry parameters,
+provider and run ID, the fixed `window=f001-f072-hourly`, Horizon algorithm version, fixed geometry parameters,
 the complete calibration shared with Overall (`ASTRO_OVERALL_*` and
 `ASTRO_CLOUD_*` inputs), renderer algorithm version, and language. A calibration
 change therefore produces a different key rather than reusing an old result.
@@ -1469,8 +1470,8 @@ The key material is hashed for the path, so raw coordinates do not appear in
 filenames or logs. A cache hit is valid only for the exact immutable run and
 calculation contract.
 
-The scientific marker is `horizon-refracted-astrodome-kernel-v8`; the application
-cache schema is `horizon-cache-v3-full-refraction`. Changing either a formula or the
+The scientific marker is `horizon-spherical-straight-los-tke-hmnsp99-v9`; the application
+cache schema is `horizon-cache-v4-straight-ray`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 
 PNG and metadata are published by staging plus atomic rename. Retention is
@@ -1930,7 +1931,7 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v3-full-refraction` JSON; the
+versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v4-straight-ray` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
 weather and cloud retain one exact native hourly axis, Overall retains a
 narrower exact subset of that axis when pressure-profile support ends earlier, while
@@ -1950,7 +1951,7 @@ to densify dashed presentation paths; selected-hour values remain the stored
 server samples. The separate Johnson-V diagnostic retains
 NASA GEOS-CF AOD550/total-column-ozone provenance and is not reinterpreted as
 an Overall factor.
-`horizon-interactive-v3-full-refraction` pins the Horizon cache `artifact_key`, observer
+`horizon-interactive-v4-straight-ray` pins the Horizon cache `artifact_key`, observer
 model-surface elevation, ICON-EU provider/run/grid, Horizon science version,
 and the canonical Overall-calibration SHA-256. Its first frame is model `f001`
 and the 72 serialized frames keep the exact hourly source axis. Continuous
