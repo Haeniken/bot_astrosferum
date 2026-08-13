@@ -11,7 +11,38 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/app/directional"
+	"bot_astrosferum/internal/forecast"
 )
+
+func TestHorizonPlanDigestIsCanonicalPrefixedSHA256(t *testing.T) {
+	plan, err := forecast.NewHorizonPlan(
+		forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"},
+		198,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := horizonPlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(digest) != len("sha256:")+64 || !strings.HasPrefix(digest, "sha256:") {
+		t.Fatalf("Horizon geometry digest = %q", digest)
+	}
+	plan.Observer.TimeZone = "UTC"
+	for directionIndex := range plan.Directions {
+		for sampleIndex := range plan.Directions[directionIndex].Samples {
+			plan.Directions[directionIndex].Samples[sampleIndex].Midpoint.TimeZone = "UTC"
+		}
+	}
+	timeZoneIndependent, err := horizonPlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timeZoneIndependent != digest {
+		t.Fatalf("geometry digest changed with display timezone: %q != %q", timeZoneIndependent, digest)
+	}
+}
 
 func TestHorizonUsesSharedDirectionalFIFOAfterAstrodome(t *testing.T) {
 	root := t.TempDir()

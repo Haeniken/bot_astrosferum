@@ -20,7 +20,7 @@ const (
 
 	// HorizonRenderVersion is separate from the seven ordinary forecast charts
 	// because the Horizon PNG has its own cache and presentation lifecycle.
-	HorizonRenderVersion = "horizon-render-v5-hourly-72h-decimal-scores"
+	HorizonRenderVersion = "horizon-render-v6-straight-ray-hourly-72h-decimal-scores"
 
 	horizonFrameCount   = 72
 	horizonLeft         = 155
@@ -209,8 +209,8 @@ func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Tim
 			if !result.ValidAt.Equal(frame.ValidAt) {
 				return nil, time.Time{}, fmt.Errorf("horizon frame %d contains a result at another valid time", frameIndex)
 			}
-			if math.Abs(result.ApparentElevationDegrees-forecast.AstrodomeMinimumElevationDegrees) > 1e-6 {
-				return nil, time.Time{}, fmt.Errorf("horizon result %q is not at apparent %.0f degrees", result.Direction, forecast.AstrodomeMinimumElevationDegrees)
+			if math.Abs(result.GeometricElevationDegrees-forecast.HorizonGeometricElevationDegrees) > 1e-6 {
+				return nil, time.Time{}, fmt.Errorf("horizon result %q is not at geometric %.0f degrees", result.Direction, forecast.HorizonGeometricElevationDegrees)
 			}
 			if result.Available && (math.IsNaN(result.Index) || math.IsInf(result.Index, 0) || result.Index < 1 || result.Index > 10) {
 				return nil, time.Time{}, fmt.Errorf("horizon result %q index must be between 1 and 10", result.Direction)
@@ -247,7 +247,7 @@ func horizonMetadataLabels(input HorizonInput, frames []validatedHorizonFrame, o
 	first, last := frames[0].ValidAt, frames[len(frames)-1].ValidAt
 	timeZoneLabel := forecast.TimeZoneLabel(input.Location.TimeZone, first)
 	return horizonLabels{
-		title: localized(options, "Условия у горизонта на высоте 10° · 72 часа", "Horizon conditions at 10° elevation · 72 hours"),
+		title: localized(options, "Условия у горизонта на геометрической высоте 10° · 72 часа", "Horizon conditions at 10° geometric elevation · 72 hours"),
 		run: fmt.Sprintf(localized(options, "%s run %s UTC · Сетка: %s", "%s run %s UTC · Grid: %s"),
 			strings.TrimSpace(input.Provider), strings.TrimSpace(input.RunID), strings.TrimSpace(input.Grid)),
 		utcRange: fmt.Sprintf(localized(options, "UTC: %s — %s · 72 срока f001…f072", "UTC: %s — %s · 72 terms f001…f072"),

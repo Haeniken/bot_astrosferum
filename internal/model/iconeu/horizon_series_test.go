@@ -21,7 +21,7 @@ type horizonSeriesRunner struct {
 	maxActive int
 }
 
-func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, _ string, args ...string) ([]byte, error) {
+func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, name string, args ...string) ([]byte, error) {
 	runner.mu.Lock()
 	runner.calls++
 	runner.active++
@@ -34,6 +34,12 @@ func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, _ string, a
 		runner.active--
 		runner.mu.Unlock()
 	}()
+	if name == "grib_get" {
+		if len(args) < horizonForecastHours {
+			return nil, fmt.Errorf("synthetic packing-error request has %d arguments", len(args))
+		}
+		return []byte(strings.Repeat("0.001\n", horizonForecastHours)), nil
+	}
 	for _, argument := range args {
 		if strings.HasPrefix(argument, "gennn,") {
 			if err := os.WriteFile(args[len(args)-1], []byte("synthetic weights"), 0o600); err != nil {
@@ -68,10 +74,18 @@ func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, _ string, a
 			row("t", level, 210+0.07*float64(pressure))
 		}
 	case strings.HasPrefix(source, "surface-f"):
+		hour := horizonTestSurfaceForecastHour(source)
+		accumulatedPrecipitation := float64(hour)
+		switch hour {
+		case 2:
+			// This small decrease is inside the combined 0.002-mm packing
+			// enclosure and must be classified as indistinguishable from zero.
+			accumulatedPrecipitation = 0.999
+		}
 		values := map[string]float64{
 			"2t": 283.15, "2d": 278.15, "2r": 70,
 			"CLCT": 0, "CLCL": 0, "CLCM": 0, "CLCH": 0,
-			"tp": 0, "10u": 3, "10v": 2, "VMAX_10M": 5,
+			"tp": accumulatedPrecipitation, "10u": 3, "10v": 2, "VMAX_10M": 5,
 			"prmsl": 101325, "vis": 50000, "TQV": 12,
 			"TQC": 0, "TQI": 0, "mld": 500,
 		}
@@ -152,13 +166,19 @@ func horizonTestForecastHour(name string) int {
 	return hour
 }
 
+func horizonTestSurfaceForecastHour(name string) int {
+	value := strings.TrimSuffix(strings.TrimPrefix(name, "surface-f"), ".grib2")
+	hour, _ := strconv.Atoi(value)
+	return hour
+}
+
 func (runner *horizonSeriesRunner) counts() (calls, maximum int) {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	return runner.calls, runner.maxActive
 }
 
-func TestHorizonSeriesBuilds73ExactHoursAndInterpolatesRawPressureState(t *testing.T) {
+func TestHorizonSeriesBuilds72PublishedHoursAndInterpolatesRawPressureState(t *testing.T) {
 	base := time.Date(2026, 7, 22, 6, 0, 0, 0, time.UTC)
 	manifest := syntheticHorizonSeriesManifest(base)
 	runner := &horizonSeriesRunner{}
@@ -175,22 +195,28 @@ func TestHorizonSeriesBuilds73ExactHoursAndInterpolatesRawPressureState(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshots) != 73 || !snapshots[0].ValidAt.Equal(base) || !snapshots[72].ValidAt.Equal(base.Add(72*time.Hour)) {
+	if len(snapshots) != 72 || !snapshots[0].ValidAt.Equal(base.Add(time.Hour)) || !snapshots[71].ValidAt.Equal(base.Add(72*time.Hour)) {
 		t.Fatalf("unexpected series bounds: %d %v..%v", len(snapshots), snapshots[0].ValidAt, snapshots[len(snapshots)-1].ValidAt)
 	}
-	intermediate := snapshots[1].Directions[0].Samples[0].Vertical
+	intermediate := snapshots[0].Directions[0].Samples[0].Vertical
 	if !intermediate.ValidAt.Equal(base.Add(time.Hour)) || intermediate.Levels[0].UMS != 1 {
 		t.Fatalf("raw pressure interpolation at f001 = %+v", intermediate)
+	}
+	if got := snapshots[0].ObserverSurface.PrecipitationMM; got != 1 {
+		t.Fatalf("physical f000..f001 precipitation interval = %v mm, want 1", got)
+	}
+	if got := snapshots[1].ObserverSurface.PrecipitationMM; got != 0 {
+		t.Fatalf("packing-ambiguous f001..f002 precipitation interval = %v mm, want 0", got)
 	}
 	frames, err := forecast.ComputeHorizonSeries(context.Background(), snapshots, plan, forecast.DefaultOverallIndexCalibration())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frames) != 73 || len(frames[1].Results) != forecast.HorizonDirectionCount {
+	if len(frames) != 72 || len(frames[0].Results) != forecast.HorizonDirectionCount {
 		t.Fatalf("computed horizon frames = %d", len(frames))
 	}
 	calls, maximum := runner.counts()
-	wantCalls := 1 + 1 + 25 + 2*73
+	wantCalls := 1 + 1 + 1 + 25 + 2*72
 	if calls != wantCalls || maximum > 2 {
 		t.Fatalf("CDO batch calls/max concurrency = %d/%d, want %d/<=2", calls, maximum, wantCalls)
 	}
@@ -228,7 +254,7 @@ func TestHorizonSeriesMapsMultipleHorizontalCells(t *testing.T) {
 func syntheticHorizonSeriesManifest(base time.Time) LoadedManifest {
 	grid := Coverage()
 	// Collapse the physical footprint to one fake grid cell so this test covers
-	// all 172 batches without generating millions of synthetic CDO rows.
+	// all native forecast batches without generating millions of synthetic CDO rows.
 	grid.Increment = 1000
 	pressureSteps := make([]StepFile, 25)
 	for index := range pressureSteps {

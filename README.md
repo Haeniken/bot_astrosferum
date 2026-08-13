@@ -56,15 +56,16 @@ This compact index ranks hours using the modeled wind profile only. It is useful
 
 ![Plavsk directional Horizon analysis](docs/assets/examples/plavsk/en/horizon-analysis.png)
 
-This separate ICON-EU analysis compares N, NE, E, SE, S, SW, W, and NW for 72 native hourly intervals `f001..f072`. Every apparent-10-degree direction uses the full Astrodome refraction/science kernel. Read HHL as the atmospheric model surface, not a surveyed local horizon.
+This separate ICON-EU analysis compares N, NE, E, SE, S, SW, W, and NW for 72 hourly intervals `f001..f072`. Every direction follows a fast straight line of sight launched at 10° geometric elevation; atmospheric refraction remains part of Astrodome only. Read HHL as the atmospheric model surface, not a surveyed local horizon.
 
 Telegram and VK support native location sharing, textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports aggregated across both platforms. Both adapters use the same command, forecast, rendering, and persistence handler, so their calculated results are equivalent. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
 
 The bot also provides an optional ICON-EU-only Horizon analysis. When enabled,
 it appears as a second-stage action after an ordinary ICON-EU forecast and
 renders 72 native hourly intervals `f001..f072` as one eight-direction heatmap at an
-apparent `10°` elevation. It traces the same fully refracted atmospheric path as
-Astrodome, uses ICON HHL only as the model's lower boundary, shares the
+geometric `10°` elevation. It traces a fast straight spherical line of sight,
+while Astrodome retains the fully refracted atmospheric path. Horizon uses ICON
+HHL as the model surface, shares the
 Overall calibration, and never exposes a Horizon button or job for ICON Global.
 The current run is checked before costly work, after acquisition, and
 immediately before each send, including cache hits. See

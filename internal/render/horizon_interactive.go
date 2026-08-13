@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const HorizonInteractiveSchema = "horizon-interactive-v3-full-refraction"
+const HorizonInteractiveSchema = "horizon-interactive-v4-straight-ray"
 
 type HorizonInteractiveDirection struct {
 	Key            forecast.HorizonDirection `json:"key"`
@@ -88,7 +88,7 @@ func PrepareHorizonInteractiveDataset(
 		OverallCalibrationSHA256: calibrationDigest,
 		Location:                 input.Location, Provider: input.Provider, RunID: input.RunID, Grid: input.Grid,
 		ObserverSurfaceElevationM: observerSurfaceElevationM,
-		ElevationDeg:              forecast.AstrodomeMinimumElevationDegrees, Directions: directions, Frames: resultFrames,
+		ElevationDeg:              forecast.HorizonGeometricElevationDegrees, Directions: directions, Frames: resultFrames,
 		SolarPhases: periods,
 	}
 	if _, err := json.Marshal(dataset); err != nil {

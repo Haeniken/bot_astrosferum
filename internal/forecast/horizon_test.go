@@ -14,7 +14,7 @@ func TestHorizonPlanUsesExactSphericalIntersectionAndMidpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.AlgorithmVersion != HorizonStraightReferenceAlgorithmVersion || len(plan.Directions) != 8 {
+	if plan.AlgorithmVersion != HorizonAlgorithmVersion || len(plan.Directions) != 8 {
 		t.Fatalf("unexpected horizon plan header: %+v", plan)
 	}
 	wantSurfaceEnd, err := HorizonSurfaceDistanceAtHeight(0, HorizonAtmosphereTopM)
@@ -59,18 +59,28 @@ func TestHorizonPlanUsesExactSphericalIntersectionAndMidpoints(t *testing.T) {
 	}
 }
 
-func TestStraightReferencePlanCannotClaimPublishedHorizonVersion(t *testing.T) {
+func TestStraightPlanRequiresPublishedHorizonVersion(t *testing.T) {
 	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
-	if plan.AlgorithmVersion == HorizonAlgorithmVersion {
-		t.Fatalf("straight reference plan claims published Horizon version %q", HorizonAlgorithmVersion)
+	if plan.AlgorithmVersion != HorizonAlgorithmVersion {
+		t.Fatalf("straight plan version = %q, want %q", plan.AlgorithmVersion, HorizonAlgorithmVersion)
 	}
-	plan.AlgorithmVersion = HorizonAlgorithmVersion
+	plan.AlgorithmVersion = "retired-horizon-version"
 	if _, err := ComputeHorizon(
 		homogeneousHorizonSnapshot(plan, time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC), 0, 0),
 		plan,
 		testHorizonCalibration(),
 	); err == nil {
-		t.Fatal("straight reference calculator accepted the published full-refraction version")
+		t.Fatal("straight calculator accepted an unsupported Horizon version")
+	}
+	for _, stepM := range []float64{250, 499, 501, 2000} {
+		plan := mustTestHorizonPlan(t, stepM)
+		if _, err := ComputeHorizon(
+			homogeneousHorizonSnapshot(plan, time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC), 0, 0),
+			plan,
+			testHorizonCalibration(),
+		); err == nil {
+			t.Fatalf("published Horizon version accepted %.0f-m surface panels", stepM)
+		}
 	}
 }
 
@@ -174,7 +184,7 @@ func TestComputeHorizonHomogeneousSlantSeeingHasExpectedGeometricScale(t *testin
 	snapshot := homogeneousHorizonSnapshot(plan, validAt, 0, 0)
 	calibration := DefaultOverallIndexCalibration()
 	calibration.BoundaryLayerMinM = 100
-	results, err := ComputeHorizon(snapshot, plan, calibration)
+	results, err := computeHorizonForConvergenceTest(snapshot, plan, calibration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +272,7 @@ func TestComputeHorizonCloudClosureIsStepSizeStable(t *testing.T) {
 	coarsePlan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM*4)
 	productionPlan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
 	finePlan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM/2)
-	coarse, err := ComputeHorizon(homogeneousHorizonSnapshot(coarsePlan, validAt, 1e-8, 60), coarsePlan, testHorizonCalibration())
+	coarse, err := computeHorizonForConvergenceTest(homogeneousHorizonSnapshot(coarsePlan, validAt, 1e-8, 60), coarsePlan, testHorizonCalibration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +280,7 @@ func TestComputeHorizonCloudClosureIsStepSizeStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fine, err := ComputeHorizon(homogeneousHorizonSnapshot(finePlan, validAt, 1e-8, 60), finePlan, testHorizonCalibration())
+	fine, err := computeHorizonForConvergenceTest(homogeneousHorizonSnapshot(finePlan, validAt, 1e-8, 60), finePlan, testHorizonCalibration())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,11 +451,36 @@ func TestComputeHorizonUnavailableAndCoarseTerrainCannotLookGood(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !blocked[3].Available || !blocked[3].TerrainBlocked || blocked[3].Index != 1 || blocked[3].LimitingFactor != HorizonFactorTerrain {
+	if blocked[3].Available || !blocked[3].TerrainBlocked || blocked[3].Index != 1 ||
+		blocked[3].DataQuality != HorizonDataUnavailable || blocked[3].LimitingFactor != HorizonFactorTerrain ||
+		len(blocked[3].LimitingFactors) != 2 || blocked[3].LimitingFactors[1] != HorizonFactorUnavailable {
 		t.Fatalf("coarse terrain block was not an explicit veto: %+v", blocked[3])
 	}
 	if blocked[3].DataQualityHeuristic > horizonMaximumDataQualityHeuristic {
 		t.Fatalf("coarse terrain data-quality heuristic exceeded cap: %v", blocked[3].DataQualityHeuristic)
+	}
+
+	terrainSnapshot.Directions[3].Samples[blockedSample].Cloud.Levels = nil
+	incompleteBlocked, err := ComputeHorizon(terrainSnapshot, plan, testHorizonCalibration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incompleteBlocked[3].Available || incompleteBlocked[3].DataQuality != HorizonDataUnavailable ||
+		incompleteBlocked[3].LimitingFactor != HorizonFactorTerrain ||
+		len(incompleteBlocked[3].LimitingFactors) != 2 || incompleteBlocked[3].LimitingFactors[1] != HorizonFactorUnavailable ||
+		incompleteBlocked[3].SeeingArcsec != 0 || incompleteBlocked[3].CloudTransmissionPercent != 0 {
+		t.Fatalf("terrain block with incomplete atmospheric state was presented as calculated: %+v", incompleteBlocked[3])
+	}
+	terrainSnapshot.ObserverSurface.PrecipitationMM = testHorizonCalibration().PrecipitationDetectMM
+	rainyIncompleteBlocked, err := ComputeHorizon(terrainSnapshot, plan, testHorizonCalibration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rainyIncompleteBlocked[3].Available || rainyIncompleteBlocked[3].LimitingFactor != HorizonFactorPrecipitation ||
+		len(rainyIncompleteBlocked[3].LimitingFactors) != 3 ||
+		rainyIncompleteBlocked[3].LimitingFactors[1] != HorizonFactorTerrain ||
+		rainyIncompleteBlocked[3].LimitingFactors[2] != HorizonFactorUnavailable {
+		t.Fatalf("precipitation/terrain/unavailable precedence = %+v", rainyIncompleteBlocked[3])
 	}
 }
 
@@ -499,7 +534,7 @@ func TestComputeHorizonReturnsEightOrderedReadableDirectionsAndFactors(t *testin
 func TestComputeHorizonSeriesRequiresAndPreservesHourly72HourWindow(t *testing.T) {
 	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
 	start := time.Date(2026, 7, 22, 14, 0, 0, 0, time.UTC)
-	snapshots := make([]HorizonSnapshot, 73)
+	snapshots := make([]HorizonSnapshot, 72)
 	for index := range snapshots {
 		snapshots[index] = homogeneousHorizonSnapshot(plan, start.Add(time.Duration(index)*time.Hour), 0, 0)
 	}
@@ -507,7 +542,7 @@ func TestComputeHorizonSeriesRequiresAndPreservesHourly72HourWindow(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frames) != 73 || !frames[0].ValidAt.Equal(start) || !frames[72].ValidAt.Equal(start.Add(72*time.Hour)) {
+	if len(frames) != 72 || !frames[0].ValidAt.Equal(start) || !frames[71].ValidAt.Equal(start.Add(71*time.Hour)) {
 		t.Fatalf("unexpected horizon series bounds: %d %v..%v", len(frames), frames[0].ValidAt, frames[len(frames)-1].ValidAt)
 	}
 	for _, frame := range frames {
@@ -524,9 +559,9 @@ func TestComputeHorizonSeriesRequiresAndPreservesHourly72HourWindow(t *testing.T
 func TestComputeHorizonSeriesHonorsCancellation(t *testing.T) {
 	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
 	start := time.Date(2026, 7, 22, 14, 0, 0, 0, time.UTC)
-	snapshots := []HorizonSnapshot{
-		homogeneousHorizonSnapshot(plan, start, 0, 0),
-		homogeneousHorizonSnapshot(plan, start.Add(time.Hour), 0, 0),
+	snapshots := make([]HorizonSnapshot, 72)
+	for index := range snapshots {
+		snapshots[index] = homogeneousHorizonSnapshot(plan, start.Add(time.Duration(index)*time.Hour), 0, 0)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -549,45 +584,21 @@ func TestComputeHorizonAllowsRoundedObserverElevationButRejectsDifferentGeometry
 	}
 }
 
-func TestHorizonAdapterReclassifiesQualityAfterRingCoverage(t *testing.T) {
-	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
-	nodes := make([]AstrodomeScienceNode, HorizonDirectionCount)
-	for index := range nodes {
-		azimuth := float64(index) * 45
-		nodes[index] = AstrodomeScienceNode{
-			Available: index == 0, State: AstrodomeScienceNodeUnavailable,
-			ValidAt: now, ElevationDegrees: AstrodomeMinimumElevationDegrees,
-			AzimuthDegrees:      &azimuth,
-			GeometryMode:        AstrodomeScienceGeometryRefractionFull,
-			RayGeometryVersion:  AstrodomeRefractionGeometryVersion,
-			RefractionVersion:   AstrodomeRefractionIntegratorVersion,
-			RefractivityVersion: AstrodomeCiddorVersion,
-			Quality:             AstrodomeScienceQuality{LeadTimeQualityHeuristic: 0.96, Category: AstrodomeScienceQualityGood},
-		}
-	}
-	value, seeing, transmission := 1.0, 1.5, 0.9
-	nodes[0].Available = true
-	nodes[0].State = AstrodomeScienceNodeAvailable
-	nodes[0].Overall = &value
-	nodes[0].Seeing500Arcsec = &seeing
-	nodes[0].IntegratedCn2 = &AstrodomeScienceIntegralEstimate{Value: value}
-	nodes[0].WindWeightedCn2 = &AstrodomeScienceIntegralEstimate{Value: value}
-	nodes[0].CloudTransmissionConservative = &transmission
-	nodes[0].CloudTransmissionNominal = &transmission
-	nodes[0].Factors = &AstrodomeScienceFactors{
-		SeeingQuality: 1, CoherenceQuality: 1, Turbulence: 1,
-		Cloud: 1, SurfaceWind: 1, Fog: 1, Precipitation: 1,
-	}
-	nodes[0].Quality.GeometryCoverage = 1
-	nodes[0].Quality.TurbulencePathCoverage = 1
-	nodes[0].Quality.CloudPathCoverage = 1
-
-	results, err := HorizonResultsFromAstrodomeNodes(nodes, AstrodomeScienceFogNone)
+func TestComputeHorizonAppliesHourlyPrecipitationVeto(t *testing.T) {
+	plan := mustTestHorizonPlan(t, HorizonSurfaceSegmentLengthM)
+	validAt := time.Date(2026, 7, 22, 13, 0, 0, 0, time.UTC)
+	snapshot := homogeneousHorizonSnapshot(plan, validAt, 0, 0)
+	calibration := testHorizonCalibration()
+	snapshot.ObserverSurface.PrecipitationMM = calibration.PrecipitationDetectMM
+	results, err := ComputeHorizon(snapshot, plan, calibration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[0].DataQualityHeuristic != 1.0/HorizonDirectionCount || results[0].DataQuality != HorizonDataLimited {
-		t.Fatalf("ring coverage retained inconsistent quality: heuristic=%v category=%q", results[0].DataQualityHeuristic, results[0].DataQuality)
+	for _, result := range results {
+		if !result.Available || result.Index != 1 || result.LimitingFactor != HorizonFactorPrecipitation ||
+			len(result.LimitingFactors) == 0 || result.LimitingFactors[0] != HorizonFactorPrecipitation {
+			t.Fatalf("precipitation veto result = %+v", result)
+		}
 	}
 }
 
@@ -598,6 +609,13 @@ func mustTestHorizonPlan(t *testing.T, stepM float64) HorizonPlan {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func computeHorizonForConvergenceTest(snapshot HorizonSnapshot, plan HorizonPlan, calibration OverallIndexCalibration) ([]HorizonResult, error) {
+	if err := calibration.Validate(); err != nil {
+		return nil, err
+	}
+	return computeHorizonForValidatedPlan(context.Background(), snapshot, plan, calibration)
 }
 
 func testHorizonCalibration() OverallIndexCalibration {

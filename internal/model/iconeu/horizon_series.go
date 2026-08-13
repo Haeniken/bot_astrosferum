@@ -3,8 +3,11 @@ package iconeu
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,9 +29,10 @@ type horizonSeriesExtraction struct {
 	err    error
 }
 
-// Series is the retained straight-ray reference/test reader. It reads one
-// immutable ICON-EU run before the production full-refraction adapter selects
-// f001..f072; it is not the production Horizon science path.
+// Series is the production straight-ray reader. It reads one immutable
+// ICON-EU run and returns exact hourly source snapshots f001..f072. No f000
+// meteorological file is sampled: the preceding precipitation origin for
+// f001 is the exact mathematical zero of the run accumulation.
 // Pressure-level U/V/T/Z are linearly interpolated from their native 3-hour
 // files before ComputeHorizon recomputes every nonlinear optical quantity.
 // Surface, cloud, TKE and mixed-layer state always come from exact hourly
@@ -50,6 +54,10 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 		return nil, err
 	}
 	if err := validateHorizonSeriesManifest(manifest); err != nil {
+		return nil, err
+	}
+	precipitationPackingErrors, err := horizonPrecipitationPackingErrors(ctx, store.extractor.runner, manifest)
+	if err != nil {
 		return nil, err
 	}
 	locations := plan.FootprintLocations()
@@ -111,18 +119,20 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 
 	verticalByPoint := make([][]forecast.VerticalFrame, len(points))
 	surfaceByPoint := make([][]forecast.SurfaceFrame, len(points))
+	surfaceAccumulatedPrecipByPoint := make([][]float64, len(points))
 	cloudByPoint := make([][]forecast.CloudFrame, len(points))
 	for pointIndex := range points {
 		verticalByPoint[pointIndex] = make([]forecast.VerticalFrame, 0, len(manifest.Steps))
 		surfaceByPoint[pointIndex] = make([]forecast.SurfaceFrame, horizonForecastHours+1)
+		surfaceAccumulatedPrecipByPoint[pointIndex] = make([]float64, horizonForecastHours+1)
 		cloudByPoint[pointIndex] = make([]forecast.CloudFrame, horizonForecastHours+1)
 	}
 
-	jobs := make([]horizonSeriesJob, 0, len(manifest.Steps)+2*(horizonForecastHours+1))
+	jobs := make([]horizonSeriesJob, 0, len(manifest.Steps)+2*horizonForecastHours)
 	for index, step := range manifest.Steps {
 		jobs = append(jobs, horizonSeriesJob{kind: "pressure", index: index, file: step.File, messages: step.Messages})
 	}
-	for forecastHour := 0; forecastHour <= horizonForecastHours; forecastHour++ {
+	for forecastHour := 1; forecastHour <= horizonForecastHours; forecastHour++ {
 		surfaceStep := manifest.SurfaceSteps[forecastHour]
 		cloudStep := manifest.CloudSteps[forecastHour]
 		jobs = append(jobs,
@@ -195,9 +205,14 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 				}
 			case "surface":
 				step := manifest.SurfaceSteps[extracted.job.index]
-				surfaceByPoint[pointIndex][extracted.job.index], normalizeError = surfaceFromBatch(
+				var surface ExtractedSurface
+				surface, normalizeError = surfaceExtractedFromBatch(
 					extracted.values[pointIndex], step.ValidAt, filepath.Base(step.File),
 				)
+				if normalizeError == nil {
+					surfaceByPoint[pointIndex][extracted.job.index] = surface.Frame
+					surfaceAccumulatedPrecipByPoint[pointIndex][extracted.job.index] = surface.AccumulatedPrecipMM
+				}
 			case "cloud":
 				step := manifest.CloudSteps[extracted.job.index]
 				if !geometryValid[pointIndex] {
@@ -244,8 +259,8 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 		}
 	}
 
-	snapshots := make([]forecast.HorizonSnapshot, horizonForecastHours+1)
-	for forecastHour := 0; forecastHour <= horizonForecastHours; forecastHour++ {
+	snapshots := make([]forecast.HorizonSnapshot, horizonForecastHours)
+	for forecastHour := 1; forecastHour <= horizonForecastHours; forecastHour++ {
 		validAt := manifest.BaseTime.Add(time.Duration(forecastHour) * time.Hour)
 		profiles := make([]forecast.HorizonSampleSnapshot, len(points))
 		profileValid := make([]bool, len(points))
@@ -257,6 +272,24 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 				)
 			}
 			surface := surfaceByPoint[pointIndex][forecastHour]
+			previousAccumulation := surfaceAccumulatedPrecipByPoint[pointIndex][forecastHour-1]
+			previousPackingError := precipitationPackingErrors[forecastHour-1]
+			if forecastHour == 1 {
+				// f000 is the exact zero-length origin of the run accumulation.
+				// The packed f000 value is not a preceding one-hour observation.
+				previousAccumulation = 0
+				previousPackingError = 0
+			}
+			precipitationMM, precipitationErr := domeHourlyPrecipitationFromPackedAccumulations(
+				surfaceAccumulatedPrecipByPoint[pointIndex][forecastHour],
+				previousAccumulation,
+				precipitationPackingErrors[forecastHour],
+				previousPackingError,
+			)
+			if precipitationErr != nil {
+				return nil, fmt.Errorf("ICON-EU horizon point %d f%03d precipitation: %w", pointIndex, forecastHour, precipitationErr)
+			}
+			surface.PrecipitationMM = precipitationMM
 			cloud := cloudByPoint[pointIndex][forecastHour]
 			if !verticalOK || !surface.ValidAt.Equal(validAt) || !cloud.ValidAt.Equal(validAt) || !geometryValid[pointIndex] {
 				continue
@@ -291,7 +324,7 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 			}
 			snapshot.Directions[directionIndex] = directional
 		}
-		snapshots[forecastHour] = snapshot
+		snapshots[forecastHour-1] = snapshot
 	}
 
 	latest, err := store.loadCurrent(store.dataRoot)
@@ -301,9 +334,46 @@ func (store *HorizonStore) Series(ctx context.Context, runID string, plan foreca
 	if latest.RunID != runID {
 		return nil, fmt.Errorf("ICON-EU horizon run changed during extraction")
 	}
-	store.logf("horizon series extracted run=%s hours=%d points=%d partial_values=%d batches=%d duration=%s",
+	store.logf("horizon series extracted run=%s published_hours=%d points=%d partial_values=%d batches=%d duration=%s",
 		runID, len(snapshots), len(points), partialValues, completed, time.Since(started).Round(time.Millisecond))
 	return snapshots, nil
+}
+
+func horizonPrecipitationPackingErrors(
+	ctx context.Context,
+	runner CommandRunner,
+	manifest LoadedManifest,
+) ([]float64, error) {
+	if len(manifest.SurfaceSteps) < horizonForecastHours+1 {
+		return nil, fmt.Errorf("ICON-EU horizon surface period is incomplete")
+	}
+	if runner == nil {
+		runner = execRunner{}
+	}
+	args := []string{"-w", "shortName=tp", "-F", "%.17g", "-p", "packingError"}
+	for forecastHour := 1; forecastHour <= horizonForecastHours; forecastHour++ {
+		args = append(args, filepath.Join(manifest.Directory, manifest.SurfaceSteps[forecastHour].File))
+	}
+	output, err := runner.CombinedOutput(ctx, "grib_get", args...)
+	if err != nil {
+		return nil, fmt.Errorf("read ICON-EU Horizon TOT_PREC packing errors: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) != horizonForecastHours {
+		return nil, fmt.Errorf("ICON-EU Horizon TOT_PREC has %d packing errors, expected %d", len(fields), horizonForecastHours)
+	}
+	errorsMM := make([]float64, horizonForecastHours+1)
+	for index, field := range fields {
+		packingError, parseErr := strconv.ParseFloat(field, 64)
+		if parseErr != nil || math.IsNaN(packingError) || math.IsInf(packingError, 0) || packingError < 0 {
+			return nil, fmt.Errorf("ICON-EU Horizon f%03d TOT_PREC packingError is invalid", index+1)
+		}
+		// Expand outwards so text parsing cannot narrow the GRIB error enclosure.
+		errorsMM[index+1] = math.Nextafter(packingError, math.Inf(1))
+	}
+	// The run origin is a mathematical zero, not a packed observation.
+	errorsMM[0] = 0
+	return errorsMM, nil
 }
 
 func validateHorizonSeriesManifest(manifest LoadedManifest) error {

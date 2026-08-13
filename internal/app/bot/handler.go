@@ -883,8 +883,8 @@ func (handler *Handler) offerHorizon(ctx context.Context, chatID int64, requestI
 		return
 	}
 	prompt := language.text(
-		"Дополнительный анализ: 72 физических почасовых срока ICON-EU f001…f072, восемь направлений на видимой высоте 10°. Первые сроки уже могут быть в прошлом — ориентируйтесь на подписанную шкалу времени.",
-		"Optional analysis: 72 physical hourly ICON-EU terms f001…f072, eight directions at 10° apparent elevation. The earliest terms may already be in the past; use the labeled time axis.",
+		"Дополнительный анализ: 72 физических почасовых срока ICON-EU f001…f072, восемь прямых лучей на геометрической высоте 10°. Первые сроки уже могут быть в прошлом — ориентируйтесь на подписанную шкалу времени.",
+		"Optional analysis: 72 physical hourly ICON-EU terms f001…f072, eight straight rays at 10° geometric elevation. The earliest terms may already be in the past; use the labeled time axis.",
 	)
 	if err := messenger.SendMessageWithActions(ctx, chatID, prompt, ActionKeyboard{{button}}); err != nil {
 		handler.logf("forecast request %d horizon action prompt failed: %v", requestID, err)

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
 )
 
@@ -32,48 +31,6 @@ type horizonFakeSource struct {
 	seriesFun  func(context.Context) error
 	currentSeq []string
 	currentAt  int
-}
-
-type horizonFakeRefractedComputer struct{ source *horizonFakeSource }
-
-type horizonRefractedComputerFunc func(context.Context, directional.SourceIdentity, forecast.Location) ([]forecast.HorizonFrame, float64, error)
-
-func (compute horizonRefractedComputerFunc) ComputeRefractedHorizon(
-	ctx context.Context,
-	sourceIdentity directional.SourceIdentity,
-	location forecast.Location,
-) ([]forecast.HorizonFrame, float64, error) {
-	return compute(ctx, sourceIdentity, location)
-}
-
-func (computer horizonFakeRefractedComputer) ComputeRefractedHorizon(
-	ctx context.Context,
-	sourceIdentity directional.SourceIdentity,
-	location forecast.Location,
-) ([]forecast.HorizonFrame, float64, error) {
-	plan, err := forecast.NewHorizonPlan(location, 17)
-	if err != nil {
-		return nil, 0, err
-	}
-	snapshots, err := computer.source.Series(ctx, sourceIdentity.RunID, plan)
-	if err != nil {
-		return nil, 0, err
-	}
-	frames := make([]forecast.HorizonFrame, len(snapshots))
-	for index, snapshot := range snapshots {
-		results := make([]forecast.HorizonResult, forecast.HorizonDirectionCount)
-		for directionIndex, direction := range forecast.HorizonDirections() {
-			results[directionIndex] = forecast.HorizonResult{
-				ValidAt: snapshot.ValidAt, Direction: direction, AzimuthDegrees: float64(directionIndex) * 45,
-				ApparentElevationDegrees: forecast.AstrodomeMinimumElevationDegrees,
-				Index:                    1, Available: false, ResolvedPathFraction: 0,
-				DataQuality: forecast.HorizonDataUnavailable, LimitingFactor: forecast.HorizonFactorUnavailable,
-				LimitingFactors: []forecast.HorizonLimitingFactor{forecast.HorizonFactorUnavailable},
-			}
-		}
-		frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
-	}
-	return frames, 17, nil
 }
 
 func (source *horizonFakeSource) Supports(forecast.HorizonPlan) bool {
@@ -608,7 +565,7 @@ func TestHorizonJobsTimesOutAndDoesNotPublishPartialResult(t *testing.T) {
 	logsMu.Lock()
 	joinedLogs := strings.Join(logs, "\n")
 	logsMu.Unlock()
-	if !strings.Contains(joinedLogs, "stage=calculation") || !strings.Contains(joinedLogs, "timeout=true") || !strings.Contains(joinedLogs, "error_type=") {
+	if !strings.Contains(joinedLogs, "stage=source") || !strings.Contains(joinedLogs, "timeout=true") || !strings.Contains(joinedLogs, "error_type=") {
 		t.Fatalf("timeout log lacks safe diagnostics: %q", joinedLogs)
 	}
 	if strings.Contains(joinedLogs, "59.9386") || strings.Contains(joinedLogs, "30.3141") || strings.Contains(joinedLogs, "user") || strings.Contains(joinedLogs, "payload") {
@@ -620,11 +577,11 @@ func TestHorizonJobsTimeoutCancelsCalculation(t *testing.T) {
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
 	jobs := newHorizonTestJobs(t, t.TempDir(), source, HorizonJobsConfig{JobTimeout: 35 * time.Millisecond})
 	entered := make(chan struct{})
-	jobs.refractedComputer = horizonRefractedComputerFunc(func(ctx context.Context, _ directional.SourceIdentity, _ forecast.Location) ([]forecast.HorizonFrame, float64, error) {
+	jobs.compute = func(ctx context.Context, _ []forecast.HorizonSnapshot, _ forecast.HorizonPlan, _ forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error) {
 		close(entered)
 		<-ctx.Done()
-		return nil, 0, ctx.Err()
-	})
+		return nil, ctx.Err()
+	}
 	startHorizonTestJobs(t, jobs)
 	messenger := newHorizonFakeMessenger()
 	handler := mustHorizonActionHandler(t, jobs, "telegram", messenger)
@@ -1000,13 +957,29 @@ func newHorizonTestJobs(t *testing.T, root string, source *horizonFakeSource, ov
 	if err != nil {
 		t.Fatalf("NewHorizonJobs: %v", err)
 	}
-	if err := jobs.UseRefractedHorizonComputer(horizonFakeRefractedComputer{source: source}); err != nil {
-		t.Fatalf("UseRefractedHorizonComputer: %v", err)
-	}
+	jobs.compute = horizonTestCompute
 	return jobs
 }
 
-func TestHorizonJobsStartRequiresFullRefractionComputer(t *testing.T) {
+func horizonTestCompute(_ context.Context, snapshots []forecast.HorizonSnapshot, _ forecast.HorizonPlan, _ forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error) {
+	frames := make([]forecast.HorizonFrame, len(snapshots))
+	for index, snapshot := range snapshots {
+		results := make([]forecast.HorizonResult, forecast.HorizonDirectionCount)
+		for directionIndex, direction := range forecast.HorizonDirections() {
+			results[directionIndex] = forecast.HorizonResult{
+				ValidAt: snapshot.ValidAt, Direction: direction, AzimuthDegrees: float64(directionIndex) * 45,
+				GeometricElevationDegrees: forecast.HorizonGeometricElevationDegrees,
+				Index:                     1, Available: false, DataQuality: forecast.HorizonDataUnavailable,
+				LimitingFactor:  forecast.HorizonFactorUnavailable,
+				LimitingFactors: []forecast.HorizonLimitingFactor{forecast.HorizonFactorUnavailable},
+			}
+		}
+		frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
+	}
+	return frames, nil
+}
+
+func TestHorizonJobsStartUsesStraightRayComputer(t *testing.T) {
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
 	jobs, err := NewHorizonJobs(HorizonJobsConfig{
 		QueueSize: 1, Concurrency: 1, JobTimeout: time.Minute,
@@ -1017,9 +990,10 @@ func TestHorizonJobsStartRequiresFullRefractionComputer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := jobs.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "full-refraction") {
-		t.Fatalf("Start without full-refraction computer error = %v", err)
+	if err := jobs.Start(t.Context()); err != nil {
+		t.Fatalf("Start with straight-ray computer: %v", err)
 	}
+	jobs.Close()
 }
 
 func startHorizonTestJobs(t *testing.T, jobs *HorizonJobs) {
