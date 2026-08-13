@@ -28,7 +28,7 @@ const (
 	HorizonActionID       ActionID = "horizon.v1"
 	HorizonProviderICONEU string   = "icon-eu"
 
-	horizonCacheSchema     = "horizon-cache-v2-interactive"
+	horizonCacheSchema     = "horizon-cache-v3-full-refraction"
 	horizonActionKeyFile   = ".horizon-action-key"
 	horizonActionTagBytes  = 8
 	horizonActionCoreParts = 4
@@ -76,6 +76,13 @@ type HorizonCompletionMessenger interface {
 
 type HorizonDatasetMessenger interface {
 	SendHorizonDataset(context.Context, []byte) error
+}
+
+// RefractedHorizonComputer owns the full native-ICON refraction and science
+// calculation. HorizonJobs only owns admission, cache publication, rendering,
+// and delivery.
+type RefractedHorizonComputer interface {
+	ComputeRefractedHorizon(context.Context, directional.SourceIdentity, forecast.Location) ([]forecast.HorizonFrame, float64, error)
 }
 
 // HorizonRenderInput contains only already-fetched and already-computed data.
@@ -160,20 +167,19 @@ type horizonRecentClick struct {
 
 // HorizonJobs owns platform-neutral Horizon admission and localized delivery.
 // Production can attach the shared directional coordinator so Horizon and
-// Astrodome use one FIFO and one heavy worker; the legacy local worker remains
-// available for isolated tests and command-line compositions.
+// Astrodome use one FIFO and one heavy worker. A local composition is allowed
+// only when it provides the same full-refraction computer; the retired
+// straight-ray calculation cannot publish a current Horizon artifact.
 type HorizonJobs struct {
-	config      HorizonJobsConfig
-	source      HorizonSource
-	render      HorizonRenderFunc
-	calibration forecast.OverallIndexCalibration
-	cache       *horizonCache
-	actionKey   []byte
-	resolver    *forecast.TimeZoneResolver
-	logf        func(string, ...any)
-	now         func() time.Time
-	compute     func(context.Context, []forecast.HorizonSnapshot, forecast.HorizonPlan, forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error)
-
+	config             HorizonJobsConfig
+	source             HorizonSource
+	render             HorizonRenderFunc
+	calibration        forecast.OverallIndexCalibration
+	cache              *horizonCache
+	actionKey          []byte
+	resolver           *forecast.TimeZoneResolver
+	logf               func(string, ...any)
+	now                func() time.Time
 	mu                 sync.Mutex
 	started            bool
 	closed             bool
@@ -189,7 +195,23 @@ type HorizonJobs struct {
 	wait               sync.WaitGroup
 	closeOne           sync.Once
 	directional        *directional.Coordinator
+	refractedComputer  RefractedHorizonComputer
 	directionalTickets map[horizonUserIdentity]*directional.Ticket
+}
+
+// UseRefractedHorizonComputer replaces the retired straight-ray worker path.
+// It must be configured before the runner is used.
+func (jobs *HorizonJobs) UseRefractedHorizonComputer(computer RefractedHorizonComputer) error {
+	if jobs == nil || computer == nil {
+		return errors.New("refracted Horizon computer is required")
+	}
+	jobs.mu.Lock()
+	defer jobs.mu.Unlock()
+	if jobs.started || jobs.closed || jobs.refractedComputer != nil {
+		return errors.New("refracted Horizon computer must be configured once before start")
+	}
+	jobs.refractedComputer = computer
+	return nil
 }
 
 func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer HorizonRenderFunc, calibration forecast.OverallIndexCalibration, logf func(string, ...any)) (*HorizonJobs, error) {
@@ -239,7 +261,7 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 	return &HorizonJobs{
 		config: config, source: source, render: renderer, calibration: calibration,
 		cache: cache, actionKey: actionKey, resolver: resolver, logf: logf, now: time.Now,
-		compute: forecast.ComputeHorizonSeries, queue: make(chan *horizonJob, config.QueueSize),
+		queue:              make(chan *horizonJob, config.QueueSize),
 		delivery:           make(chan horizonDelivery, deliveryCapacity),
 		cacheDeliverySlots: make(chan struct{}, deliveryCapacity/2),
 		jobs:               make(map[string]*horizonJob), active: make(map[horizonUserIdentity]string),
@@ -279,6 +301,9 @@ func (jobs *HorizonJobs) Start(root context.Context) error {
 	if jobs.closed {
 		return errors.New("horizon jobs are closed")
 	}
+	if jobs.directional == nil && jobs.refractedComputer == nil {
+		return errors.New("full-refraction Horizon computer is not configured")
+	}
 	jobs.root, jobs.cancel = context.WithCancel(root)
 	jobs.started = true
 	calculationWorkers := jobs.config.Concurrency
@@ -315,7 +340,7 @@ func (jobs *HorizonJobs) Close() {
 // simply omit it when this method returns ErrHorizonUnsupported or
 // ErrHorizonStaleAction; the ordinary seven-chart forecast remains complete.
 func (jobs *HorizonJobs) Button(request HorizonButtonRequest, languageCode string) (ActionButton, error) {
-	canonical, plan, err := jobs.canonicalButtonRequest(request, languageFromCode(languageCode))
+	canonical, _, err := jobs.canonicalButtonRequest(request, languageFromCode(languageCode))
 	if err != nil {
 		return ActionButton{}, err
 	}
@@ -326,7 +351,7 @@ func (jobs *HorizonJobs) Button(request HorizonButtonRequest, languageCode strin
 	if currentRun != canonical.RunID {
 		return ActionButton{}, ErrHorizonStaleAction
 	}
-	if !jobs.source.Supports(plan) {
+	if !jobs.horizonRefractionCovered(canonical.Location, canonical.ObserverSurfaceElevationM) {
 		return ActionButton{}, ErrHorizonUnsupported
 	}
 	payload, err := jobs.encodePayload(canonical)
@@ -420,8 +445,7 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 		completeHorizonMessenger(messenger, ErrHorizonStaleAction)
 		return nil
 	}
-	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
-	if err != nil || !jobs.source.Supports(plan) {
+	if !jobs.horizonRefractionCovered(request.Location, request.ObserverSurfaceElevationM) {
 		jobs.sendStatus(messenger, chatID, language.text(
 			"Для этой точки анализ горизонта ICON-EU недоступен.",
 			"ICON-EU horizon analysis is unavailable for this location."))
@@ -460,9 +484,14 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 	}
 	if jobs.directional != nil {
 		return jobs.handleDirectionalAdmission(ctx, &horizonJob{
-			key: key, request: request, plan: plan,
+			key: key, request: request,
 			waiters: map[horizonUserIdentity]horizonWaiter{waiter.identity: waiter},
 		}, waiter)
+	}
+	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
+	if err != nil || !jobs.source.Supports(plan) {
+		completeHorizonMessenger(messenger, ErrHorizonUnsupported)
+		return nil
 	}
 	position, joined, enqueueErr := jobs.enqueue(&horizonJob{
 		key: key, request: request, plan: plan,
@@ -495,6 +524,25 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 			position, compactHorizonDuration(eta, language)))
 	}
 	return nil
+}
+
+func iconeuHorizonRefractionCovered(location forecast.Location) bool {
+	// The worker performs the authoritative full corridor check against the
+	// immutable ICON-EU footprint. Admission only rejects the singular poles;
+	// provider coverage remains pinned by the ordinary ICON-EU source.
+	return math.Abs(location.Latitude) < 90
+}
+
+func (jobs *HorizonJobs) horizonRefractionCovered(location forecast.Location, modelSurfaceElevationM float64) bool {
+	if !iconeuHorizonRefractionCovered(location) {
+		return false
+	}
+	// Admission retains the provider coverage check already owned by the
+	// Horizon source. The returned midpoint plan is never used by the
+	// production science path; the worker still performs the authoritative
+	// native refracted-corridor check against the immutable Dome manifest.
+	plan, err := forecast.NewHorizonPlan(location, modelSurfaceElevationM)
+	return err == nil && jobs.source.Supports(plan)
 }
 
 func (jobs *HorizonJobs) canonicalButtonRequest(input HorizonButtonRequest, language userLanguage) (horizonRequest, forecast.HorizonPlan, error) {
@@ -710,17 +758,19 @@ func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCa
 		horizonCacheSchema,
 		"provider=" + HorizonProviderICONEU,
 		"run=" + request.RunID,
-		"window=f000-f072-hourly",
+		"window=f001-f072-native-hourly",
 		fmt.Sprintf("lat_e5=%d", int64(math.Round(request.Location.Latitude*1e5))),
 		fmt.Sprintf("lon_e5=%d", int64(math.Round(request.Location.Longitude*1e5))),
+		forecastLocationCacheIdentity(request.Location),
 		fmt.Sprintf("hhl_m=%d", int64(math.Round(request.ObserverSurfaceElevationM))),
 		"timezone=" + strings.TrimSpace(request.Location.TimeZone),
 		"forecast=" + forecast.HorizonAlgorithmVersion,
 		"render=" + strings.TrimSpace(renderAlgorithmVersion),
-		fmt.Sprintf("geometric_elevation=%.6f", forecast.HorizonGeometricElevationDegrees),
-		fmt.Sprintf("earth_radius=%.3f", forecast.HorizonEarthRadiusM),
-		fmt.Sprintf("atmosphere_top=%.3f", forecast.HorizonAtmosphereTopM),
-		fmt.Sprintf("segment=%.3f", forecast.HorizonSurfaceSegmentLengthM),
+		fmt.Sprintf("apparent_elevation=%.6f", forecast.AstrodomeMinimumElevationDegrees),
+		"ray_geometry=" + forecast.AstrodomeRefractionGeometryVersion,
+		"refraction=" + forecast.AstrodomeRefractionIntegratorVersion,
+		"refractivity=" + forecast.AstrodomeCiddorVersion,
+		"science=" + forecast.AstrodomeScienceVersion,
 		"calibration=" + string(calibrationJSON),
 		"language=" + request.Language.renderCode(),
 	}, "|")
@@ -857,30 +907,36 @@ func (jobs *HorizonJobs) process(job *horizonJob) {
 	}
 	ctx, cancel := context.WithTimeout(jobs.root, jobs.config.JobTimeout)
 	defer cancel()
-	snapshots, err := jobs.source.Series(ctx, job.request.RunID, job.plan)
+	if jobs.refractedComputer == nil {
+		err := errors.New("full-refraction Horizon computer is not configured")
+		jobs.logJobError("worker_unavailable", job, err)
+		jobs.deliverJob(job, "", err)
+		return
+	}
+	sourceIdentity := directional.SourceIdentity{
+		Provider: "ICON-EU", RunID: job.request.RunID,
+		GridProfile:    horizonDirectionalGridProfile,
+		GeometryDigest: forecast.HorizonRefractionGeometryDigest(),
+	}
+	frames, surfaceHeightM, err := jobs.refractedComputer.ComputeRefractedHorizon(ctx, sourceIdentity, job.request.Location)
 	if err != nil {
-		jobs.logJobError("source", job, err)
+		jobs.logJobError("calculation", job, err)
 		jobs.deliverJob(job, "", err)
 		return
 	}
 	if err := ctx.Err(); err != nil {
-		jobs.logJobError("source", job, err)
+		jobs.logJobError("calculation", job, err)
 		jobs.deliverJob(job, "", err)
 		return
 	}
-	if err := validateHorizonSeries(job.request.RunID, snapshots); err != nil {
+	if math.Abs(surfaceHeightM-job.request.ObserverSurfaceElevationM) > 1 {
+		err := errors.New("horizon model surface differs from the pinned request")
+		jobs.logJobError("source_mismatch", job, err)
+		jobs.deliverJob(job, "", err)
+		return
+	}
+	if err := validateRefractedHorizonSeries(job.request.RunID, frames); err != nil {
 		jobs.logJobError("series_validation", job, err)
-		jobs.deliverJob(job, "", err)
-		return
-	}
-	frames, err := jobs.compute(ctx, snapshots, job.plan, jobs.calibration)
-	if err != nil {
-		jobs.logJobError("calculation", job, err)
-		jobs.deliverJob(job, "", err)
-		return
-	}
-	if err := ctx.Err(); err != nil {
-		jobs.logJobError("calculation", job, err)
 		jobs.deliverJob(job, "", err)
 		return
 	}
@@ -925,11 +981,11 @@ func validateHorizonSeries(runID string, snapshots []forecast.HorizonSnapshot) e
 	if err != nil {
 		return ErrInvalidActionData
 	}
-	if len(snapshots) != horizonForecastHours+1 {
-		return fmt.Errorf("horizon series must contain %d hourly snapshots", horizonForecastHours+1)
+	if len(snapshots) != horizonForecastHours {
+		return fmt.Errorf("horizon series must contain %d hourly snapshots (f001..f072)", horizonForecastHours)
 	}
 	for index, snapshot := range snapshots {
-		expected := runTime.Add(time.Duration(index) * time.Hour)
+		expected := runTime.Add(time.Duration(index+1) * time.Hour)
 		if !snapshot.ValidAt.Equal(expected) {
 			return fmt.Errorf("horizon series frame %d is not the required hourly run term", index)
 		}
@@ -1193,11 +1249,12 @@ func horizonCaption(runID, timeZone string, now time.Time, maxStaleAge time.Dura
 	if err != nil {
 		return language.text("Условия у горизонта на 10°", "Horizon conditions at 10°")
 	}
+	start := runTime.Add(time.Hour)
 	end := runTime.Add(horizonForecastHours * time.Hour)
 	caption := fmt.Sprintf(language.text(
 		"Условия у горизонта на 10° · почасово: %s — %s",
 		"Horizon conditions at 10° · hourly: %s — %s"),
-		runTime.In(zone).Format("02.01 15:04 MST"), end.In(zone).Format("02.01 15:04 MST"))
+		start.In(zone).Format("02.01 15:04 MST"), end.In(zone).Format("02.01 15:04 MST"))
 	return caption + fmt.Sprintf(language.text(
 		"\nICON-EU run %s UTC · %s",
 		"\nICON-EU run %s UTC · %s"), runID, forecastFreshnessText(runTime, now, maxStaleAge, language))

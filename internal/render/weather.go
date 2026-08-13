@@ -99,7 +99,7 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 		drawCentered(canvas, fonts.small, center, weatherHighCloudY, fmt.Sprintf("%.0f", frame.HighCloudCoverPercent), cloudCriticalityColor(frame.HighCloudCoverPercent))
 		transparency := "—"
 		var transparencyShade color.Color = weatherMuted
-		if value, available := frame.TransparencyProxyPercent(); available {
+		if value, available := frame.TransparencyHeuristicPercent(); available {
 			transparency = fmt.Sprintf("%.0f", value)
 			transparencyShade = transparencyColor(value)
 		}
@@ -210,7 +210,7 @@ func drawWeatherLabels(canvas *image.RGBA, fonts weatherFonts, left int, celesti
 	drawRight(canvas, fonts.small, left-18, weatherLowCloudY, localized(options, "Нижний", "Low"), weatherMuted)
 	drawRight(canvas, fonts.small, left-18, weatherMidCloudY, localized(options, "Средний", "Middle"), weatherMuted)
 	drawRight(canvas, fonts.small, left-18, weatherHighCloudY, localized(options, "Верхний", "High"), weatherMuted)
-	drawRight(canvas, fonts.small, left-18, weatherTransparencyY, localized(options, "Прозрачность %", "Transparency %"), weatherMuted)
+	drawRight(canvas, fonts.small, left-18, weatherTransparencyY, localized(options, "Эвристика прозрачности, %", "Transparency heuristic, %"), weatherMuted)
 	separators := []int{184, 282, 310 + weatherPostCloudShift, 352 + weatherPostCloudShift, 394 + weatherPostCloudShift, 436 + weatherPostCloudShift, 478 + weatherPostCloudShift, 520 + weatherPostCloudShift, 562 + weatherPostCloudShift, 604 + weatherPostCloudShift}
 	for index := range 11 {
 		separators = append(separators, 646+weatherPostCloudShift+index*weatherAstronomyStep)
@@ -335,11 +335,11 @@ func drawWeatherLegend(canvas *image.RGBA, fonts weatherFonts, options Options) 
 	drawDrop(canvas, 2650, weatherLegendTop+104, 8, weatherOrange)
 	drawText(canvas, fonts.small, 2672, weatherLegendTop+115, localized(options, "высокий риск росы: ≤1°C", "high dew risk: ≤1°C"), weatherText)
 	drawFog(canvas, 140, weatherLegendTop+134, 18, weatherCyan)
-	drawText(canvas, fonts.small, 190, weatherLegendTop+150, localized(options, "возможен туман: ICON VIS <5 км + насыщение", "possible fog: ICON VIS <5 km + saturation"), weatherText)
+	drawText(canvas, fonts.small, 190, weatherLegendTop+150, localized(options, "эвристика тумана: ICON VIS <5 км + насыщение", "fog heuristic: ICON VIS <5 km + saturation"), weatherText)
 	drawFog(canvas, 1200, weatherLegendTop+134, 18, weatherOrange)
-	drawText(canvas, fonts.small, 1250, weatherLegendTop+150, localized(options, "высокий риск тумана: ICON VIS <1 км + насыщение", "high fog risk: ICON VIS <1 km + saturation"), weatherText)
+	drawText(canvas, fonts.small, 1250, weatherLegendTop+150, localized(options, "высокая эвристика тумана: ICON VIS <1 км + насыщение", "high fog heuristic: ICON VIS <1 km + saturation"), weatherText)
 	drawText(canvas, fonts.normal, 22, weatherLegendTop+178, localized(options, "Покрытие облаков: <10% — белый, 10–49% — синий, ≥50% — оранжевый; верхние облака тоже критичны для длинных выдержек и фотометрии.", "Cloud cover: <10% white, 10–49% blue, ≥50% orange; high clouds also matter for long exposures and photometry."), weatherMuted)
-	drawText(canvas, fonts.normal, 22, weatherLegendTop+206, localized(options, "Прозрачность %: облака + VIS + PWV; сравнительная оценка, не измерение экстинкции/AOD.", "Transparency %: clouds + VIS + PWV; comparative proxy, not measured extinction/AOD."), weatherMuted)
+	drawText(canvas, fonts.normal, 22, weatherLegendTop+206, localized(options, "Эвристика прозрачности: облака + VIS + PWV; сортировочная оценка, не оптическое пропускание или экстинкция.", "Transparency heuristic: clouds + VIS + PWV; a ranking aid, not optical transmission or extinction."), weatherMuted)
 }
 
 func englishMoonPhase(value string) string {
@@ -378,7 +378,7 @@ func drawWeatherIcon(canvas *image.RGBA, centerX, centerY, radius int, frame for
 		}
 		drawDrop(canvas, centerX+radius, centerY-radius, maxInt(3, radius/3), dew)
 	}
-	if risk := frame.FogRisk(); risk > 0 {
+	if risk := frame.FogHeuristic(); risk > 0 {
 		shade := weatherCyan
 		if risk == 2 {
 			shade = weatherOrange

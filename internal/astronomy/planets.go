@@ -5,6 +5,8 @@ import (
 	"math"
 	"time"
 
+	"bot_astrosferum/internal/forecast"
+
 	"github.com/soniakeys/meeus/v3/apparent"
 	"github.com/soniakeys/meeus/v3/base"
 	"github.com/soniakeys/meeus/v3/coord"
@@ -37,7 +39,7 @@ var jplShortElements = map[CelestialBody]jplElements{
 	CelestialNeptune: {30.06992276, 0.00859048, 1.77004347, -55.12002969, 44.96476227, 131.78422574, 0.00026291, 0.00005105, 0.00035372, 218.45945325, -0.32241464, -0.00508664, 0, 0, 0, 0},
 }
 
-func planetEventsForLocalDay(date time.Time, latitude, longitude float64, body CelestialBody) horizonEvents {
+func planetEventsForLocalDay(date time.Time, location forecast.Location, body CelestialBody) horizonEvents {
 	return findHorizonEvents(date, date.AddDate(0, 0, 1), func(at time.Time) float64 {
 		coordinates, err := planetCoordinates(at, body)
 		if err != nil {
@@ -45,7 +47,7 @@ func planetEventsForLocalDay(date time.Time, latitude, longitude float64, body C
 		}
 		// Standard stellar/planetary horizon: topocentric centre at -34
 		// arcminutes, accounting for average near-horizon refraction.
-		altitude, _ := topocentricHorizontal(at, latitude*degree, longitude, coordinates)
+		altitude, _ := topocentricHorizontal(at, location, coordinates)
 		return altitude/degree + 34.0/60.0
 	})
 }

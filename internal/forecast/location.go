@@ -23,6 +23,10 @@ func NewLocation(latitude, longitude float64, timeZone string) (Location, error)
 	return Location{Latitude: latitude, Longitude: longitude, TimeZone: timeZone}, nil
 }
 
+func (location Location) Equal(other Location) bool {
+	return location.Latitude == other.Latitude && location.Longitude == other.Longitude && location.TimeZone == other.TimeZone
+}
+
 func ParseLocationText(input string) (float64, float64, error) {
 	text := strings.TrimSpace(input)
 	if strings.HasPrefix(strings.ToLower(text), "/forecast") {

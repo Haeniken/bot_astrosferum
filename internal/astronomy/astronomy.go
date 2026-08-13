@@ -39,6 +39,9 @@ type Series struct {
 }
 
 func Compute(location forecast.Location, start, end time.Time) (Series, error) {
+	if err := forecast.ValidateCoordinates(location.Latitude, location.Longitude); err != nil {
+		return Series{}, err
+	}
 	zone, err := time.LoadLocation(location.TimeZone)
 	if err != nil {
 		return Series{}, fmt.Errorf("load coordinate timezone: %w", err)
@@ -59,10 +62,10 @@ func Compute(location forecast.Location, start, end time.Time) (Series, error) {
 	}
 	series := Series{Location: location}
 	for date := first; !date.After(last); date = date.AddDate(0, 0, 1) {
-		sun, moon := eventsForLocalDay(date, location.Latitude, location.Longitude)
+		sun, moon := eventsForLocalDay(date, location)
 		planets := make([]PlanetDayEvents, 0, len(celestialBodyOrder)-2)
 		for _, body := range celestialBodyOrder[2:] {
-			events := planetEventsForLocalDay(date, location.Latitude, location.Longitude, body)
+			events := planetEventsForLocalDay(date, location, body)
 			planets = append(planets, PlanetDayEvents{
 				Body: body, Rise: validEvent(events.rise, date), Set: validEvent(events.set, date),
 				AlwaysUp: events.alwaysUp, AlwaysDown: events.alwaysDown,
@@ -110,13 +113,13 @@ func (series Series) IsDay(at time.Time) bool {
 	if day, ok := series.DayAt(at); ok && !day.Sunrise.IsZero() && !day.Sunset.IsZero() {
 		return !at.Before(day.Sunrise) && at.Before(day.Sunset)
 	}
-	return sunGeometricAltitude(at, series.Location.Latitude, series.Location.Longitude) > 0
+	return sunGeometricAltitude(at, series.Location) > 0
 }
 
 // SunAltitudeDegrees returns the geometric solar altitude for twilight and
 // daylight presentation. Standard boundaries are 0, -6, -12, and -18°.
 func (series Series) SunAltitudeDegrees(at time.Time) float64 {
-	return sunGeometricAltitude(at, series.Location.Latitude, series.Location.Longitude) / degree
+	return sunGeometricAltitude(at, series.Location) / degree
 }
 
 func localMidnight(at time.Time, zone *time.Location) time.Time {

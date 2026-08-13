@@ -165,6 +165,9 @@ func newExecutionHandler(cfg config.Config, credential []byte, logf func(string,
 	if err != nil {
 		return nil, fmt.Errorf("initialize worker Astrodome computer: %w", err)
 	}
+	if err := horizonJobs.UseRefractedHorizonComputer(computer); err != nil {
+		return nil, fmt.Errorf("initialize worker refracted Horizon computer: %w", err)
+	}
 	astrodomeRunner, err := directional.NewAstrodomeDatasetRunner(computer)
 	if err != nil {
 		return nil, fmt.Errorf("initialize worker Astrodome runner: %w", err)

@@ -3,7 +3,7 @@
 [← Certified geometry and root isolation](scientific-method-astrodome-numerical-roots.en.md) ·
 [Main scientific method](scientific-method.en.md)
 
-**Status:** part of the canonical scientific method, version 2.0. Splitting the
+**Status:** part of the canonical scientific method, version 2.1. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 
@@ -43,7 +43,7 @@ existence and uniqueness have already been proved. It does not change the
 proximity rejection, 0.5-mm side guard, bit-identical compounding,
 root-localisation contracts. It changes only the product treatment of an
 unproved endpoint sliver: the interior root search remains complete, while the
-sliver is exposed as a limited-quality approximation under (A28g). Kernel v29
+sliver is exposed as a limited-quality approximation under (A28g). Kernel v30
 retains this contract. Interval Newton and paired
 probes neither merge bit-distinct roots nor choose a physical side inside the
 0.5-mm guard.
@@ -637,9 +637,9 @@ Implemented identities:
 - refractivity: `ciddor-1996-phase-index-v1`;
 - ODE: `dormand-prince-5-4-event-v3`;
 - science path: `astrodome-science-path-v23`;
-- science kernel: `astrodome-science-kernel-v29`.
+- science kernel: `astrodome-science-kernel-v30-explicit-heuristics`.
 
-Kernel v29 and path contract v23 use one strict boundary-ownership contract
+Kernel v30 and path contract v23 use one strict boundary-ownership contract
 for physical and horizontal events: a maximum 0.2-mm root-localisation radius,
 0.4-mm proximity detection with fail-closed handling for bit-distinct roots, a
 0.5-mm side guard, and a 0.2-mm proof scale. The separate 1-mm
@@ -666,7 +666,7 @@ predicate; the WMO decision itself is still evaluated.
 
 The dynamic dense-DOPRI formation-sum bound, direct ECEF denominators,
 $U=\max\{1,U_B\}$, explicit residual intervals, and ECEF grid predicates are
-part of path v23. Kernel v29 retains the removal of the ill-conditioned
+part of path v23. Kernel v30 retains the removal of the ill-conditioned
 extrapolatory Q5/Q3 path, adds positive-weight GL3/GL2 and GL2/GL1 pairs, and
 uses the limited positive midpoint path below the GL2 floor under the explicit
 one-metre cumulative approximation ceiling. Rule-specific recursion allocates
@@ -676,7 +676,7 @@ certify raw WMO decision breakpoints before quadrature; every partition
 mismatch in the kernel remains fail-closed.
 
 The bot calculator and cache, plus the independent site's dataset decoder and
-browser, accept only the current v29/v23 contract with an explicitly supported
+browser, accept only the current v30/v23 contract with an explicitly supported
 pinned grid profile; the production writer uses `production-v2`. Older datasets
 are not migrated or reinterpreted; a new successful calculation must replace
 an older fixture.
@@ -697,7 +697,7 @@ described as a 9,288/9,288 pass. Its report and executed test binary have
 SHA-256 values `00977e620d60029e3e3f23f4aeb31352d614c9e75af6fa9cb8050f1830afdb31`
 and `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`,
 respectively. This is a v28/v22 baseline and not a measurement of the current
-v29/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
+v30/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
 measurement, and observational validation remain separate gates.
 
 This numerical revision does not alter the product contracts: a dataset has

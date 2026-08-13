@@ -26,7 +26,9 @@ type horizonSeriesExtraction struct {
 	err    error
 }
 
-// Series reads one immutable ICON-EU run for all f000..f072 hourly terms.
+// Series is the retained straight-ray reference/test reader. It reads one
+// immutable ICON-EU run before the production full-refraction adapter selects
+// f001..f072; it is not the production Horizon science path.
 // Pressure-level U/V/T/Z are linearly interpolated from their native 3-hour
 // files before ComputeHorizon recomputes every nonlinear optical quantity.
 // Surface, cloud, TKE and mixed-layer state always come from exact hourly

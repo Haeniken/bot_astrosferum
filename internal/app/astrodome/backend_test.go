@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/app/directional"
+	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
 	"bot_astrosferum/internal/model"
 	"bot_astrosferum/internal/model/iconeu"
@@ -124,7 +125,8 @@ func TestBackendPreparePinsProductionGridForDenseStorageAndRollingWindow(t *test
 		request.StorageProfile != model.StorageProfileDense || request.GridProfile != forecast.AstrodomeGridProductionV2 ||
 		request.RayGeometryVersion != forecast.AstrodomeRefractionGeometryVersion ||
 		request.RefractionVersion != forecast.AstrodomeRefractionIntegratorVersion ||
-		request.RefractivityVersion != forecast.AstrodomeCiddorVersion {
+		request.RefractivityVersion != forecast.AstrodomeCiddorVersion ||
+		request.CelestialEphemerisVersion != astronomy.CelestialEphemerisVersion {
 		t.Fatalf("calculation request provenance = %+v", request)
 	}
 	if strings.Contains(string(prepared.Payload), admission.Point.Name) || strings.Contains(string(prepared.Payload), `"language"`) {
@@ -142,6 +144,34 @@ func TestBackendPreparePinsProductionGridForDenseStorageAndRollingWindow(t *test
 	}
 	if !strings.HasPrefix(prepared.ScienceCacheKey, directional.AstrodomeDatasetWriterVersion+":sha256:") {
 		t.Fatalf("calculation cache identity = %q", prepared.ScienceCacheKey)
+	}
+}
+
+func TestCalculationRequestRejectsStaleCelestialEphemeris(t *testing.T) {
+	t.Parallel()
+	manifest := astrodomeManifestFixture(t, model.StorageProfileDense)
+	backend, err := NewBackend(Config{
+		Enabled: true, DataRoot: "/unused", MaxStaleAge: 12 * time.Hour,
+		TimeZones: fixedTimeZone("UTC"), Now: func() time.Time { return manifest.BaseTime },
+		Calibration: forecast.DefaultAstrodomeScienceCalibration(),
+		LoadCurrent: func(string) (iconeu.LoadedDomeManifest, error) { return manifest, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := backend.Prepare(context.Background(), directional.AstrodomeAdmission{
+		TelegramUserID: 1, Point: directional.SavedPoint{Latitude: 55, Longitude: 37},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := DecodeCalculationRequest(bytes.NewReader(prepared.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.CelestialEphemerisVersion = "celestial-horizontal-distance-aspect-jpl-meeus-v2"
+	if err := request.Validate(); err == nil {
+		t.Fatal("stale celestial ephemeris version was accepted")
 	}
 }
 

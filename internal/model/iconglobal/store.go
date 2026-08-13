@@ -18,7 +18,7 @@ import (
 	"bot_astrosferum/internal/model/iconeu"
 )
 
-const pointCacheVersion = "point-v2-native-cloud"
+const pointCacheVersion = "point-v3-explicit-heuristics"
 
 type commandRunner struct {
 	semaphore chan struct{}

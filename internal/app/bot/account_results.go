@@ -343,9 +343,12 @@ func (dispatcher *AccountResultDispatcher) run(
 	var err error
 	switch dispatcher.kind(jobID) {
 	case directional.AccountJobForecast:
-		err = jobHandler.replyToLocation(ctx, admission.TelegramUserID, admission.TelegramUserID, admission.Latitude, admission.Longitude, languageFromCode(admission.Language))
+		err = jobHandler.replyToLocation(ctx, admission.TelegramUserID, admission.TelegramUserID,
+			admission.Latitude, admission.Longitude, languageFromCode(admission.Language))
 	case directional.AccountJobHorizon:
-		err = jobHandler.DeliverHorizon(ctx, admission.TelegramUserID, admission.Latitude, admission.Longitude, admission.Language)
+		err = jobHandler.DeliverHorizonLocation(ctx, admission.TelegramUserID, forecast.Location{
+			Latitude: admission.Latitude, Longitude: admission.Longitude,
+		}, admission.Language)
 		if err == nil {
 			err = capture.waitHorizon(ctx)
 		}
@@ -906,6 +909,10 @@ func (handler *Handler) forMessenger(messenger Messenger) *Handler {
 // request facade. Callers that need a terminal signal implement
 // HorizonCompletionMessenger.
 func (handler *Handler) DeliverHorizon(ctx context.Context, userID int64, latitude, longitude float64, languageCode string) error {
+	return handler.DeliverHorizonLocation(ctx, userID, forecast.Location{Latitude: latitude, Longitude: longitude}, languageCode)
+}
+
+func (handler *Handler) DeliverHorizonLocation(ctx context.Context, userID int64, location forecast.Location, languageCode string) error {
 	if userID <= 0 {
 		return errors.New("positive user ID is required")
 	}
@@ -917,10 +924,10 @@ func (handler *Handler) DeliverHorizon(ctx context.Context, userID int64, latitu
 		return errors.New("result messenger does not support Horizon")
 	}
 	language := languageFromCode(languageCode)
-	location, err := forecast.NewLocation(latitude, longitude, handler.resolver.Resolve(latitude, longitude))
-	if err != nil {
+	if err := forecast.ValidateCoordinates(location.Latitude, location.Longitude); err != nil {
 		return err
 	}
+	location.TimeZone = handler.resolver.Resolve(location.Latitude, location.Longitude)
 	_ = handler.sendUserMessage(ctx, userID, language.text(
 		"Готовлю актуальные данные для расчёта горизонта…",
 		"Preparing current data for the Horizon calculation…"), true, language)

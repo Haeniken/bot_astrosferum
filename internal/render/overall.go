@@ -176,7 +176,7 @@ func overallPenaltyLabel(key string, options Options) string {
 	case forecast.OverallPenaltySurfaceWind:
 		return localized(options, "Потеря: приземный ветер", "Loss: surface wind")
 	case forecast.OverallPenaltyFog:
-		return localized(options, "Потеря: туман", "Loss: fog")
+		return localized(options, "Потеря: эвристика тумана", "Loss: fog heuristic")
 	case forecast.OverallPenaltyPrecipitation:
 		return localized(options, "Запрет: осадки", "Veto: precipitation")
 	default:
@@ -356,7 +356,7 @@ func overallIndexLabels(frames []forecast.OverallIndexFrame, _ palette.Palette, 
 			coherence = fmt.Sprintf("τ%.1f", frame.CoherenceTimeMS)
 		}
 		fog := ""
-		switch frame.FogRisk {
+		switch frame.FogHeuristic {
 		case 1:
 			fog = " f"
 		case 2:

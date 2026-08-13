@@ -59,7 +59,7 @@ func TestDomeAstrodomeProviderResolvesNativeDomainAndSiteInputs(t *testing.T) {
 	if site.SourceIdentity != volume.Identity() || !site.ValidAt.Equal(validAt) ||
 		math.Abs(site.WindSpeed10MMS-5) > 1e-12 || site.WindGust10MMS != 7 ||
 		math.Abs(site.PrecipitationRateMMPerHour-0.1) > 1e-12 ||
-		site.FogState != forecast.AstrodomeScienceFogNone || site.ForecastLeadHours != 2 ||
+		site.FogHeuristic != forecast.AstrodomeScienceFogNone || site.ForecastLeadHours != 2 ||
 		!site.PrecipitationIntervalStart.Equal(validAt.Add(-time.Hour)) ||
 		!site.PrecipitationIntervalEnd.Equal(validAt) {
 		t.Fatalf("native site inputs = %+v", site)
@@ -112,6 +112,32 @@ func TestDomeHourlyPrecipitationUsesGRIBPackingErrorEnclosure(t *testing.T) {
 				t.Fatalf("precipitation = %.12g, want %.12g", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDomeAstrodomeProviderUsesExactRunOriginForFirstHourlyPrecipitation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	loaded := writeDomeVolumePublication(t, root)
+	volume, err := newDomeVolume(root, filepath.Join(root, "tmp"), loaded, &domeVolumeTestRunner{}, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grid := Coverage()
+	location := forecast.Location{
+		Latitude: grid.MinLat + 8.25*grid.Increment, Longitude: grid.MinLon + 9.75*grid.Increment,
+		TimeZone: "UTC",
+	}
+	validAt := loaded.BaseTime.Add(time.Hour)
+	site, err := volume.AstrodomeScienceSiteAt(context.Background(), validAt, location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(site.PrecipitationRateMMPerHour-0.1) > 1e-12 ||
+		!site.PrecipitationIntervalStart.Equal(loaded.BaseTime) ||
+		!site.PrecipitationIntervalEnd.Equal(validAt) {
+		t.Fatalf("first native precipitation interval = %+v", site)
 	}
 }
 

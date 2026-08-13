@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	pointCacheVersion       = "point-v6-native-cloud-mass-mh"
+	pointCacheVersion       = "point-v7-explicit-heuristics"
 	pointCacheRuns          = 2
 	pointCacheEntriesPerRun = 512
 	pointCacheTempMaxAge    = time.Hour

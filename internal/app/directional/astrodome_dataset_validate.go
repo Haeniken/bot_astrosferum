@@ -351,7 +351,7 @@ func validateAstrodomeDatasetQuality(
 	currentScience bool,
 ) error {
 	bounded := []float64{
-		quality.LeadQuality, quality.GeometryCoverage, quality.TurbulencePathCoverage,
+		quality.LeadTimeQualityHeuristic, quality.GeometryCoverage, quality.TurbulencePathCoverage,
 		quality.CloudPathCoverage, quality.QuadratureConvergence, quality.TopClosure,
 	}
 	for _, value := range bounded {
@@ -493,7 +493,7 @@ func validateAstrodomeSurfaceCommon(surface AstrodomeDatasetSurfaceCommon) error
 			return errors.New("surface input must be finite and non-negative")
 		}
 	}
-	switch surface.FogState {
+	switch surface.FogHeuristic {
 	case forecast.AstrodomeScienceFogUnavailable, forecast.AstrodomeScienceFogNone,
 		forecast.AstrodomeScienceFogPossible, forecast.AstrodomeScienceFogHigh:
 		return nil

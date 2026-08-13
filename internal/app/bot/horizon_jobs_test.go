@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
 )
 
@@ -31,6 +32,48 @@ type horizonFakeSource struct {
 	seriesFun  func(context.Context) error
 	currentSeq []string
 	currentAt  int
+}
+
+type horizonFakeRefractedComputer struct{ source *horizonFakeSource }
+
+type horizonRefractedComputerFunc func(context.Context, directional.SourceIdentity, forecast.Location) ([]forecast.HorizonFrame, float64, error)
+
+func (compute horizonRefractedComputerFunc) ComputeRefractedHorizon(
+	ctx context.Context,
+	sourceIdentity directional.SourceIdentity,
+	location forecast.Location,
+) ([]forecast.HorizonFrame, float64, error) {
+	return compute(ctx, sourceIdentity, location)
+}
+
+func (computer horizonFakeRefractedComputer) ComputeRefractedHorizon(
+	ctx context.Context,
+	sourceIdentity directional.SourceIdentity,
+	location forecast.Location,
+) ([]forecast.HorizonFrame, float64, error) {
+	plan, err := forecast.NewHorizonPlan(location, 17)
+	if err != nil {
+		return nil, 0, err
+	}
+	snapshots, err := computer.source.Series(ctx, sourceIdentity.RunID, plan)
+	if err != nil {
+		return nil, 0, err
+	}
+	frames := make([]forecast.HorizonFrame, len(snapshots))
+	for index, snapshot := range snapshots {
+		results := make([]forecast.HorizonResult, forecast.HorizonDirectionCount)
+		for directionIndex, direction := range forecast.HorizonDirections() {
+			results[directionIndex] = forecast.HorizonResult{
+				ValidAt: snapshot.ValidAt, Direction: direction, AzimuthDegrees: float64(directionIndex) * 45,
+				ApparentElevationDegrees: forecast.AstrodomeMinimumElevationDegrees,
+				Index:                    1, Available: false, ResolvedPathFraction: 0,
+				DataQuality: forecast.HorizonDataUnavailable, LimitingFactor: forecast.HorizonFactorUnavailable,
+				LimitingFactors: []forecast.HorizonLimitingFactor{forecast.HorizonFactorUnavailable},
+			}
+		}
+		frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
+	}
+	return frames, 17, nil
 }
 
 func (source *horizonFakeSource) Supports(forecast.HorizonPlan) bool {
@@ -565,7 +608,7 @@ func TestHorizonJobsTimesOutAndDoesNotPublishPartialResult(t *testing.T) {
 	logsMu.Lock()
 	joinedLogs := strings.Join(logs, "\n")
 	logsMu.Unlock()
-	if !strings.Contains(joinedLogs, "stage=source") || !strings.Contains(joinedLogs, "timeout=true") || !strings.Contains(joinedLogs, "error_type=") {
+	if !strings.Contains(joinedLogs, "stage=calculation") || !strings.Contains(joinedLogs, "timeout=true") || !strings.Contains(joinedLogs, "error_type=") {
 		t.Fatalf("timeout log lacks safe diagnostics: %q", joinedLogs)
 	}
 	if strings.Contains(joinedLogs, "59.9386") || strings.Contains(joinedLogs, "30.3141") || strings.Contains(joinedLogs, "user") || strings.Contains(joinedLogs, "payload") {
@@ -577,11 +620,11 @@ func TestHorizonJobsTimeoutCancelsCalculation(t *testing.T) {
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
 	jobs := newHorizonTestJobs(t, t.TempDir(), source, HorizonJobsConfig{JobTimeout: 35 * time.Millisecond})
 	entered := make(chan struct{})
-	jobs.compute = func(ctx context.Context, _ []forecast.HorizonSnapshot, _ forecast.HorizonPlan, _ forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error) {
+	jobs.refractedComputer = horizonRefractedComputerFunc(func(ctx context.Context, _ directional.SourceIdentity, _ forecast.Location) ([]forecast.HorizonFrame, float64, error) {
 		close(entered)
 		<-ctx.Done()
-		return nil, ctx.Err()
-	}
+		return nil, 0, ctx.Err()
+	})
 	startHorizonTestJobs(t, jobs)
 	messenger := newHorizonFakeMessenger()
 	handler := mustHorizonActionHandler(t, jobs, "telegram", messenger)
@@ -886,8 +929,8 @@ func TestHorizonCaptionIncludesRunAndCurrentFreshness(t *testing.T) {
 	if !strings.Contains(caption, "ICON-EU run 2026072206 UTC") || !strings.Contains(caption, "Data freshness: 8h 17min") {
 		t.Fatalf("caption lacks run freshness: %q", caption)
 	}
-	if !strings.Contains(caption, "22.07 09:00 MSK — 25.07 09:00 MSK") {
-		t.Fatalf("caption lacks the actual f000..f072 run period: %q", caption)
+	if !strings.Contains(caption, "22.07 10:00 MSK — 25.07 09:00 MSK") {
+		t.Fatalf("caption lacks the actual f001..f072 run period: %q", caption)
 	}
 	russian := horizonCaption(horizonTestRunID, "Europe/Moscow", now, 12*time.Hour, languageRussian)
 	if !strings.Contains(russian, "Актуальность данных: 8 ч 17 мин") {
@@ -957,22 +1000,26 @@ func newHorizonTestJobs(t *testing.T, root string, source *horizonFakeSource, ov
 	if err != nil {
 		t.Fatalf("NewHorizonJobs: %v", err)
 	}
-	jobs.compute = func(_ context.Context, snapshots []forecast.HorizonSnapshot, _ forecast.HorizonPlan, _ forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error) {
-		frames := make([]forecast.HorizonFrame, len(snapshots))
-		for index, snapshot := range snapshots {
-			results := make([]forecast.HorizonResult, forecast.HorizonDirectionCount)
-			for directionIndex, direction := range forecast.HorizonDirections() {
-				results[directionIndex] = forecast.HorizonResult{
-					ValidAt: snapshot.ValidAt, Direction: direction, AzimuthDegrees: float64(directionIndex) * 45,
-					GeometricElevationDegrees: forecast.HorizonGeometricElevationDegrees,
-					DataQuality:               forecast.HorizonDataUnavailable, LimitingFactor: forecast.HorizonFactorUnavailable,
-				}
-			}
-			frames[index] = forecast.HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
-		}
-		return frames, nil
+	if err := jobs.UseRefractedHorizonComputer(horizonFakeRefractedComputer{source: source}); err != nil {
+		t.Fatalf("UseRefractedHorizonComputer: %v", err)
 	}
 	return jobs
+}
+
+func TestHorizonJobsStartRequiresFullRefractionComputer(t *testing.T) {
+	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
+	jobs, err := NewHorizonJobs(HorizonJobsConfig{
+		QueueSize: 1, Concurrency: 1, JobTimeout: time.Minute,
+		CacheRoot: t.TempDir(), CacheTTL: time.Hour, CacheEntries: 1,
+		EstimatedDuration: time.Minute, MaxStaleAge: 12 * time.Hour,
+		RenderAlgorithmVersion: "horizon-test-render-v1",
+	}, source, func(context.Context, string, HorizonRenderInput, string) error { return nil }, forecast.DefaultOverallIndexCalibration(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "full-refraction") {
+		t.Fatalf("Start without full-refraction computer error = %v", err)
+	}
 }
 
 func startHorizonTestJobs(t *testing.T, jobs *HorizonJobs) {
@@ -992,9 +1039,9 @@ func horizonTestButtonRequest() HorizonButtonRequest {
 }
 
 func horizonHourlyTestSnapshots() []forecast.HorizonSnapshot {
-	snapshots := make([]forecast.HorizonSnapshot, horizonForecastHours+1)
+	snapshots := make([]forecast.HorizonSnapshot, horizonForecastHours)
 	for index := range snapshots {
-		snapshots[index].ValidAt = horizonTestRunTime.Add(time.Duration(index) * time.Hour)
+		snapshots[index].ValidAt = horizonTestRunTime.Add(time.Duration(index+1) * time.Hour)
 	}
 	return snapshots
 }

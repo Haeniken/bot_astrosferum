@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const ForecastInteractiveSchema = "forecast-interactive-v4-celestial-distance-aspect"
+const ForecastInteractiveSchema = "forecast-interactive-v5-explicit-heuristics"
 
 // ForecastInteractiveDataset contains the exact prepared values behind the
 // seven ordinary forecast charts. It is presentation data, not a second
@@ -65,15 +65,15 @@ type ForecastInteractiveInputs struct {
 }
 
 type ForecastInteractiveUpperAir struct {
-	TimesUTC              []time.Time  `json:"times_utc"`
-	PressureHPA           []float64    `json:"pressure_hpa"`
-	HeightKM              []float64    `json:"height_km"`
-	WindSpeedMS           [][]*float64 `json:"wind_speed_ms"`
-	VectorShearMSPerKM    [][]*float64 `json:"vector_shear_ms_per_km"`
-	DirectionDeltaDegrees [][]*float64 `json:"direction_delta_deg"`
-	SeeingIndex           []*float64   `json:"seeing_index"`
-	OpticalSeeingArcsec   []*float64   `json:"optical_seeing_arcsec"`
-	Confidence            []float64    `json:"confidence"`
+	TimesUTC                 []time.Time  `json:"times_utc"`
+	PressureHPA              []float64    `json:"pressure_hpa"`
+	HeightKM                 []float64    `json:"height_km"`
+	WindSpeedMS              [][]*float64 `json:"wind_speed_ms"`
+	VectorShearMSPerKM       [][]*float64 `json:"vector_shear_ms_per_km"`
+	DirectionDeltaDegrees    [][]*float64 `json:"direction_delta_deg"`
+	SeeingIndex              []*float64   `json:"seeing_index"`
+	OpticalSeeingArcsec      []*float64   `json:"optical_seeing_arcsec"`
+	LeadTimeQualityHeuristic []float64    `json:"lead_time_quality_heuristic"`
 }
 
 type ForecastInteractiveWeather struct {
@@ -84,10 +84,10 @@ type ForecastInteractiveWeather struct {
 
 type ForecastInteractiveWeatherHour struct {
 	forecast.SurfaceFrame
-	DewPointSpreadC     float64  `json:"dew_point_spread_c"`
-	TransparencyPercent *float64 `json:"transparency_percent"`
-	FogRisk             int      `json:"fog_risk"`
-	SunAltitudeDegrees  float64  `json:"sun_altitude_degrees"`
+	DewPointSpreadC              float64  `json:"dew_point_spread_c"`
+	TransparencyHeuristicPercent *float64 `json:"transparency_heuristic_percent"`
+	FogHeuristic                 int      `json:"fog_heuristic"`
+	SunAltitudeDegrees           float64  `json:"sun_altitude_degrees"`
 }
 
 type ForecastInteractiveCloud struct {
@@ -120,7 +120,7 @@ func PrepareForecastInteractiveDataset(
 		vertical.Provider != surface.Provider || vertical.Provider != cloud.Provider ||
 		vertical.RunID != surface.RunID || vertical.RunID != cloud.RunID ||
 		!vertical.BaseTime.Equal(surface.BaseTime) || !vertical.BaseTime.Equal(cloud.BaseTime) ||
-		vertical.Location != surface.Location || vertical.Location != cloud.Location {
+		!vertical.Location.Equal(surface.Location) || !vertical.Location.Equal(cloud.Location) {
 		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
 			fmt.Errorf("interactive forecast inputs have inconsistent provenance")
 	}
@@ -206,12 +206,12 @@ func PrepareForecastInteractiveDataset(
 	hours := make([]ForecastInteractiveWeatherHour, len(surface.Frames))
 	for index, frame := range surface.Frames {
 		var transparency *float64
-		if value, ok := frame.TransparencyProxyPercent(); ok {
+		if value, ok := frame.TransparencyHeuristicPercent(); ok {
 			transparency = finitePointer(value)
 		}
 		hours[index] = ForecastInteractiveWeatherHour{
-			SurfaceFrame: frame, DewPointSpreadC: frame.DewPointSpreadC(), TransparencyPercent: transparency,
-			FogRisk: frame.FogRisk(), SunAltitudeDegrees: sky.SunAltitudeDegrees(frame.ValidAt),
+			SurfaceFrame: frame, DewPointSpreadC: frame.DewPointSpreadC(), TransparencyHeuristicPercent: transparency,
+			FogHeuristic: frame.FogHeuristic(), SunAltitudeDegrees: sky.SunAltitudeDegrees(frame.ValidAt),
 		}
 	}
 	periods := []ForecastInteractiveSolarPeriod{}
@@ -243,7 +243,7 @@ func PrepareForecastInteractiveDataset(
 			TimesUTC: diagnostics.Times, PressureHPA: diagnostics.PressureHPA, HeightKM: diagnostics.HeightKM,
 			WindSpeedMS: nullableMatrix(diagnostics.WindSpeedMS), VectorShearMSPerKM: nullableMatrix(diagnostics.VectorShearMSPerKM),
 			DirectionDeltaDegrees: nullableMatrix(diagnostics.DirectionDelta), SeeingIndex: nullableVector(diagnostics.SeeingIndex),
-			OpticalSeeingArcsec: nullableVector(diagnostics.OpticalSeeingArcsec), Confidence: diagnostics.Confidence,
+			OpticalSeeingArcsec: nullableVector(diagnostics.OpticalSeeingArcsec), LeadTimeQualityHeuristic: diagnostics.LeadTimeQualityHeuristic,
 		},
 		Weather: ForecastInteractiveWeather{Hours: hours, Astronomy: sky, CelestialTracks: celestialTracks},
 		Cloud: ForecastInteractiveCloud{

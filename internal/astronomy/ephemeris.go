@@ -10,6 +10,8 @@ import (
 	"math"
 	"time"
 
+	"bot_astrosferum/internal/forecast"
+
 	"github.com/soniakeys/meeus/v3/base"
 	"github.com/soniakeys/meeus/v3/julian"
 	"github.com/soniakeys/meeus/v3/moonposition"
@@ -19,8 +21,12 @@ import (
 )
 
 const (
-	degree      = math.Pi / 180
-	earthRadius = 6378.14
+	degree                        = math.Pi / 180
+	earthRadius                   = 6378.14
+	wgs84SemiMajorAxisKM          = 6378.137
+	wgs84InverseFlattening        = 298.257223563
+	wgs84Flattening               = 1 / wgs84InverseFlattening
+	wgs84FirstEccentricitySquared = wgs84Flattening * (2 - wgs84Flattening)
 )
 
 type equatorial struct {
@@ -36,15 +42,17 @@ type illumination struct {
 	phase, fraction, phaseAngle float64
 }
 
-func eventsForLocalDay(date time.Time, latitude, longitude float64) (horizonEvents, horizonEvents) {
+func eventsForLocalDay(date time.Time, location forecast.Location) (horizonEvents, horizonEvents) {
 	end := date.AddDate(0, 0, 1)
 	sun := findHorizonEvents(date, end, func(at time.Time) float64 {
 		// -0.833 degrees is the standard apparent sunrise/set altitude,
 		// including average refraction and the solar semidiameter.
-		return sunGeometricAltitude(at, latitude, longitude)/degree + 0.833
+		coordinates := sunCoordinates(at)
+		altitude, _ := topocentricHorizontal(at, location, coordinates)
+		return altitude/degree + 0.833
 	})
 	moon := findHorizonEvents(date, end, func(at time.Time) float64 {
-		return moonUpperLimbAltitude(at, latitude, longitude)
+		return moonUpperLimbAltitude(at, location)
 	})
 	return sun, moon
 }
@@ -88,26 +96,20 @@ func refineCrossing(low, high time.Time, height func(time.Time) float64) time.Ti
 	return low.Add(high.Sub(low) / 2)
 }
 
-func sunGeometricAltitude(at time.Time, latitude, longitude float64) float64 {
+func sunGeometricAltitude(at time.Time, location forecast.Location) float64 {
 	coordinates := sunCoordinates(at)
-	return geometricAltitude(at, latitude, longitude, coordinates)
+	altitude, _ := topocentricHorizontal(at, location, coordinates)
+	return altitude
 }
 
-func moonUpperLimbAltitude(at time.Time, latitude, longitude float64) float64 {
+func moonUpperLimbAltitude(at time.Time, location forecast.Location) float64 {
 	coordinates := moonCoordinates(at)
-	hourAngle := localHourAngle(at, longitude, coordinates.ra)
-	geocentric := altitude(hourAngle, latitude*degree, coordinates.dec)
-	// Topocentric parallax lowers the lunar centre along its vertical circle.
-	topocentric := geocentric - math.Asin(earthRadius/coordinates.distance*math.Cos(geocentric))
+	topocentric, _ := topocentricHorizontal(at, location, coordinates)
 	apparent := topocentric + atmosphericRefraction(topocentric)
 	semidiameter := 0.2725 * math.Asin(earthRadius/coordinates.distance)
 	// Residual 0.09 degree horizon correction follows the validated SunCalc
 	// v2 upper-limb convention used against USNO event tables.
 	return (apparent+semidiameter)/degree + 0.09
-}
-
-func geometricAltitude(at time.Time, latitude, longitude float64, coordinates equatorial) float64 {
-	return altitude(localHourAngle(at, longitude, coordinates.ra), latitude*degree, coordinates.dec)
 }
 
 func localHourAngle(at time.Time, longitude, rightAscension float64) float64 {

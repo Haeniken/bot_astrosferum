@@ -139,7 +139,7 @@ func TestReferenceVBandOperationalVetoSuppressesDisplayedResult(t *testing.T) {
 		want   string
 	}{
 		{name: "precipitation", mutate: func(frame *OverallIndexFrame) { frame.PrecipitationVeto = true }, want: "precipitation"},
-		{name: "high fog", mutate: func(frame *OverallIndexFrame) { frame.HighFog = true }, want: "high_fog_risk"},
+		{name: "high fog", mutate: func(frame *OverallIndexFrame) { frame.HighFogHeuristic = true }, want: "high_fog_heuristic"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

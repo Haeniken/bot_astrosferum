@@ -1,7 +1,9 @@
 package iconeu
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/gob"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +13,55 @@ import (
 	"bot_astrosferum/internal/forecast"
 	"bot_astrosferum/internal/model"
 )
+
+type legacyVerticalFrame struct {
+	ValidAt    time.Time
+	Levels     []forecast.VerticalLevel
+	Confidence float64
+}
+
+type legacyVerticalSeries struct {
+	Location         forecast.Location
+	Provider         string
+	Product          string
+	RunID            string
+	Grid             string
+	AlgorithmVersion string
+	BaseTime         time.Time
+	GeneratedAt      time.Time
+	Frames           []legacyVerticalFrame
+}
+
+type legacySurfaceFrame struct {
+	ValidAt                 time.Time
+	TemperatureC            float64
+	DewPointC               float64
+	RelativeHumidityPercent float64
+	VisibilityKM            float64
+	PrecipitableWaterMM     float64
+	TransparencyAvailable   bool
+}
+
+type legacySurfaceSeries struct {
+	Location    forecast.Location
+	Provider    string
+	Product     string
+	RunID       string
+	BaseTime    time.Time
+	GeneratedAt time.Time
+	StepHours   int
+	Frames      []legacySurfaceFrame
+}
+
+type legacyPointBundle struct {
+	Schema   string
+	RunID    string
+	CellID   string
+	Created  time.Time
+	Vertical legacyVerticalSeries
+	Surface  legacySurfaceSeries
+	Cloud    forecast.CloudSeries
+}
 
 type countingPointSource struct {
 	mu                       sync.Mutex
@@ -136,8 +187,89 @@ func TestCachedStoreCachesBundleInMemoryAndOnDisk(t *testing.T) {
 	if vertical.AlgorithmVersion != forecast.SeeingPrototypeVersion {
 		t.Fatalf("disk-cache algorithm version = %q, want %q", vertical.AlgorithmVersion, forecast.SeeingPrototypeVersion)
 	}
+	if vertical.Frames[0].LeadTimeQualityHeuristic <= 0 {
+		t.Fatal("disk cache lost lead-time quality heuristic")
+	}
+	coldSurface, err := coldStore.Surface(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coldSurface.Frames[0].FogHeuristicAvailable || !coldSurface.Frames[0].TransparencyHeuristicAvailable {
+		t.Fatal("disk cache lost explicit fog/transparency heuristic availability")
+	}
 	if coldSource.vertical != 0 || coldSource.surface != 0 || coldSource.cloud != 0 {
 		t.Fatal("disk cache unexpectedly extracted source data")
+	}
+}
+
+func TestCachedStoreRejectsLegacyHeuristicFieldBundle(t *testing.T) {
+	root := t.TempDir()
+	const runID = "20260714T0600Z"
+	const cellID = "lat0633-lon0923"
+	vertical := forecast.SyntheticVerticalFixture()
+	surface := forecast.SyntheticSurfaceFixture()
+	legacyVerticalFrames := make([]legacyVerticalFrame, len(vertical.Frames))
+	for index, frame := range vertical.Frames {
+		legacyVerticalFrames[index] = legacyVerticalFrame{
+			ValidAt: frame.ValidAt, Levels: frame.Levels, Confidence: 0.93,
+		}
+	}
+	legacySurfaceFrames := make([]legacySurfaceFrame, len(surface.Frames))
+	for index, frame := range surface.Frames {
+		legacySurfaceFrames[index] = legacySurfaceFrame{
+			ValidAt: frame.ValidAt, TemperatureC: frame.TemperatureC,
+			DewPointC: frame.DewPointC, RelativeHumidityPercent: frame.RelativeHumidityPercent,
+			VisibilityKM: frame.VisibilityKM, PrecipitableWaterMM: frame.PrecipitableWaterMM,
+			TransparencyAvailable: true,
+		}
+	}
+	legacy := legacyPointBundle{
+		Schema: "point-v6-native-cloud-mass-mh", RunID: runID, CellID: cellID,
+		Created: time.Now().UTC(),
+		Vertical: legacyVerticalSeries{
+			Location: vertical.Location, Provider: vertical.Provider, Product: vertical.Product,
+			RunID: runID, Grid: vertical.Grid, AlgorithmVersion: vertical.AlgorithmVersion,
+			BaseTime: vertical.BaseTime, GeneratedAt: vertical.GeneratedAt, Frames: legacyVerticalFrames,
+		},
+		Surface: legacySurfaceSeries{
+			Location: surface.Location, Provider: surface.Provider, Product: surface.Product,
+			RunID: runID, BaseTime: surface.BaseTime, GeneratedAt: surface.GeneratedAt,
+			StepHours: surface.StepHours, Frames: legacySurfaceFrames,
+		},
+		Cloud: forecast.SyntheticCloudFixture(),
+	}
+	store := newTestCachedStore(root, &countingPointSource{})
+	path := store.cachePath(runID, cellID)
+	writeLegacyPointBundle(t, path, legacy)
+	if _, err := store.readDisk(runID, cellID); err == nil {
+		t.Fatal("legacy point-cache schema was accepted")
+	}
+	legacyPath := filepath.Join(root, "cache", "points", legacy.Schema, runID, cellID+".gob.gz")
+	if legacyPath == path {
+		t.Fatal("legacy and current point-cache versions share a directory")
+	}
+}
+
+func writeLegacyPointBundle(t *testing.T, path string, bundle legacyPointBundle) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzip.NewWriter(file)
+	if err := gob.NewEncoder(compressed).Encode(bundle); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

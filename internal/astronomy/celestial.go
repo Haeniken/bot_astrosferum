@@ -8,7 +8,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const CelestialEphemerisVersion = "celestial-horizontal-distance-aspect-jpl-meeus-v2"
+const CelestialEphemerisVersion = "celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3"
 
 var (
 	// The common reception-time domain starts one UTC day after the nominal
@@ -271,7 +271,7 @@ func CelestialPositionAt(location forecast.Location, at time.Time, body Celestia
 		if err != nil {
 			return position, err
 		}
-		altitude, azimuth := topocentricHorizontal(at, location.Latitude*degree, location.Longitude, coordinates)
+		altitude, azimuth := topocentricHorizontal(at, location, coordinates)
 		position.AzimuthDegrees = normalizeRadians(azimuth) / degree
 		position.GeometricAltitudeDegrees = altitude / degree
 		position.ApparentAltitudeDegrees = planningApparentAltitude(altitude) / degree
@@ -404,12 +404,11 @@ func celestialRadialVelocityKMS(at time.Time, body CelestialBody) (float64, erro
 	return (rightDistance - leftDistance) / right.Sub(left).Seconds(), nil
 }
 
-func topocentricHorizontal(at time.Time, latitudeRadians, longitudeDegrees float64, coordinates equatorial) (float64, float64) {
-	u := math.Atan((1 - earthFlattening) * math.Tan(latitudeRadians))
-	rhoSinPhiPrime := (1 - earthFlattening) * math.Sin(u)
-	rhoCosPhiPrime := math.Cos(u)
-	sinHorizontalParallax := earthRadius / coordinates.distance
-	hourAngle := localHourAngle(at, longitudeDegrees, coordinates.ra)
+func topocentricHorizontal(at time.Time, location forecast.Location, coordinates equatorial) (float64, float64) {
+	latitudeRadians := location.Latitude * degree
+	rhoCosPhiPrime, rhoSinPhiPrime := wgs84ObserverFactors(location)
+	sinHorizontalParallax := wgs84SemiMajorAxisKM / coordinates.distance
+	hourAngle := localHourAngle(at, location.Longitude, coordinates.ra)
 
 	a := math.Cos(coordinates.dec) * math.Sin(hourAngle)
 	b := math.Cos(coordinates.dec)*math.Cos(hourAngle) - rhoCosPhiPrime*sinHorizontalParallax
@@ -423,6 +422,17 @@ func topocentricHorizontal(at time.Time, latitudeRadians, longitudeDegrees float
 	north := math.Sin(topocentricDeclination)*math.Cos(latitudeRadians) -
 		math.Cos(topocentricDeclination)*math.Cos(topocentricHourAngle)*math.Sin(latitudeRadians)
 	return altitudeRadians, normalizeRadians(math.Atan2(east, north))
+}
+
+func wgs84ObserverFactors(location forecast.Location) (rhoCosPhiPrime, rhoSinPhiPrime float64) {
+	latitudeRadians := location.Latitude * degree
+	sinLatitude, cosLatitude := math.Sincos(latitudeRadians)
+	primeVerticalRadiusKM := wgs84SemiMajorAxisKM /
+		math.Sqrt(1-wgs84FirstEccentricitySquared*sinLatitude*sinLatitude)
+	// The product currently has no observer-height input, so topocentric
+	// parallax is evaluated on the WGS84 reference ellipsoid (h=0).
+	return primeVerticalRadiusKM * cosLatitude / wgs84SemiMajorAxisKM,
+		primeVerticalRadiusKM * (1 - wgs84FirstEccentricitySquared) * sinLatitude / wgs84SemiMajorAxisKM
 }
 
 func planningApparentAltitude(geometric float64) float64 {

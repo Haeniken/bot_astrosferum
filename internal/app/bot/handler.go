@@ -33,11 +33,11 @@ const StartHelp = `Привет! Я строю астрономический п
 
 Высотные карты: по горизонтали — местное время; слева давление, справа высота ICON (850 hPa ≈ 1,5 км); светлее — больше, шкала снизу.
 
-1. Погода на 72 часа: облака, ветер, влажность, T−Td, туман и события светил. Капля — защита от росы; она не означает плохой сиинг. «Прозрачность %» — proxy по облакам, VIS и PWV, не измеренная экстинкция.
+1. Погода на 72 часа: облака, ветер, влажность, T−Td, эвристика тумана и светила. Капля — защита от росы; это не означает плохой сиинг. «Эвристика прозрачности» сортирует часы по облакам, VIS и PWV; это не оптическое пропускание.
 
-Облака: нижние закрывают объект и отражают засветку; средние гасят сигнал и контраст; верхние повышают фон и портят длинные выдержки/фотометрию. Цифры покрытия: белые <10%, синие 10–49%, оранжевые ≥50%; это не оптическая толщина; облачность не меняет wind-based seeing.
+Облака: нижние закрывают объект и отражают засветку; средние гасят сигнал и контраст; верхние повышают фон и портят длинные выдержки/фотометрию. Покрытие: белое <10%, синее 10–49%, оранжевое ≥50%; облачность не меняет wind-based seeing.
 
-2. Overall Astronomy Index, 1…10: снизу — сохранившаяся пригодность; цветные сегменты — точное аддитивное разложение потерь: сиинг/облака/ветер/туман/осадки; сумма до 10. Осадки выше порога — красный запрет (индекс 1); «!» — неполные данные.
+2. Overall Astronomy Index, 1…10: снизу сохранившаяся пригодность; цветные сегменты точно разлагают потери от сиинга, облаков, ветра, эвристики тумана и осадков; сумма до 10. Осадки выше порога дают индекс 1; «!» — неполные данные.
 
 Кольцо «Эталон V, зенит» — только при Солнце <−18°: PWV/AOD/O₃/Луна/PSF-сиинг, без засветки. Нет GEOS-CF — нет кольца; Overall доступен.
 
@@ -49,7 +49,7 @@ const StartHelp = `Привет! Я строю астрономический п
 
 6. Wind Direction Delta — поворот ветра; ниже 2 м/с показан 0°, потому что направление почти штилевого потока неустойчиво и малозначимо.
 
-7. Forecast Wind Seeing Index, 1…10 — оценка только по ветру. Процент — условная уверенность по дальности срока; в Overall Index она не входит.
+7. Forecast Wind Seeing Index, 1…10 — оценка только по ветру. Процент — эвристика качества по сроку, не статистическая уверенность; в Overall Index она не входит.
 
 Засветка: LPI/SQM по Atlas 2024 и World Atlas 2015; Бортль — ориентир по зениту, в Overall не входит.
 
@@ -754,7 +754,7 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 	}
 	number := 1
 	if hasWeather {
-		deliveries = append(deliveries, chartDelivery{charts.Weather, fmt.Sprintf(language.text("<b>%d/%d · Почасовая погода и небесные события на 72 часа.</b>\n<i>Показывает облака, осадки, температуру, ветер, влажность, риск росы и тумана, а также события Солнца, Луны и планет. Помогает выбрать тёмные часы без мешающей погоды и заранее подготовить оборудование.</i>", "<b>%d/%d · Hourly weather and celestial events for 72 hours.</b>\n<i>Shows clouds, precipitation, temperature, wind, humidity, dew and fog risk, plus Sun, Moon, and planet events. Use it to select dark hours without obstructive weather and prepare equipment in advance.</i>"), number, total), true})
+		deliveries = append(deliveries, chartDelivery{charts.Weather, fmt.Sprintf(language.text("<b>%d/%d · Почасовая погода и небесные события на 72 часа.</b>\n<i>Показывает облака, осадки, температуру, ветер, влажность, риск росы и эвристику тумана, а также события Солнца, Луны и планет. Помогает выбрать тёмные часы без мешающей погоды и заранее подготовить оборудование.</i>", "<b>%d/%d · Hourly weather and celestial events for 72 hours.</b>\n<i>Shows clouds, precipitation, temperature, wind, humidity, dew risk and the fog heuristic, plus Sun, Moon, and planet events. Use it to select dark hours without obstructive weather and prepare equipment in advance.</i>"), number, total), true})
 		number++
 	}
 	if hasOverall {
@@ -883,8 +883,8 @@ func (handler *Handler) offerHorizon(ctx context.Context, chatID int64, requestI
 		return
 	}
 	prompt := language.text(
-		"Дополнительный анализ: 73 почасовых срока периода ICON-EU f000…f072, восемь направлений на высоте 10°. Первые сроки уже могут быть в прошлом — ориентируйтесь на подписанную шкалу времени.",
-		"Optional analysis: 73 hourly terms across ICON-EU f000…f072, eight directions at 10° elevation. The earliest terms may already be in the past; use the labeled time axis.",
+		"Дополнительный анализ: 72 физических почасовых срока ICON-EU f001…f072, восемь направлений на видимой высоте 10°. Первые сроки уже могут быть в прошлом — ориентируйтесь на подписанную шкалу времени.",
+		"Optional analysis: 72 physical hourly ICON-EU terms f001…f072, eight directions at 10° apparent elevation. The earliest terms may already be in the past; use the labeled time axis.",
 	)
 	if err := messenger.SendMessageWithActions(ctx, chatID, prompt, ActionKeyboard{{button}}); err != nil {
 		handler.logf("forecast request %d horizon action prompt failed: %v", requestID, err)

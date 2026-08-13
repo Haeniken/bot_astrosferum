@@ -42,8 +42,8 @@ func startHelp(language userLanguage, includeHorizon bool) string {
 		return help
 	}
 	item := language.text(
-		"8. «Горизонт» (только ICON-EU) — отдельный медленный почасовой расчёт всего периода run f000…f072 на высоте 10° по 8 азимутам: индекс, главный ограничитель и качество данных.",
-		"8. “Horizon” (ICON-EU only) — a separate slower hourly calculation for the full f000…f072 run period at 10° elevation in eight azimuths. It shows the index, principal limiter, and input-data quality.",
+		"8. «Горизонт» (только ICON-EU) — рефракционный расчёт f001…f072 на видимой высоте 10° по 8 азимутам: индекс, главный ограничитель и качество данных.",
+		"8. “Horizon” (ICON-EU only) — a refracted f001…f072 calculation at 10° apparent elevation in eight azimuths: index, principal limiter, and input-data quality.",
 	)
 	return strings.Replace(help, marker, "\n\n"+item+marker, 1)
 }
@@ -73,7 +73,7 @@ How to read the result:
 
 Altitude charts: horizontal axis is local time; left axis is pressure, right axis is ICON height (850 hPa ≈ 1.5 km); lighter colors mean larger values, see the scale below each map.
 
-1. Hourly weather for 72 hours: conditions, wind, humidity, T−Td, fog, and celestial events. A drop means dew protection may be useful; dew does not imply poor seeing. “Transparency %” is a comparative proxy based on clouds, VIS, and PWV, not measured extinction.
+1. Hourly weather for 72 hours: conditions, wind, humidity, T−Td, a fog heuristic, and celestial events. A drop means dew protection may be useful; dew does not imply poor seeing. “Transparency heuristic” is a ranking aid based on clouds, VIS, and PWV, not optical transmission.
 
 Cloud layers and astronomy:
 • low clouds block targets and reflect light pollution;
@@ -94,7 +94,7 @@ The “Reference V, zenith” ring is shown only during astronomical night. It a
 
 6. Wind Direction Delta, ° — wind rotation between adjacent levels. It is shown as 0° below 2 m/s because near-calm direction is unstable and has little observational impact.
 
-7. Forecast Wind Seeing Index — wind-based estimate from 1 to 10. The percentage is conditional confidence based only on lead time and is not part of the Overall Index.
+7. Forecast Wind Seeing Index — wind-based estimate from 1 to 10. The percentage is a lead-time quality heuristic, not statistical confidence, and is not part of the Overall Index.
 
 Light pollution: coordinate-specific LPI/SQM from Atlas 2024 and a separate World Atlas 2015 comparison. Bortle is a zenith-oriented reference and is not part of the Overall Index.
 

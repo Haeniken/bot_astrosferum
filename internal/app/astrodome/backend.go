@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"bot_astrosferum/internal/app/directional"
+	"bot_astrosferum/internal/astronomy"
 	"bot_astrosferum/internal/forecast"
 	"bot_astrosferum/internal/model"
 	"bot_astrosferum/internal/model/iconeu"
 )
 
 const (
-	CalculationRequestSchemaVersion = 3
+	CalculationRequestSchemaVersion = 4
 	maximumCalculationRequestBytes  = 64 << 10
 	maximumNativeForecastHour       = 84
 )
@@ -60,7 +61,7 @@ type Backend struct {
 
 // CalculationRequest is the language-neutral, immutable worker input. It
 // contains native-source identity and requested coordinates, never a derived
-// seeing, tau0, cloud transmission, Overall, or confidence value.
+// seeing, tau0, cloud transmission, Overall, or quality value.
 type CalculationRequest struct {
 	SchemaVersion             int                                       `json:"schema_version"`
 	SourceIdentity            forecast.AstrodomePrimitiveVolumeIdentity `json:"source_identity"`
@@ -80,6 +81,7 @@ type CalculationRequest struct {
 	DirectionWavelengthM      float64                                   `json:"direction_reference_wavelength_m"`
 	ScienceCalibrationVersion string                                    `json:"science_calibration_version"`
 	ScienceCalibrationSHA256  string                                    `json:"science_calibration_sha256"`
+	CelestialEphemerisVersion string                                    `json:"celestial_ephemeris_version"`
 }
 
 type manifestSnapshot struct {
@@ -203,6 +205,7 @@ func (backend *Backend) Prepare(ctx context.Context, admission directional.Astro
 		DirectionWavelengthM:      forecast.AstrodomeDirectionReferenceWavelengthM,
 		ScienceCalibrationVersion: backend.calibration.Version,
 		ScienceCalibrationSHA256:  backend.calibrationDigest,
+		CelestialEphemerisVersion: astronomy.CelestialEphemerisVersion,
 	}
 	payload, err := EncodeCalculationRequest(request)
 	if err != nil {
@@ -382,6 +385,7 @@ func (request CalculationRequest) Validate() error {
 		request.DirectionReferenceSurface != forecast.AstrodomeDirectionReferenceSurface ||
 		request.DirectionWavelengthM != forecast.AstrodomeDirectionReferenceWavelengthM ||
 		request.ScienceCalibrationVersion != forecast.AstrodomeScienceVersion ||
+		request.CelestialEphemerisVersion != astronomy.CelestialEphemerisVersion ||
 		!validPrefixedSHA256(request.ScienceCalibrationSHA256) {
 		return errors.New("astrodome calculation request scientific versions are inconsistent")
 	}

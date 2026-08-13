@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-08-09
-Stage: Stage 3 live ICON → Telegram and VK; Horizon live; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v29/v23 current; v28/v22 full-run retained as the measured baseline
+Date: 2026-08-12
+Stage: Stage 3 live ICON → Telegram and VK; full-refraction Horizon implemented pending a new production gate; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v30/v23 current; v28/v22 full-run retained as the measured baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -62,7 +62,7 @@ Deployment target: operator-managed host
   conservative floor, so the modeled cloud response is approximately `T²`;
   this is explicitly limited by missing cloud-scattered radiance. Opaque
   transmission omits `ExtinctionMag` and sets `OpaqueTransmission`; missing
-  seeing/composition is partial, while high fog or precipitation makes the
+  seeing/composition is partial, while a high `FogHeuristic` signal or precipitation makes the
   result operationally unavailable and omits the marker. Artificial light
   remains excluded, and the result is not multiplied into generic Overall;
 - Reference V derives actual model-surface pressure from the lowest available
@@ -103,7 +103,7 @@ extending the ordinary forecast critical path.
 
 The optional Horizon analysis is an existing application function controlled
 by `ASTRO_HORIZON_ANALYSIS_ENABLED`. It is deliberately available only for an ordinary
-ICON-EU forecast and covers the complete immutable `f000..f072` interval. ICON
+ICON-EU forecast and covers the immutable native `f001..f072` interval. ICON
 Global exposes neither a Horizon button nor a runnable Horizon job. The
 implementation consists of:
 
@@ -120,18 +120,18 @@ implementation consists of:
 - an atomic bounded disk cache with startup, periodic, and post-publication
   cleanup; short-lived hard-link leases keep an admitted PNG stable across
   eviction and abandoned staging/lease artifacts are removed at startup;
-- provider-neutral spherical 10-degree/8-azimuth geometry at 500 m midpoint
-  spacing and directional
-  turbulence, transverse-wind, cloud, observer-fog, coarse-HHL terrain, index,
-  and deterministic data-quality calculations;
-- ICON-EU-only footprint checks and full immutable `f000..f072` acquisition:
+- eight apparent-10-degree azimuths using the same Ciddor refractivity field,
+  event-aware Dormand--Prince ray, native HHL/horizontal partition, and physical
+  science kernel as Astrodome; prepared seeing, `tau0`, cloud obstruction,
+  index, and quality are never interpolated;
+- ICON-EU-only footprint checks and immutable `f001..f072` acquisition:
   exact hourly surface/cloud/TKE/MH/visibility, same-run linear interpolation
   of raw three-hour pressure `U/V/T/Z`, and batched CDO extraction of
   deduplicated model cells. One request-scoped `gennn` nearest-neighbour
   weights file is reused read-only through `remap` for every field/step; the
   shared `horizon_analysis.cdo_workers` limit is eight subprocesses for both
   Horizon and Astrodome preload;
-- a 73-frame calculation contract that recomputes HMNSP/TKE, `Cn2`, seeing,
+- a 72-frame calculation contract that recomputes HMNSP/TKE, `Cn2`, seeing,
   `tau0`, and the index for every hour rather than interpolating nonlinear
   outputs, using the same complete calibration as Overall; that calibration is
   also part of Horizon cache identity;
@@ -141,13 +141,14 @@ implementation consists of:
   acquisition, after calculation/rendering, and immediately before every send,
   including cache hits; delivery-time captions use the configured ICON-EU
   `max_stale_age`;
-- one localized `3200x1400` time-by-eight-direction heatmap for all 73 terms,
+- one localized `3200x1400` time-by-eight-direction heatmap for all 72 terms,
   with day/twilight/night shading, unavailable cells, run period, freshness,
   and compact limiter/quality disclosure;
-- the per-cell data-quality strip follows forecast lead confidence: good at
+- the per-cell data-quality strip uses the deterministic lead-time quality
+  heuristic: good at
   `C_lead >= 0.85`, usable at `0.75 <= C_lead < 0.85`, and limited at
-  `C_lead < 0.75`; unavailable paths remain missing, while composite
-  confidence below `0.60` can only downgrade a result;
+  `C_lead < 0.75`; unavailable paths remain missing, while the composite
+  data-quality heuristic below `0.60` can only downgrade a result;
 - unit tests in the affected packages for callback normalization, queue/cache
   behavior, series identity, geometry, local-ENU wind projection,
   dateline/high-latitude cases, provider boundaries, sparse/missing profiles,
@@ -158,10 +159,11 @@ implementation consists of:
   physical slant seeing and `tau0` remain unchanged, while reference anchors
   use the exact path ratio raised to the Fried `3/5` power.
 
-Production validation on 2026-07-22 used ICON-EU run `2026072218` and ICON
+The production validation below predates full-refraction Horizon v8 and is
+retained only as a historical straight-path performance baseline. It used ICON-EU run `2026072218` and ICON
 Global run `2026072212`. At the saved Plavsk point, the first ordinary
 seven-chart calculation took `83.097 s`, the warm calculation took `9.193 s`,
-and the complete 73-frame Horizon calculation took `123.541 s`. An ordinary
+and the former 73-frame Horizon calculation took `123.541 s`. An ordinary
 forecast completed in `10.074 s` while Horizon was actively extracting data,
 below the `14.193 s` non-regression threshold. The Global smoke produced seven
 charts in `174.586 s`; its Horizon command failed closed and created no PNG.
@@ -192,7 +194,7 @@ to a single azimuth-independent zenith. Completed code includes:
   coupled adaptive Dormand–Prince 5(4) ECEF ray and event closure. Refraction
   v3 requires two converged forward production passes; the reverse pass is
   reserved for reference/strict regression and release verification;
-- `astrodome-science-kernel-v29` /
+- `astrodome-science-kernel-v30-explicit-heuristics` /
   `astrodome-science-path-v23`: 0.2-mm physical/horizontal root localisation,
   0.4-mm distinct-root proximity detection with fail-closed handling, a 0.5-mm
   side guard, a 0.2-mm proof scale, the unchanged 1-mm position/coordinate
@@ -267,7 +269,7 @@ to a single azimuth-independent zenith. Completed code includes:
   slant water vapour, and phase-resolved cloud extinction, followed by the
   common bounded Overall mapping and precipitation veto;
 - one configured Overall/cloud calibration shared by ordinary Overall,
-  Horizon, and Astrodome. Calculation-request schema v3 and every current
+  Horizon, and Astrodome. Calculation-request schema v4 and every current
   dataset retain the SHA-256 of the complete validated Astrodome calibration;
   a configuration change invalidates the cache by construction and a
   bot/worker mismatch fails closed;
@@ -299,7 +301,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v4-celestial-distance-aspect` and `horizon-interactive-v1` JSON
+  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v3-full-refraction` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:
@@ -308,11 +310,11 @@ to a single azimuth-independent zenith. Completed code includes:
   no resampling between them; Overall never extends outside pressure-profile
   support;
   Go serializes the additive Overall penalty points and the browser only draws
-  them. The payload pins `overall-astronomy-index-v1`,
+  them. The payload pins `overall-astronomy-index-v2-fog-heuristic-availability`,
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
   website-only cache miss skips PNG rasterization. It additionally carries ten
   exact, canonical hourly topocentric tracks under
-  `celestial-horizontal-distance-aspect-jpl-meeus-v2`; shortest-arc interpolation is confined
+  `celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3`; shortest-arc interpolation is confined
   to dashed presentation geometry and never changes a selected-hour or
   meteorological value. The same contract carries a pinned exhaustive-hourly
   model-distance scale, an integer forecast-mean closeness label, the exact-hour
@@ -321,9 +323,9 @@ to a single azimuth-independent zenith. Completed code includes:
   composition is available and never becomes an implicit Overall penalty;
 - the Horizon interactive payload pins its exact cache artifact, ICON HHL
   observer-surface elevation, ICON-EU provider/run/grid, Horizon science
-  version, canonical Overall-calibration digest, and the native `f000..f072`
+  version, canonical Overall-calibration digest, and the native `f001..f072`
   hourly axis; continuous server-derived solar-phase intervals cover
-  `f000−30 min .. f072+30 min`, and the worker must match the coordinator's
+  `f001−30 min .. f072+30 min`, and the worker must match the coordinator's
   pinned science cache key before publication. Canonical terrain-primary unavailable cells remain visible and
   fail closed rather than invalidating the full result;
 - shared saved points can be selected, created, or deleted on the website up to
@@ -337,7 +339,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - gzip visualization archives with an ordinary 96-hour TTL, plus one explicit
   non-expiring `admin_fixture` visible read-only to signed-out visitors and to
   every configured Telegram administrator, but not to authenticated non-admins. The
-  fixture and saved-result decoder accept only v29/v23 with a supported pinned
+  fixture and saved-result decoder accept only v30/v23 with a supported pinned
   profile; production web output is `production-v2`. An older payload is
   rejected until a successful current same-coordinate result replaces the
   shared fixture when exact integer cross multiplication proves a smaller or
@@ -385,7 +387,7 @@ executed test-binary SHA-256 is
 `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`.
 
 This v28/v22 measurement and the older v25/v26 measurements remain diagnostic
-provenance; they do not describe the current v29/v23 writer.
+provenance; they do not describe the current v30/v23 writer.
 
 The independent angular-discretization diagnostic on the same run evaluated
 five native hours (`f002`, `f020`, `f038`, `f056`, `f073`) on the union of
@@ -443,7 +445,7 @@ Production uses the following replacement:
   `f=0.75+0.25*q_turbulence`; they cannot veto a clear general-purpose hour,
   while cloud transmission and fog retain their stronger obstruction role;
 - surface wind is a mild factor capped at 20%; dew is excluded, while possible
-  and high fog use factors `0.75/0.10`;
+  and possible/high `FogHeuristic` signals use factors `0.75/0.10`;
 - the heatmap derives each native layer's air mass as
   `P_Pa/(287.05·T)·abs(HHL[k]−HHL[k+1])`, so sparse levels cannot inflate
   condensate path;
@@ -455,13 +457,15 @@ Production uses the following replacement:
   native level, whereas Overall uses total-column `TQC/TQI` and
   random overlap of the aggregated `CLCL/CLCM/CLCH` tiers; their numeric values are not
   claimed to be identical;
-- point-cache schema is `point-v6-native-cloud-mass-mh`, preventing reuse of
-  old entries without `MH`, `T`, or native layer thickness;
+- ICON-EU point-cache schema is `point-v7-explicit-heuristics` and ICON Global
+  uses `point-v3-explicit-heuristics`; bundles with the former exported Gob
+  field names, as well as entries without `MH`, `T`, or native layer
+  thickness, cannot be reused as current data;
 - version markers match the new contract:
   `seeing-hybrid-tke-mh-hmnsp99-v7`,
   `conditions-v8-precip-veto-penalty-decomposition`,
   `render-v18-celestial-distance`, and
-  `shared-render-v23-celestial-distance-aspect`; Reference V is
+  `shared-render-v24-explicit-heuristics`; Reference V is
   independently keyed by `reference-v-band-zenith-efficiency-v2`,
   `reference-v-band-spectrl2-ks91-v3`, and
   `reference-v-band-benchmark-v1`.

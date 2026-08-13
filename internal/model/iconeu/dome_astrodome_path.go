@@ -297,7 +297,7 @@ const (
 // BuildAstrodomeSciencePath solves native horizontal-cell, HHL interpolation,
 // PBL, WMO tropopause, and cloud-tier events on the accepted curved ray. It
 // partitions raw primitive reconstruction only; no seeing, tau0,
-// transmission, Overall, quality, or confidence value is interpolated.
+// transmission, Overall, or quality value is interpolated.
 func (volume *DomeVolume) BuildAstrodomeSciencePath(
 	ctx context.Context,
 	ray forecast.AstrodomeRefractedRay,

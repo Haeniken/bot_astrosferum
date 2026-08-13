@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	AstrodomeScienceVersion                = "astrodome-science-kernel-v29"
+	AstrodomeScienceVersion                = "astrodome-science-kernel-v30-explicit-heuristics"
 	AstrodomeScienceGeometryStraight       = "straight-compat"
 	AstrodomeScienceGeometryRefractionFull = "refraction-full"
 	AstrodomeSciencePathContractVersion    = "astrodome-science-path-v23"
@@ -149,15 +149,15 @@ var ErrAstrodomeScienceTerrainBlocked = errors.New("astrodome line of sight is b
 // exact event; the kernel never hides it with a midpoint approximation.
 var ErrAstrodomeScienceIncompletePartition = errors.New("astrodome science path omits a physical breakpoint")
 
-// AstrodomeScienceFogState is an explicit native-site assessment. Fog is not
+// AstrodomeScienceFogHeuristic is an explicit native-site assessment. Fog is not
 // inferred from a slant-path proxy inside the physical kernel.
-type AstrodomeScienceFogState string
+type AstrodomeScienceFogHeuristic string
 
 const (
-	AstrodomeScienceFogUnavailable AstrodomeScienceFogState = "unavailable"
-	AstrodomeScienceFogNone        AstrodomeScienceFogState = "none"
-	AstrodomeScienceFogPossible    AstrodomeScienceFogState = "possible"
-	AstrodomeScienceFogHigh        AstrodomeScienceFogState = "high"
+	AstrodomeScienceFogUnavailable AstrodomeScienceFogHeuristic = "unavailable"
+	AstrodomeScienceFogNone        AstrodomeScienceFogHeuristic = "none"
+	AstrodomeScienceFogPossible    AstrodomeScienceFogHeuristic = "possible"
+	AstrodomeScienceFogHigh        AstrodomeScienceFogHeuristic = "high"
 )
 
 // AstrodomeScienceCloudTier identifies the fixed AGL bands of one cloud
@@ -363,7 +363,7 @@ type AstrodomeScienceSiteInputs struct {
 	ValidAt                    time.Time                        `json:"valid_at"`
 	WindSpeed10MMS             float64                          `json:"wind_speed_10m_ms"`
 	WindGust10MMS              float64                          `json:"wind_gust_10m_ms"`
-	FogState                   AstrodomeScienceFogState         `json:"fog_state"`
+	FogHeuristic               AstrodomeScienceFogHeuristic     `json:"fog_heuristic"`
 	PrecipitationRateMMPerHour float64                          `json:"precipitation_rate_mm_per_hour"`
 	PrecipitationIntervalStart time.Time                        `json:"precipitation_interval_start"`
 	PrecipitationIntervalEnd   time.Time                        `json:"precipitation_interval_end"`
@@ -604,16 +604,16 @@ const (
 // AstrodomeScienceQuality is deterministic input quality, never forecast
 // probability. It is reported beside the score and never multiplied into it.
 type AstrodomeScienceQuality struct {
-	LeadQuality             float64                         `json:"lead_quality"`
-	GeometryCoverage        float64                         `json:"geometry_coverage"`
-	TurbulencePathCoverage  float64                         `json:"turbulence_path_coverage"`
-	CloudPathCoverage       float64                         `json:"cloud_path_coverage"`
-	HumidityPathCoverage    *float64                        `json:"humidity_path_coverage,omitempty"`
-	TemporalResolutionHours float64                         `json:"temporal_resolution_hours"`
-	QuadratureConverged     bool                            `json:"quadrature_converged"`
-	ApproximationLengthM    float64                         `json:"approximation_length_m"`
-	TopClosed               bool                            `json:"top_closed"`
-	Category                AstrodomeScienceQualityCategory `json:"category"`
+	LeadTimeQualityHeuristic float64                         `json:"lead_time_quality_heuristic"`
+	GeometryCoverage         float64                         `json:"geometry_coverage"`
+	TurbulencePathCoverage   float64                         `json:"turbulence_path_coverage"`
+	CloudPathCoverage        float64                         `json:"cloud_path_coverage"`
+	HumidityPathCoverage     *float64                        `json:"humidity_path_coverage,omitempty"`
+	TemporalResolutionHours  float64                         `json:"temporal_resolution_hours"`
+	QuadratureConverged      bool                            `json:"quadrature_converged"`
+	ApproximationLengthM     float64                         `json:"approximation_length_m"`
+	TopClosed                bool                            `json:"top_closed"`
+	Category                 AstrodomeScienceQualityCategory `json:"category"`
 }
 
 type AstrodomeScienceAttribution struct {
@@ -1007,10 +1007,10 @@ func validateAstrodomeScienceSite(site AstrodomeScienceSiteInputs, validAt time.
 		!site.PrecipitationIntervalEnd.Equal(validAt) {
 		return fmt.Errorf("astrodome precipitation needs the explicit differenced one-hour UTC accumulation ending at valid time")
 	}
-	switch site.FogState {
+	switch site.FogHeuristic {
 	case AstrodomeScienceFogUnavailable, AstrodomeScienceFogNone, AstrodomeScienceFogPossible, AstrodomeScienceFogHigh:
 	default:
-		return fmt.Errorf("unsupported astrodome fog state %q", site.FogState)
+		return fmt.Errorf("unsupported astrodome fog heuristic %q", site.FogHeuristic)
 	}
 	return nil
 }
@@ -1701,7 +1701,7 @@ func deriveAstrodomeSciencePass(pass astrodomeSciencePass, site AstrodomeScience
 	)
 	surfaceFactor := 1 - calibration.Overall.SurfaceWindMaxPenalty*windRisk
 	fogFactor := 1.0
-	switch site.FogState {
+	switch site.FogHeuristic {
 	case AstrodomeScienceFogPossible:
 		fogFactor = calibration.Overall.PossibleFogFactor
 	case AstrodomeScienceFogHigh:
@@ -2112,9 +2112,9 @@ func astrodomeTau0MS(windWeightedCn2, wavelengthM float64) float64 {
 	return 1000 * math.Pow(coherencePhaseStructureCoefficient*wavenumber*wavenumber*windWeightedCn2, -3.0/5.0)
 }
 
-// AstrodomeForecastLeadQuality returns the versioned lead-time component used
+// AstrodomeForecastLeadTimeQualityHeuristic returns the versioned lead-time component used
 // by both completed and explicitly unavailable directional nodes.
-func AstrodomeForecastLeadQuality(leadHours float64) float64 {
+func AstrodomeForecastLeadTimeQualityHeuristic(leadHours float64) float64 {
 	return 0.96 - 0.26*clampSurfaceValue(leadHours/72, 0, 1)
 }
 
@@ -2125,7 +2125,7 @@ func astrodomeScienceQuality(
 	converged bool,
 	approximationLengthM float64,
 ) AstrodomeScienceQuality {
-	lead := AstrodomeForecastLeadQuality(leadHours)
+	lead := AstrodomeForecastLeadTimeQualityHeuristic(leadHours)
 	category := AstrodomeScienceQualityUnavailable
 	mandatoryAvailable := path.Availability.Geometry && path.Availability.Turbulence && path.Availability.Cloud &&
 		path.Availability.TemporalBrackets && path.Availability.Terrain && path.TopClosed
@@ -2143,7 +2143,7 @@ func astrodomeScienceQuality(
 		}
 	}
 	return AstrodomeScienceQuality{
-		LeadQuality: lead, GeometryCoverage: path.GeometryCoverage,
+		LeadTimeQualityHeuristic: lead, GeometryCoverage: path.GeometryCoverage,
 		TurbulencePathCoverage: path.TurbulencePathCoverage, CloudPathCoverage: path.CloudPathCoverage,
 		HumidityPathCoverage: path.HumidityPathCoverage, TemporalResolutionHours: path.TemporalResolutionHours,
 		QuadratureConverged: converged, ApproximationLengthM: approximationLengthM,

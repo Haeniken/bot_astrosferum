@@ -4,7 +4,7 @@
 [Main scientific method](scientific-method.en.md) ·
 [Quadrature and model-top closure →](scientific-method-astrodome-numerical-integration.en.md)
 
-**Status:** part of the canonical scientific method, version 2.0. Splitting the
+**Status:** part of the canonical scientific method, version 2.1. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 

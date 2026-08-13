@@ -6,40 +6,41 @@ import (
 )
 
 type SurfaceFrame struct {
-	ValidAt                  time.Time `json:"valid_at"`
-	TemperatureC             float64   `json:"temperature_c"`
-	DewPointC                float64   `json:"dew_point_c"`
-	RelativeHumidityPercent  float64   `json:"relative_humidity_percent"`
-	CloudCoverPercent        float64   `json:"cloud_cover_percent"`
-	LowCloudCoverPercent     float64   `json:"low_cloud_cover_percent"`
-	MidCloudCoverPercent     float64   `json:"mid_cloud_cover_percent"`
-	HighCloudCoverPercent    float64   `json:"high_cloud_cover_percent"`
-	PrecipitationMM          float64   `json:"precipitation_mm"`
-	WindSpeedMS              float64   `json:"wind_speed_ms"`
-	WindGustMS               float64   `json:"wind_gust_ms"`
-	WindDirectionDegrees     float64   `json:"wind_direction_degrees"`
-	PressureHPA              float64   `json:"pressure_hpa"`
-	VisibilityKM             float64   `json:"visibility_km"`
-	PrecipitableWaterMM      float64   `json:"precipitable_water_mm"`
-	CloudLiquidPathKgM2      float64   `json:"cloud_liquid_path_kg_m2"`
-	CloudIcePathKgM2         float64   `json:"cloud_ice_path_kg_m2"`
-	MixedLayerDepthM         float64   `json:"mixed_layer_depth_m"`
-	CloudCondensateAvailable bool      `json:"cloud_condensate_available"`
-	TransparencyAvailable    bool      `json:"transparency_available"`
+	ValidAt                        time.Time `json:"valid_at"`
+	TemperatureC                   float64   `json:"temperature_c"`
+	DewPointC                      float64   `json:"dew_point_c"`
+	RelativeHumidityPercent        float64   `json:"relative_humidity_percent"`
+	CloudCoverPercent              float64   `json:"cloud_cover_percent"`
+	LowCloudCoverPercent           float64   `json:"low_cloud_cover_percent"`
+	MidCloudCoverPercent           float64   `json:"mid_cloud_cover_percent"`
+	HighCloudCoverPercent          float64   `json:"high_cloud_cover_percent"`
+	PrecipitationMM                float64   `json:"precipitation_mm"`
+	WindSpeedMS                    float64   `json:"wind_speed_ms"`
+	WindGustMS                     float64   `json:"wind_gust_ms"`
+	WindDirectionDegrees           float64   `json:"wind_direction_degrees"`
+	PressureHPA                    float64   `json:"pressure_hpa"`
+	VisibilityKM                   float64   `json:"visibility_km"`
+	PrecipitableWaterMM            float64   `json:"precipitable_water_mm"`
+	CloudLiquidPathKgM2            float64   `json:"cloud_liquid_path_kg_m2"`
+	CloudIcePathKgM2               float64   `json:"cloud_ice_path_kg_m2"`
+	MixedLayerDepthM               float64   `json:"mixed_layer_depth_m"`
+	CloudCondensateAvailable       bool      `json:"cloud_condensate_available"`
+	FogHeuristicAvailable          bool      `json:"fog_heuristic_available"`
+	TransparencyHeuristicAvailable bool      `json:"transparency_heuristic_available"`
 }
 
 func (frame SurfaceFrame) DewPointSpreadC() float64 {
 	return frame.TemperatureC - frame.DewPointC
 }
 
-// FogRisk uses ICON-EU's direct horizontal-visibility forecast and requires
+// FogHeuristic uses ICON-EU's direct horizontal-visibility forecast and requires
 // near-saturation so rain, snow, smoke, or dry haze are not mislabeled as fog.
-// WMO defines fog as water droplets reducing surface visibility below 1 km.
-func (frame SurfaceFrame) FogRisk() int {
-	// A zero value with unavailable optical inputs represents a provider that
+// It is an uncalibrated warning heuristic, not a categorical observation.
+func (frame SurfaceFrame) FogHeuristic() int {
+	// A zero value with unavailable visibility represents a provider that
 	// does not publish direct visibility (currently ICON Global), not zero
 	// meteorological visibility.
-	if !frame.TransparencyAvailable && frame.VisibilityKM == 0 {
+	if !frame.FogHeuristicAvailable {
 		return 0
 	}
 	spread := frame.DewPointSpreadC()
@@ -52,12 +53,12 @@ func (frame SurfaceFrame) FogRisk() int {
 	return 0
 }
 
-// TransparencyProxyPercent is a conservative sorting aid rather than optical
+// TransparencyHeuristicPercent is a conservative sorting aid rather than optical
 // transmission or extinction. Cloud cover dominates the score; horizontal
 // meteorological visibility and precipitable water only refine it. Direct AOD
 // or stellar-extinction observations are not available in ICON-EU.
-func (frame SurfaceFrame) TransparencyProxyPercent() (float64, bool) {
-	if !frame.TransparencyAvailable {
+func (frame SurfaceFrame) TransparencyHeuristicPercent() (float64, bool) {
+	if !frame.TransparencyHeuristicAvailable {
 		return 0, false
 	}
 	cloudCover := math.Max(frame.CloudCoverPercent,

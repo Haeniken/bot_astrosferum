@@ -57,7 +57,7 @@ func loadHorizonRun(dataRoot, runID string) (LoadedManifest, error) {
 }
 
 func (store *HorizonStore) Supports(plan forecast.HorizonPlan) bool {
-	return plan.AlgorithmVersion == forecast.HorizonAlgorithmVersion &&
+	return plan.AlgorithmVersion == forecast.HorizonStraightReferenceAlgorithmVersion &&
 		forecast.HorizonFootprintCovered(plan, Coverage().Contains)
 }
 

@@ -37,7 +37,7 @@ func SyntheticSurfaceFixture() SurfaceSeries {
 			CloudIcePathKgM2:         cloud / 100 * 0.025,
 			MixedLayerDepthM:         350 + 1150*math.Max(0, diurnal),
 			CloudCondensateAvailable: true,
-			TransparencyAvailable:    true,
+			FogHeuristicAvailable:    true, TransparencyHeuristicAvailable: true,
 		}
 	}
 	return SurfaceSeries{

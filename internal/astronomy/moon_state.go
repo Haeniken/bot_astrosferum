@@ -7,8 +7,6 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const earthFlattening = 1 / 298.257
-
 // MoonState describes the Moon at one instant for an observer at the supplied
 // coordinates. The geometric altitude and zenith distance are topocentric and
 // include lunar parallax. ApparentAltitudeDegrees additionally uses the same
@@ -28,9 +26,8 @@ type MoonState struct {
 }
 
 // MoonStateAt computes an hourly-useful lunar ephemeris at an arbitrary
-// instant and geographic position. The observer is placed on the reference
-// ellipsoid at zero elevation because forecast.Location contains no site
-// elevation. Invalid coordinates or a zero time return Valid=false.
+// instant and geographic position. The observer is placed on the WGS84
+// reference ellipsoid at zero height. Invalid inputs return Valid=false.
 func MoonStateAt(location forecast.Location, at time.Time) MoonState {
 	state := MoonState{Time: at}
 	if at.IsZero() || forecast.ValidateCoordinates(location.Latitude, location.Longitude) != nil {
@@ -45,8 +42,7 @@ func MoonStateAt(location forecast.Location, at time.Time) MoonState {
 
 	altitude, azimuth := topocentricHorizontal(
 		at,
-		location.Latitude*degree,
-		location.Longitude,
+		location,
 		coordinates,
 	)
 	phase := moonIllumination(at)

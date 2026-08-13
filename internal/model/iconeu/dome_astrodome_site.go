@@ -67,7 +67,8 @@ func (volume *DomeVolume) AstrodomeScienceSiteAt(
 		return forecast.AstrodomeScienceSiteInputs{}, errors.New("ICON-EU Astrodome 10-m wind/gust is unavailable")
 	}
 	if !current.Available.Has(forecast.AstrodomePrimitivePrecipitationAccumulation) ||
-		!previous.Available.Has(forecast.AstrodomePrimitivePrecipitationAccumulation) {
+		(!previousAt.Equal(volume.identity.RunBaseTime) &&
+			!previous.Available.Has(forecast.AstrodomePrimitivePrecipitationAccumulation)) {
 		return forecast.AstrodomeScienceSiteInputs{}, errors.New("ICON-EU Astrodome adjacent precipitation accumulations are unavailable")
 	}
 	if !current.PrecipitationIntervalStart.Equal(volume.identity.RunBaseTime) ||
@@ -80,9 +81,17 @@ func (volume *DomeVolume) AstrodomeScienceSiteAt(
 	if err != nil {
 		return forecast.AstrodomeScienceSiteInputs{}, fmt.Errorf("ICON-EU Astrodome current precipitation packing error: %w", err)
 	}
-	previousPackingError, err := volume.astrodomePrecipitationPackingError(ctx, previousAt)
-	if err != nil {
-		return forecast.AstrodomeScienceSiteInputs{}, fmt.Errorf("ICON-EU Astrodome previous precipitation packing error: %w", err)
+	previousPackingError := 0.0
+	if previousAt.Equal(volume.identity.RunBaseTime) {
+		// f000 is the exact zero-length origin of the run accumulation, not an
+		// observed hourly value. Its mathematical baseline is exactly zero; do
+		// not manufacture a missing precipitation field or a packing error.
+		previous.PrecipitationAccumulationMM = 0
+	} else {
+		previousPackingError, err = volume.astrodomePrecipitationPackingError(ctx, previousAt)
+		if err != nil {
+			return forecast.AstrodomeScienceSiteInputs{}, fmt.Errorf("ICON-EU Astrodome previous precipitation packing error: %w", err)
+		}
 	}
 	precipitation, err := domeHourlyPrecipitationFromPackedAccumulations(
 		current.PrecipitationAccumulationMM,
@@ -104,7 +113,7 @@ func (volume *DomeVolume) AstrodomeScienceSiteAt(
 	return forecast.AstrodomeScienceSiteInputs{
 		SourceIdentity: volume.identity, ValidAt: validAt,
 		WindSpeed10MMS: wind, WindGust10MMS: current.WindGust10MMS,
-		FogState: domeAstrodomeFogState(current), PrecipitationRateMMPerHour: precipitation,
+		FogHeuristic: domeAstrodomeFogHeuristic(current), PrecipitationRateMMPerHour: precipitation,
 		PrecipitationIntervalStart: previousAt, PrecipitationIntervalEnd: validAt,
 		ForecastLeadHours: leadHours,
 	}, nil
@@ -194,7 +203,7 @@ func domeHourlyPrecipitationFromPackedAccumulations(
 	return delta, nil
 }
 
-func domeAstrodomeFogState(surface forecast.AstrodomeSurfacePrimitives) forecast.AstrodomeScienceFogState {
+func domeAstrodomeFogHeuristic(surface forecast.AstrodomeSurfacePrimitives) forecast.AstrodomeScienceFogHeuristic {
 	required := forecast.AstrodomePrimitiveFieldSet(forecast.AstrodomePrimitiveVisibility) |
 		forecast.AstrodomePrimitiveFieldSet(forecast.AstrodomePrimitiveRelativeHumidity) |
 		forecast.AstrodomePrimitiveFieldSet(forecast.AstrodomePrimitiveTemperature2M) |

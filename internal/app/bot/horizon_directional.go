@@ -2,21 +2,21 @@ package bot
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
 	"bot_astrosferum/internal/render"
 )
 
-const horizonDirectionalGridProfile = "horizon-8x10deg-v1"
+const horizonDirectionalGridProfile = forecast.HorizonRefractionGridProfile
 
 // UseDirectionalCoordinator moves Horizon extraction, calculation, and
 // rendering into the same strict FIFO used by Astrodome. Delivery remains in
@@ -99,14 +99,7 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		completeHorizonMessenger(waiter.messenger, err)
 		return nil
 	}
-	geometryDigest, err := horizonPlanDigest(job.plan)
-	if err != nil {
-		jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
-		jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
-			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
-		completeHorizonMessenger(waiter.messenger, err)
-		return nil
-	}
+	geometryDigest := forecast.HorizonRefractionGeometryDigest()
 	ticket, err := coordinator.Submit(ctx, directional.Request{
 		Kind: directional.KindHorizon, OwnerID: horizonDirectionalOwner(waiter.identity),
 		IdempotencyKey: job.key, ScienceCacheKey: job.key,
@@ -232,12 +225,7 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 			Code: "science_identity_mismatch", Err: errors.New("horizon worker configuration differs from the pinned science cache identity"),
 		}
 	}
-	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
-	if err != nil {
-		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_geometry", Err: err}
-	}
-	digest, err := horizonPlanDigest(plan)
-	if err != nil || digest != execution.Source.GeometryDigest {
+	if forecast.HorizonRefractionGeometryDigest() != execution.Source.GeometryDigest {
 		return directional.RunnerResult{}, directional.CodedError{Code: "geometry_mismatch", Err: errors.New("horizon geometry differs from the pinned request")}
 	}
 	if execution.Source.Provider != "ICON-EU" || execution.Source.RunID != request.RunID ||
@@ -251,19 +239,18 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 		}
 		return directional.RunnerResult{}, directional.CodedError{Code: "stale_run", Err: err}
 	}
-	snapshots, err := jobs.source.Series(ctx, request.RunID, plan)
+	if jobs.refractedComputer == nil {
+		return directional.RunnerResult{}, directional.CodedError{Code: "worker_unavailable", Err: errors.New("full-refraction Horizon computer is not configured")}
+	}
+	frames, surfaceHeightM, err := jobs.refractedComputer.ComputeRefractedHorizon(ctx, execution.Source, request.Location)
 	if err != nil {
 		return directional.RunnerResult{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return directional.RunnerResult{}, err
+	if math.Abs(surfaceHeightM-request.ObserverSurfaceElevationM) > 1 {
+		return directional.RunnerResult{}, directional.CodedError{Code: "source_mismatch", Err: errors.New("horizon model surface differs from the pinned request")}
 	}
-	if err := validateHorizonSeries(request.RunID, snapshots); err != nil {
+	if err := validateRefractedHorizonSeries(request.RunID, frames); err != nil {
 		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_series", Err: err}
-	}
-	frames, err := jobs.compute(ctx, snapshots, plan, jobs.calibration)
-	if err != nil {
-		return directional.RunnerResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return directional.RunnerResult{}, err
@@ -315,23 +302,15 @@ func horizonDirectionalOwner(identity horizonUserIdentity) string {
 	return identity.platform + ":" + strconv.FormatInt(identity.userID, 10)
 }
 
-func horizonPlanDigest(plan forecast.HorizonPlan) (string, error) {
-	// Time zones affect only localized rendering and are not part of physical
-	// ray geometry. Remove them from the pinned geometry identity without
-	// mutating the plan used by the calculation.
-	identity := plan
-	identity.Observer.TimeZone = ""
-	identity.Directions = append([]forecast.HorizonDirectionPlan(nil), plan.Directions...)
-	for directionIndex := range identity.Directions {
-		identity.Directions[directionIndex].Samples = append([]forecast.HorizonSample(nil), plan.Directions[directionIndex].Samples...)
-		for sampleIndex := range identity.Directions[directionIndex].Samples {
-			identity.Directions[directionIndex].Samples[sampleIndex].Midpoint.TimeZone = ""
+func validateRefractedHorizonSeries(runID string, frames []forecast.HorizonFrame) error {
+	runTime, err := time.Parse("2006010215", runID)
+	if err != nil || len(frames) != 72 {
+		return errors.New("refracted Horizon needs 72 native hourly frames")
+	}
+	for index, frame := range frames {
+		if !frame.ValidAt.Equal(runTime.Add(time.Duration(index+1)*time.Hour)) || len(frame.Results) != forecast.HorizonDirectionCount {
+			return fmt.Errorf("refracted Horizon frame %d is outside f001..f072", index)
 		}
 	}
-	encoded, err := json.Marshal(identity)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:]), nil
+	return nil
 }

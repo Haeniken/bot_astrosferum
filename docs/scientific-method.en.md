@@ -4,7 +4,7 @@
 **ORCID:** [0009-0005-5804-5011](https://orcid.org/0009-0005-5804-5011)\
 **Project:** Astrosferum\
 **Document type:** Research-software methodology and calculation note\
-**Version:** 2.0\
+**Version:** 2.1\
 **Revision date:** 12 August 2026
 
 Status: research-software method and calculation note, revised 12 August 2026.
@@ -20,7 +20,7 @@ requirements as the ordinary forecast.
 The directional atmospheric Astrodome method in section 8 is implemented for
 ICON-EU in this repository. Its presentation and saved-visualization catalogue
 are deployed from the independent private `site-astrosferum` repository.
-Production-v2/v29/v23
+Production-v2/v30/v23
 is the current writer; the complete v28/v22 numerical measurement recorded below
 is an explicitly historical baseline;
 multi-cycle resource, release, and observational validation remain separate
@@ -643,11 +643,14 @@ serialization-consistency tolerances: `2e-6` for factor/product/Shapley loss
 and `2e-5` for the reconstructed `1…10` Overall value. These project validation
 limits are neither observational uncertainties nor permission to publish a
 loss outside `[0,1]`.
-The current Astrodome dataset schema is `3`. Its penalty semantics remain the
-bounded product definition above, while schema 3 additionally carries the
-versioned celestial distance and ring-aspect diagnostics from section 4.10.
-The narrow `astrodome-dataset-writer-v4-celestial-distance-aspect` identity participates in the
-calculation cache key, so an older or incompatible payload cannot be reused.
+The current Astrodome dataset schema is `4`. Its penalty semantics remain the
+bounded product definition above; schema 4 carries the explicit heuristic
+contracts plus the versioned celestial distance and ring-aspect diagnostics
+from section 4.10. The narrow
+`astrodome-dataset-writer-v5-explicit-heuristics` identity participates in the
+calculation cache key. Calculation-request schema 4 also binds the
+`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3` ephemeris
+identity, so an older or incompatible payload cannot be reused.
 An archived payload outside the declared unit interval is rejected rather than
 silently clamped or reinterpreted.
 
@@ -691,6 +694,12 @@ profile rejects the frame. Optional diagnostics fail explicitly:
 
 The `!` marker on chart 2 means incomplete inputs, not low confidence in an
 otherwise complete probabilistic forecast.
+
+This missing-data interpretation is versioned as
+`overall-astronomy-index-v2-fog-heuristic-availability`: a direct `VIS`
+field can support `FogHeuristic` even when PWV is absent and the separate
+transparency heuristic is therefore unavailable. Missing PWV never means
+clear air or zero water vapour.
 
 ### 3.4. Reference Johnson-V zenith efficiency
 
@@ -1273,17 +1282,22 @@ intensity penalty is inferred from a deterministic ICON member.
 Dew is excluded from Overall. It remains an operational prompt to prepare a
 heater or dew shield and does not by itself worsen atmospheric seeing.
 
-Fog physically blocks observations, so the multiplier follows the existing
-`FogRisk`:
+Fog can physically block observations, so the multiplier follows the
+threshold-based warning `FogHeuristic`:
 
 ```math
 q_{\mathrm{fog}}=
 \begin{cases}
-1.00, & \text{no fog risk},\\
-0.75, & \text{possible fog},\\
-0.10, & \text{high fog risk}.
+1.00, & \text{no heuristic fog signal},\\
+0.75, & \text{possible-fog heuristic signal},\\
+0.10, & \text{high fog-heuristic signal}.
 \end{cases}
 ```
+
+The three classes combine model `VIS`, relative humidity, and `T-Td`. They are
+an uncalibrated warning heuristic, not a categorical observation or a
+site-specific probability of radiation/advection fog. Model terrain cannot
+resolve every hollow, slope, or coastal microscale circulation.
 
 Surface wind is a separate and deliberately mild practical factor because
 screens, a low setup, and site choice can partly mitigate it. SAAO observations
@@ -1339,7 +1353,7 @@ change together with regression examples:
 | ground `Cn²` scale | `1.0` |
 | `MH` clamp AGL | `500…2000 m` |
 | unresolved `CLC` guard: low / middle / high | `0.45 / 0.2475 / 0.081` |
-| possible / high fog factor | `0.75 / 0.10` |
+| possible / high `FogHeuristic` factor | `0.75 / 0.10` |
 | hourly precipitation detection/veto threshold | `0.05 mm` |
 | surface-wind maximum penalty | `0.20` |
 | mean-wind thresholds | `8.5 / 15 m/s` |
@@ -1367,16 +1381,21 @@ or a Pickering scale.
 
 ### 4.10. Planning ephemerides and displayed sky paths
 
+The current ephemeris identity is
+`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3`. It is also an
+explicit Astrodome calculation-request/cache-key input; a worker or archived
+dataset carrying an earlier identity is rejected rather than reused.
+
 The celestial overlay is an independent planning product and **does not enter
 Overall, seeing, cloud transmission, or any meteorological value**. Its
 canonical order is Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus,
 Neptune, and Pluto. Earth is the observer and is therefore not a displayed
 target. Every stored sample is evaluated at the exact UTC hour of the forecast
 axis; azimuth is geodetic, clockwise from true north, and altitude is measured
-from the local astronomical horizon. The current location type has no observer
-height, so the topocentric observer is placed on the reference ellipsoid at
-zero height. This approximation is negligible at the plotted scale but must be
-remembered close to the horizon. The common declared numerical domain is
+from the local astronomical horizon. The product has no observer-height input,
+so the topocentric observer is placed on the WGS84 reference ellipsoid at zero
+height. This reference-ellipsoid position never replaces ICON HHL. The common
+declared numerical domain is
 `1885-01-02 <= t < 2050-01-01`. The one-day lower-bound margin keeps the
 light-time-retarded Pluto state inside the series' published interval; the
 upper boundary remains exclusive. Requests outside this domain fail closed
@@ -1529,8 +1548,9 @@ existing Meeus solar and lunar series; the Moon is topocentric before the
 horizontal conversion.
 
 For right ascension `alpha`, declination `delta`, geocentric distance
-`Delta`, geodetic latitude `phi`, and local hour angle `H`, the topocentric
-conversion uses the reference-ellipsoid flattening `f=1/298.257`. Define
+`Delta`, WGS84 geodetic latitude `phi`, and local hour angle `H`, the
+topocentric conversion uses
+`a=6378.137 km`, `f=1/298.257223563`, and `e^2=f(2-f)`. Define
 
 ```math
 H=\mathrm{GAST}(t_{UT1})+\lambda_{east}-\alpha.
@@ -1549,16 +1569,16 @@ as a UTC-like proxy for UT1 and this `0.9 s` bound is not claimed. The modern
 bound is an angular-direction bound; azimuth itself is ill-conditioned
 arbitrarily close to the zenith.
 
-Now define
+Now define the prime-vertical radius and normalized observer ECEF components:
 
 ```math
-u=\arctan\!\big((1-f)\tan\phi\big),
+N(\phi)=\frac{a}{\sqrt{1-e^2\sin^2\phi}},
 \qquad
-\rho_s=(1-f)\sin u,
+\rho_c=\frac{N\cos\phi}{a},
 \qquad
-\rho_c=\cos u,
+\rho_s=\frac{N(1-e^2)\sin\phi}{a},
 \qquad
-p=\frac{R_\oplus}{\Delta}.
+p=\frac{a}{\Delta}.
 ```
 
 Then
@@ -1881,9 +1901,12 @@ turbulence boundary. Message count, short names, `MH` units, size, and SHA-256
 are validated per time; the independent `surface_steps` manifest section
 appears only after all 79 files are complete. The new field set is published
 in a versioned directory, the manifest switches atomically, and only then is
-the previous directory removed. The enriched point cache uses
-`point-v6-native-cloud-mass-mh`, preventing old `gob.gz` entries without
-native thickness or `MH` from being interpreted as current data.
+the previous directory removed. The enriched point caches use
+`point-v7-explicit-heuristics` for ICON-EU and
+`point-v3-explicit-heuristics` for ICON Global. The directory/schema change
+rejects Gob bundles carrying the former heuristic field names, as well as old
+entries without native thickness or `MH`, instead of silently decoding absent
+fields as zero values.
 
 `PMSL` in this surface contract remains the pressure reduced to mean sea
 level for the weather product. Reference V does not reuse it: the same-run,
@@ -1899,6 +1922,12 @@ value by
 ```math
 \widehat P_k-e_k<P_k\leq\widehat P_k+e_k .
 ```
+
+For the first physical interval `[f000,f001]`, `f000` is the exact
+zero-length origin of the accumulation: `P_0=0` and `e_0=0`. The provider
+still requires the native `f001` accumulation and its packing error. Every
+later interval requires both adjacent published accumulations and both packing
+errors.
 
 Positive or negative de-accumulated values satisfying
 
@@ -1984,7 +2013,7 @@ messages and the last 30 contain 169. Cloud obstruction remains complete; the
 hybrid Overall sequence stops at `+48 h` rather than extrapolating TKE or
 silently reverting to the known-optimistic free-atmosphere estimate. Global
 still has no public `VIS` in this feed, so fog is not inferred from a
-missing value and the transparency proxy is marked unavailable. CDO is
+missing value and the transparency heuristic is marked unavailable. CDO is
 installed only in the application image; the host requires no meteorological
 packages.
 
@@ -2047,16 +2076,17 @@ substitution of climatology.
 
 ### 7.1. Scope, time, and provider
 
-The optional Horizon product answers a directional question for every term of
-the immutable ICON-EU interval `f000..f072` (73 hourly terms spanning 72
-hours): in which of eight compass directions are conditions
-least obstructed for an object referenced at `10 deg` geometric elevation? The
+The optional Horizon product answers a directional question for the 72 native
+ICON-EU intervals `f001..f072`: in which of eight compass directions are
+conditions least obstructed for an object launched at `10 deg` **apparent**
+elevation at the observer aperture? `f000` is excluded because no physical
+one-hour precipitation interval precedes the analysis time. The
 directions and azimuths are
 `N=0`, `NE=45`, `E=90`, `SE=135`, `S=180`, `SW=225`, `W=270`, and `NW=315 deg`.
 The scientific contract is versioned as
-`horizon-spherical-los-tke-hmnsp99-v7`.
+`horizon-refracted-astrodome-kernel-v8`.
 
-All eight directions use that same `f000..f072` time axis. Native hourly
+All eight directions use that same `f001..f072` time axis. Native hourly
 surface, cloud, TKE, MH, and visibility terms are used directly. Pressure-level
 `U/V/T/Z` are native every three hours; the raw variables are linearly
 interpolated between same-run bracketing terms, and the HMNSP/TKE profile,
@@ -2086,9 +2116,14 @@ no Horizon button and no runnable Horizon calculation. This is a product and
 data-quality boundary, not a statement that spherical geometry ceases outside
 Europe.
 
-### 7.2. Spherical line-of-sight geometry
+### 7.2. Launch geometry and full refraction
 
-The current geometry is a spherical-Earth straight chord. With
+The production path uses the same Ciddor moist-air refractivity field,
+Dormand--Prince event-aware ray tracer, native horizontal/HHL partition and
+certified numerical closure as section 8. There is no separate reduced
+Horizon refraction model. The following spherical straight chord is retained
+only as a non-production analytic reference for footprint envelopes and
+regression comparison. With
 `R=6,371,008.8 m`, observer HHL elevation `h0`, reference elevation
 `e=10 deg`, and line-of-sight distance `s`, the ray radius, altitude, and
 sub-ray central angle are
@@ -2118,7 +2153,7 @@ boundaries are at no more than `0.5 km`; the midpoint of each resulting chord
 segment supplies one model lookup and the exact difference in `s` supplies its
 quadrature length `ds`. At 10 degrees a full ground step changes ray altitude
 by about 87 m, avoiding coarse PBL/cloud aliasing.
-The production constants produce 240 samples per direction at sea level.
+The retired reference constants produce 240 samples per direction at sea level.
 Nearest ICON-EU cells are deduplicated after all actual geodesic destinations
 have passed the coverage check.
 
@@ -2143,15 +2178,20 @@ remain well-defined.
 
 `10 deg` is a project product choice. At `5 deg` the footprint and sensitivity
 to refraction and unresolved terrain become much larger, whereas `20 deg` is no
-longer a useful near-horizon diagnostic. The constant is a geometric reference:
-the current code traces a straight `10 deg` chord and does not bend the ray or
-apply a pressure/temperature-dependent refraction correction. Equation 42 of the
-[NREL Solar Position Algorithm](https://www.nrel.gov/docs/fy08osti/34302.pdf)
-is the reference approximation used to quantify the omitted correction. This
-unsupported effect and the spherical rather than ellipsoidal Earth are part of
-the stated uncertainty.
+longer a useful near-horizon diagnostic. The production coordinate is the
+apparent direction at the aperture and the ray is bent by the reconstructed
+pressure, temperature, humidity, and CO2 refractivity field. Equations
+[F13]--[F15] therefore do not define the scientific path used for a published
+Horizon cell.
 
-### 7.3. Directional optical turbulence and wind
+### 7.3. Shared physical kernel and retired straight-ray reference
+
+Published `HorizonResult` turbulence and wind values are copied from the eight
+`AstrodomeScienceNode` results produced by the canonical section 8 kernel. The
+local ray tangent varies along the refracted path, and the joint adaptive
+quadrature integrates `Cn2` and the wind-weighted moment without midpoint
+sampling. Equations [F16]--[F17] below document the retired v7 straight-ray
+regression model only; they are not an alternative production calculation.
 
 At each segment midpoint and forecast hour, the ray altitude selects exactly one
 local turbulence kernel already used by ordinary Overall: Masciadri/ICON TKE below
@@ -2204,7 +2244,7 @@ Public pressure profiles commonly end near 50 hPa, slightly below 22.3 km. The
 last valid HMNSP99 layer and top-level wind are extended only to the fixed top
 with quality weight `0.35`; nothing above 22.3 km is integrated. This bounded
 closure keeps the product usable but can understate turbulence above the chosen
-top and explicitly lowers confidence.
+top and explicitly lowers the composite data-quality heuristic.
 
 For the homogeneous-`C_n^2` reference used by the quality mapping, the exact
 path ratio is taken from the same spherical straight-ray geometry as the
@@ -2235,7 +2275,13 @@ molecular optical air mass for turbulence air mass. Atmospheric refraction
 and real vertical inhomogeneity remain represented by the stated limitations
 and by the actual sampled `C_n^2` profile, respectively.
 
-### 7.4. Cloud, fog, and terrain closure
+### 7.4. Shared cloud, fog, and model-surface closure
+
+Published cloud transmission, fog factor, precipitation factor, terrain state,
+and their numerical errors are likewise copied from the shared section 8
+kernel. Equation [F18] and its midpoint grouping below are retained as a
+retired-v7 regression description only. Production follows the native-cell
+event partition and conservative nominal/error cloud closures in section 8.
 
 At each ray midpoint the retained native-level `P/T/QC/QI/CLC` profile is
 sampled at ray altitude. A containing HHL layer is preferred. Across a gap,
@@ -2324,7 +2370,8 @@ and is therefore identical for all directions. Roughly 7 km output cannot
 support a credible directional near-site fog wall. Dew remains an equipment
 advisory and does not enter the score.
 
-For each midpoint, coarse terrain is blocked when
+The following midpoint rule belongs only to the retired straight-ray v7
+reference and is not executed by the current Horizon product:
 
 ```math
 \mathrm{HHL}_{\mathrm{surface}}(\mathrm{midpoint})
@@ -2334,17 +2381,35 @@ For each midpoint, coarse terrain is blocked when
 
 Both sides of [F19] are absolute metres MSL.
 
-A block is an explicit index-1 veto. Ordinary Overall already uses observer-cell
-HHL as its AGL origin; Horizon adds directional HHL intersection but no separate
-altitude bonus or penalty. HHL is neither a local DEM nor an optical skyline
-model and does not resolve local terrain or obstructions. The displayed
-terrain conclusion must therefore be labelled coarse model terrain. DWD
+A v7 block was an explicit index-1 veto. The current Horizon product instead
+copies the terrain state of the same event-aware refracted Astrodome science
+node: the DOPRI ray is partitioned at native HHL crossings and fails closed on
+an interior intersection. Ordinary Overall already uses observer-cell HHL as
+its AGL origin; neither product adds a separate altitude bonus or penalty. HHL
+is neither a local DEM nor an optical skyline
+model and does not resolve local terrain or obstructions. The serialized
+provenance is therefore `icon_hhl_model_surface`; the UI must say model
+surface and must not call it an actual or surveyed horizon. DWD
 describes ICON output and orography as grid-cell means in the
 [ICON model description](https://www.dwd.de/EN/research/weatherforecasting/num_modelling/01_num_weather_prediction_modells/icon_description.html), and
 [the ICON tutorial](https://www.dwd.de/DE/leistungen/nwv_icon_tutorial/pdf_einzelbaende/icon_tutorial2025.pdf)
 defines HHL as vertical half-level height; neither is a local survey.
 
-### 7.5. Directional index and limiting factor
+A future fine DEM must remain a separate post-trace line-of-sight occlusion
+resolver over the accepted refracted trajectory. It must not replace HHL in
+the pressure, temperature, humidity, or refractive-index reconstruction.
+Atmospheric-lower-boundary and terrain-occlusion provenance must therefore be
+serialized independently; Copernicus DEM GLO-30 remains an open TODO until its
+licence, horizontal resolution, vertical datum/transform, cache identity, and
+missing-data policy are pinned.
+
+### 7.5. Shared Overall and limiting factor
+
+Production copies the conservative Overall value, physical seeing, `tau0`,
+Shapley penalty contributions, and limiting factors from the same
+`AstrodomeScienceNode`; it does not evaluate [F20] a second time. Equation
+[F20] is retained only to document the retired v7 mapping and cannot override
+the versioned section 8 kernel.
 
 The physical `epsilon_H` remains the slant-path seeing calculated from the LOS
 `Cn2` integral. Directly applying zenith reference anchors to that value is not
@@ -2444,73 +2509,47 @@ but it is not penalized because every sector is evaluated at the same elevation
 and the current product has no complete aerosol/extinction closure. Its omission
 must not be interpreted as a transparency prediction.
 
-### 7.6. Confidence is data quality, not probability
+### 7.6. Lead-time and data-quality heuristics are not probabilities
 
-Let `R` be the set of fully resolved meteorological segments, let `L` be the
-whole geometric path, and let `q_turb,j` and `q_cloud,j` be the bounded
-vertical-closure weights described above. The reported quality components are
+The pure lead-time diagnostic is named `LeadTimeQualityHeuristic`:
 
 ```math
-\begin{aligned}
-L&=\sum_j\Delta s_j,
-&L_R&=\sum_{j\in\mathcal R}\Delta s_j,\\
-P_{\mathrm{turb}}&=\frac{\sum_{j\in\mathcal R}q_{\mathrm{turb},j}\Delta s_j}{L},
-&P_{\mathrm{cloud}}&=\frac{\sum_{j\in\mathcal R}q_{\mathrm{cloud},j}\Delta s_j}{L},\\
-P_{\mathrm{path}}&=\min(P_{\mathrm{turb}},P_{\mathrm{cloud}}),\\[2pt]
 C_{\mathrm{lead}}
-&=\begin{cases}
-\dfrac{\sum_{j\in\mathcal R}c_{\mathrm{ICON},j}\Delta s_j}{L_R},&L_R>0,\\
-0,&L_R=0,
-\end{cases}\\
-R_{\mathrm{dir}}&=\frac{N_{\mathrm{available\ directions}}}{8},\\
-\mathrm{Confidence}
-&=\min\!\left(0.85,\;
-0.50P_{\mathrm{path}}+0.30C_{\mathrm{lead}}+0.20R_{\mathrm{dir}}\right).
-\end{aligned}\tag{F21}
+=0.96-0.26\,\mathrm{clamp}\!\left(\frac{h_{\mathrm{forecast}}}{72},0,1\right).
+\tag{F21}
 ```
 
-If the direction is unavailable, reported `Confidence=0` regardless of the
-remaining shared inputs; an unavailable row must never look highly confident.
-If `L_R=0`, the direction is unavailable; no division result is exposed.
-For a direction already vetoed by [F19], `P_path` instead reports the resolved
-HHL-terrain share. In that branch `R` means segments with valid terrain HHL,
-and a missing vertical confidence contributes zero to the lead-time numerator.
-Cloud/turbulence completeness cannot change the veto and is therefore not
-presented as if it had been evaluated beyond the obstruction.
-
-The ICON lead-time input follows the project curve
+It is a deterministic ordering rule, not a probability, confidence interval,
+or expected forecast error. The full-refraction kernel separately publishes
+geometry, turbulence, cloud, humidity, temporal-resolution, convergence, and
+model-top closure components. The Horizon adapter exposes
 
 ```math
-c_{\mathrm{ICON}}=\max\!\left(0.65,
-0.96-0.26\frac{h_{\mathrm{forecast}}}{72}\right).
+Q_{\mathrm{data}}
+=\min\!\left(C_{\mathrm{lead}},P_{\mathrm{geometry}},
+P_{\mathrm{turbulence}},P_{\mathrm{cloud}},R_{\mathrm{dir}}\right),
+\qquad
+R_{\mathrm{dir}}=\frac{N_{\mathrm{available\ directions}}}{8},
 ```
 
-The bottom-strip category is driven primarily by the decline in
-`C_{\mathrm{lead}}` with forecast lead time. Data are labelled good when
-`C_{\mathrm{lead}}\ge0.85`, usable when
-`0.75\le C_{\mathrm{lead}}<0.85`, and limited when
-`C_{\mathrm{lead}}<0.75`. Composite `Confidence` is a conservative lower
-bound: a value below `0.60` always downgrades the category to limited
-regardless of lead time. An unavailable path is labelled missing. A complete
-72-hour run therefore normally progresses from good early-run data through
-usable to limited late-run data, while incomplete profile closure can only
-downgrade the category.
+as `DataQualityHeuristic`; an unavailable direction reports zero. This scalar
+is a compact presentation diagnostic only. It does not replace the individual
+components and is not used to recalculate atmospheric science.
 
-The hard `0.85` ceiling on composite `Confidence` represents the lack of a
-local DEM/obstacle model. These numbers express deterministic input
-completeness, forecast lead time, and model resolution. They are **not** a
-calibrated probability that the observation will succeed.
+The categorical quality is copied from the shared Astrodome kernel. A complete,
+fully converged, non-approximated, non-coarse path is `good` at
+`C_lead>=0.85`, `usable` at `0.75<=C_lead<0.85`, and otherwise `limited`;
+missing mandatory closure is `unavailable`. No HHL uncertainty is hidden
+inside a quantity named statistical confidence.
 
 ### 7.7. Validation and remaining limitations
 
-Unit regressions cover spherical intersections and midpoints, exact surface
-distances, dateline normalization, near-polar coordinates, exact-pole rejection,
-full-footprint coverage, ECEF-to-local-ENU transverse-wind projection,
-physical slant seeing/coherence scaling, elevation-adjusted reference mapping,
-the bounded turbulence utility, step-size-stable cloud closure,
-sparse-profile confidence penalties, common observer fog, terrain veto,
-missing data, the `f000..f072` hourly series, raw-field three-hour interpolation
-followed by metric recomputation, and ordered time-by-eight-direction output.
+Unit regressions cover the exact eight-node apparent-10-degree grid and its
+digest, full-refraction preload, Ciddor/Dormand--Prince trace, native event
+partition, shared physical-node adapter, unavailable/terrain states, heuristic
+quality semantics, the `f001..f072` native interval, and ordered
+time-by-eight-direction output. The section 8 numerical and full-run release
+gates apply unchanged to the shared kernel.
 
 Every release validation runs one real calculation from a current ICON-EU run,
 an explicit ICON Global case with neither button nor job, localized readable
@@ -2545,4 +2584,4 @@ only; the formulas, numbering, and scientific contract remain one whole.
 - [Quadrature and model-top closure](scientific-method-astrodome-numerical-integration.en.md):
   side guards, adaptive quadrature, model top, quality, and validation.
 
-Together, the three files form the canonical section 8 of method version 2.0.
+Together, the three files form the canonical section 8 of method version 2.1.

@@ -172,8 +172,8 @@ func verticalFrameFromVectors(vectors map[float64]verticalVector, step StepFile,
 	if len(levels) != expectedLevels {
 		return forecast.VerticalFrame{}, fmt.Errorf("%s produced %d pressure levels, expected %d", sourceName, len(levels), expectedLevels)
 	}
-	confidence := math.Max(0.65, 0.96-0.26*float64(step.ForecastHour)/72)
-	return forecast.VerticalFrame{ValidAt: step.ValidAt, Levels: levels, Confidence: confidence}, nil
+	leadTimeQualityHeuristic := math.Max(0.65, 0.96-0.26*float64(step.ForecastHour)/72)
+	return forecast.VerticalFrame{ValidAt: step.ValidAt, Levels: levels, LeadTimeQualityHeuristic: leadTimeQualityHeuristic}, nil
 }
 
 func standardPressureHeight(pressureHPA float64) float64 {
