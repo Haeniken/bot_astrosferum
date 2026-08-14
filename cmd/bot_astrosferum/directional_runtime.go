@@ -39,7 +39,7 @@ type directionalRuntime struct {
 	closeErr    error
 }
 
-func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, accountJobs directional.AccountJobBackend, logf func(string, ...any)) (*directionalRuntime, error) {
+func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *bot.HorizonJobs, terrain astrodome.TerrainSkylineSource, accountJobs directional.AccountJobBackend, logf func(string, ...any)) (*directionalRuntime, error) {
 	credential, err := directional.ReadServiceCredentialFile(cfg.Directional.CredentialFile)
 	if err != nil {
 		return nil, fmt.Errorf("read directional service credential: %w", err)
@@ -99,7 +99,7 @@ func newDirectionalRuntime(ctx context.Context, cfg config.Config, horizonJobs *
 		Enabled: cfg.Astrodome.Enabled, DataRoot: cfg.Paths.Data,
 		MaxStaleAge: cfg.Providers.ICONEU.MaxStaleAge.Duration,
 		AdminIDs:    cfg.Platforms.Telegram.AdminIDs, TimeZones: timeZones,
-		Calibration: scienceCalibration,
+		Calibration: scienceCalibration, Terrain: terrain,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize Astrodome backend: %w", err)

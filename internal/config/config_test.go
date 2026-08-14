@@ -35,6 +35,9 @@ func TestLoadExample(t *testing.T) {
 	if !cfg.Astrodome.Enabled || cfg.Astrodome.JobTimeout.Duration != 0 || cfg.Astrodome.ResidentLimit != ByteSize(10<<30) || cfg.Astrodome.ProjectDiskCap != ByteSize(400<<30) {
 		t.Fatalf("unexpected astrodome configuration: %+v", cfg.Astrodome)
 	}
+	if !cfg.Terrain.CopernicusDEMGLO30Enabled || cfg.Terrain.CacheLimit != ByteSize(20<<30) {
+		t.Fatalf("unexpected terrain configuration: %+v", cfg.Terrain)
+	}
 	if cfg.Sync.MinFreeSpace != ByteSize(150<<30) {
 		t.Fatalf("unexpected minimum free space: %d", cfg.Sync.MinFreeSpace)
 	}
@@ -44,6 +47,30 @@ func TestLoadExample(t *testing.T) {
 	}
 	if !cfg.Platforms.Telegram.Enabled || cfg.Platforms.VK.Enabled {
 		t.Fatalf("unexpected platform configuration")
+	}
+}
+
+func TestCopernicusDEMTerrainEnvironmentAndLimits(t *testing.T) {
+	t.Setenv("ASTRO_COPERNICUS_DEM_GLO30_ENABLED", "false")
+	t.Setenv("ASTRO_COPERNICUS_DEM_CACHE_LIMIT", "12GiB")
+	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Terrain.CopernicusDEMGLO30Enabled || cfg.Terrain.CacheLimit != ByteSize(12<<30) {
+		t.Fatalf("terrain environment overrides not applied: %+v", cfg.Terrain)
+	}
+	for _, invalid := range []ByteSize{ByteSize(1<<30) - 1, ByteSize(100<<30) + 1} {
+		candidate := Defaults()
+		candidate.Terrain.CacheLimit = invalid
+		if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), "terrain.cache_limit") {
+			t.Fatalf("invalid terrain cache limit %d accepted: %v", invalid, err)
+		}
+	}
+	t.Setenv("ASTRO_COPERNICUS_DEM_GLO30_ENABLED", "not-a-boolean")
+	if _, err := Load(filepath.Join("..", "..", "config", "config.example.yaml")); err == nil ||
+		!strings.Contains(err.Error(), "ASTRO_COPERNICUS_DEM_GLO30_ENABLED") {
+		t.Fatalf("invalid terrain toggle error = %v", err)
 	}
 }
 

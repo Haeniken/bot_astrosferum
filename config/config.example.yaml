@@ -65,6 +65,14 @@ astrodome:
   min_free_space: 100GiB
   min_free_inodes: 10000
 
+# Static straight-geometric terrain skyline shared by Horizon and Astrodome.
+# It is calculated once per coordinate/source version and never once per hour.
+terrain:
+  copernicus_dem_glo30_enabled: true
+  # Shared upper bound for immutable source tiles. Static derived profiles are
+  # separately capped at 4096 entries; both are pruned by oldest access time.
+  cache_limit: 20GiB
+
 paths:
   data: /app/data
   temp: /app/data/tmp

@@ -32,6 +32,12 @@ func (dataset AstrodomeDataset) validate() error {
 	if dataset.SchemaVersion != AstrodomeDatasetSchemaVersion {
 		return fmt.Errorf("astrodome dataset schema version must be %d", AstrodomeDatasetSchemaVersion)
 	}
+	if err := dataset.TerrainSkyline.Validate(); err != nil {
+		return fmt.Errorf("astrodome terrain skyline: %w", err)
+	}
+	if dataset.TerrainSkyline.Source == "pending" {
+		return errors.New("astrodome terrain skyline preparation is incomplete")
+	}
 	if dataset.Provider != "icon-eu" || !validICONRunID(dataset.RunID) {
 		return errors.New("astrodome dataset provider or run ID is invalid")
 	}
@@ -139,7 +145,32 @@ func (dataset AstrodomeDataset) validate() error {
 			); err != nil {
 				return fmt.Errorf("astrodome frame %d node %d: %w", frameIndex, nodeIndex, err)
 			}
+			if err := validateAstrodomeTerrainSkylineNode(
+				frame.Nodes[nodeIndex], definitions[nodeIndex], dataset.TerrainSkyline,
+			); err != nil {
+				return fmt.Errorf("astrodome frame %d node %d terrain skyline: %w", frameIndex, nodeIndex, err)
+			}
 		}
+	}
+	return nil
+}
+
+func validateAstrodomeTerrainSkylineNode(
+	node AstrodomeDatasetNode,
+	definition forecast.AstrodomeGridNode,
+	profile forecast.TerrainSkyline,
+) error {
+	wantElevation, wantObstruction, err := astrodomeTerrainSkylineNodeInformation(profile, definition)
+	if err != nil {
+		return err
+	}
+	if !sameNullableFloat(node.TerrainSkylineElevationDegrees, wantElevation, 1e-12) ||
+		node.TerrainSkylineHasObstructionAtEvaluationDirection == nil ||
+		*node.TerrainSkylineHasObstructionAtEvaluationDirection != wantObstruction {
+		return errors.New("node terrain skyline information is inconsistent with the canonical GLO-30 profile")
+	}
+	if node.LimitingFactor == "terrain_skyline" {
+		return errors.New("informational GLO-30 skyline cannot replace the atmospheric node state")
 	}
 	return nil
 }
@@ -242,16 +273,19 @@ func validateUnavailableAstrodomeNode(node AstrodomeDatasetNode) error {
 		return errors.New("unavailable astrodome node has inconsistent factors or quality")
 	}
 	if node.State == AstrodomeDatasetStateTerrainBlocked {
-		if node.LimitingFactor != "coarse_terrain" {
-			return errors.New("terrain-blocked node needs the terrain limiting factor")
+		if node.TerrainObstructionSource != forecast.AstrodomeTerrainObstructionHHL || node.LimitingFactor != "coarse_terrain" {
+			return errors.New("terrain-blocked node needs the ICON HHL terrain limiting factor")
 		}
-	} else if node.LimitingFactor != "unavailable_data" {
+	} else if node.LimitingFactor != "unavailable_data" || node.TerrainObstructionSource != forecast.AstrodomeTerrainObstructionNone {
 		return errors.New("unavailable node needs the unavailable-data limiting factor")
 	}
 	return nil
 }
 
 func validateAvailableAstrodomeNode(node AstrodomeDatasetNode) error {
+	if node.TerrainObstructionSource != forecast.AstrodomeTerrainObstructionNone {
+		return errors.New("available astrodome node cannot claim a terrain obstruction")
+	}
 	if node.Overall == nil || node.SeeingArcsec500NM == nil || node.IntegratedCn2 == nil ||
 		node.WindWeightedCn2 == nil || node.NominalCloudTransmission == nil ||
 		node.ConservativeCloudTransmission == nil || node.EffectiveCloudTransmission == nil ||

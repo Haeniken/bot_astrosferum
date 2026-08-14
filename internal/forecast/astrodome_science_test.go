@@ -411,7 +411,7 @@ func TestAstrodomeScienceBreakpointCompactionUsesSharedRootCluster(t *testing.T)
 func TestAstrodomeScienceStrictContractAndGuardDerivedFloors(t *testing.T) {
 	t.Parallel()
 
-	if AstrodomeScienceVersion != "astrodome-science-kernel-v30-explicit-heuristics" ||
+	if AstrodomeScienceVersion != "astrodome-science-kernel-v33-glo30-informational-skyline" ||
 		AstrodomeSciencePathContractVersion != "astrodome-science-path-v23" {
 		t.Fatalf("strict science versions = %q, %q",
 			AstrodomeScienceVersion, AstrodomeSciencePathContractVersion)

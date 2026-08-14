@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	AstrodomeScienceVersion                = "astrodome-science-kernel-v30-explicit-heuristics"
+	AstrodomeScienceVersion                = "astrodome-science-kernel-v33-glo30-informational-skyline"
 	AstrodomeScienceGeometryStraight       = "straight-compat"
 	AstrodomeScienceGeometryRefractionFull = "refraction-full"
 	AstrodomeSciencePathContractVersion    = "astrodome-science-path-v23"
@@ -185,6 +185,13 @@ const (
 	AstrodomeScienceNodeAvailable      AstrodomeScienceNodeState = "available"
 	AstrodomeScienceNodeTerrainGrazing AstrodomeScienceNodeState = "terrain_grazing"
 	AstrodomeScienceNodeTerrainBlocked AstrodomeScienceNodeState = "terrain_blocked"
+)
+
+type AstrodomeTerrainObstructionSource string
+
+const (
+	AstrodomeTerrainObstructionNone AstrodomeTerrainObstructionSource = "none"
+	AstrodomeTerrainObstructionHHL  AstrodomeTerrainObstructionSource = "icon_hhl_model_surface"
 )
 
 // AstrodomeScienceThermalPrimitive is a vertically ordered reconstruction of
@@ -648,6 +655,7 @@ type AstrodomeScienceNumericalError struct {
 type AstrodomeScienceNode struct {
 	Available                     bool                              `json:"available"`
 	State                         AstrodomeScienceNodeState         `json:"state"`
+	TerrainObstructionSource      AstrodomeTerrainObstructionSource `json:"terrain_obstruction_source"`
 	UnavailableReason             string                            `json:"unavailable_reason,omitempty"`
 	ScienceVersion                string                            `json:"science_version"`
 	SourceIdentity                AstrodomePrimitiveVolumeIdentity  `json:"source_identity"`
@@ -815,18 +823,19 @@ func computeAstrodomeScienceNode(
 	calibration AstrodomeScienceCalibration,
 ) (AstrodomeScienceNode, error) {
 	node := AstrodomeScienceNode{
-		State:                   AstrodomeScienceNodeUnavailable,
-		ScienceVersion:          AstrodomeScienceVersion,
-		ValidAt:                 validAt.UTC(),
-		ElevationDegrees:        elevationDegrees,
-		AzimuthDegrees:          cloneAstrodomeFloatPointer(azimuthDegrees),
-		GeometryMode:            geometryMode,
-		RayGeometryVersion:      rayGeometryVersion,
-		RefractionVersion:       refractionVersion,
-		RefractivityVersion:     refractivityVersion,
-		DirectionAtModelTopECEF: directionAtModelTop,
-		Tau0State:               "unavailable",
-		Attribution:             astrodomeScienceAttribution(geometryMode),
+		State:                    AstrodomeScienceNodeUnavailable,
+		TerrainObstructionSource: AstrodomeTerrainObstructionNone,
+		ScienceVersion:           AstrodomeScienceVersion,
+		ValidAt:                  validAt.UTC(),
+		ElevationDegrees:         elevationDegrees,
+		AzimuthDegrees:           cloneAstrodomeFloatPointer(azimuthDegrees),
+		GeometryMode:             geometryMode,
+		RayGeometryVersion:       rayGeometryVersion,
+		RefractionVersion:        refractionVersion,
+		RefractivityVersion:      refractivityVersion,
+		DirectionAtModelTopECEF:  directionAtModelTop,
+		Tau0State:                "unavailable",
+		Attribution:              astrodomeScienceAttribution(geometryMode),
 	}
 	if reconstructor == nil {
 		return node, fmt.Errorf("astrodome primitive reconstructor is required")
@@ -864,6 +873,7 @@ func computeAstrodomeScienceNode(
 		node.UnavailableReason = err.Error()
 		if errors.Is(err, ErrAstrodomeScienceTerrainBlocked) {
 			node.State = AstrodomeScienceNodeTerrainBlocked
+			node.TerrainObstructionSource = AstrodomeTerrainObstructionHHL
 			node.Quality = astrodomeScienceQuality(path, site.ForecastLeadHours, false, false, path.ApproximationLengthM)
 			return node, nil
 		}

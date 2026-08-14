@@ -20,10 +20,10 @@ const (
 
 	// HorizonRenderVersion is separate from the seven ordinary forecast charts
 	// because the Horizon PNG has its own cache and presentation lifecycle.
-	HorizonRenderVersion = "horizon-render-v6-straight-ray-hourly-72h-decimal-scores"
+	HorizonRenderVersion = "horizon-render-v8-glo30-informational-skyline"
 
 	horizonFrameCount   = 72
-	horizonLeft         = 155
+	horizonLeft         = 285
 	horizonRight        = 25
 	horizonSolarBandTop = 264
 	horizonSolarBandEnd = 309
@@ -49,11 +49,12 @@ var (
 // f001..f072 ICON-EU run. Rendering deliberately has no model or network
 // access. There is no generated-at field, so the chart never invents one.
 type HorizonInput struct {
-	Location forecast.Location
-	Provider string
-	RunID    string
-	Grid     string
-	Frames   []forecast.HorizonFrame
+	Location       forecast.Location
+	Provider       string
+	RunID          string
+	Grid           string
+	Frames         []forecast.HorizonFrame
+	TerrainSkyline forecast.TerrainSkyline
 }
 
 type validatedHorizonFrame struct {
@@ -142,7 +143,15 @@ func Horizon(ctx context.Context, destination string, input HorizonInput, option
 	drawHorizonMatrixGrid(canvas, frames, zone, columnWidth)
 	for index, direction := range forecast.HorizonDirections() {
 		baseline := horizonMatrixTop + index*horizonRowHeight + 45
-		drawCentered(canvas, fonts.large, horizonLeft/2, baseline, horizonDirectionLabel(direction, options), horizonText)
+		label := horizonDirectionLabel(direction, options)
+		if sector, ok := input.TerrainSkyline.Sector(direction); ok {
+			marker := ""
+			if frames[0].Results[index].TerrainSectorHasObstructionAtEvaluationElevation {
+				marker = "*"
+			}
+			label = fmt.Sprintf("%s · %.1f°/%.1f°%s", label, sector.MeanElevationDegrees, sector.MaximumElevationDegrees, marker)
+		}
+		drawCentered(canvas, fonts.large, horizonLeft/2, baseline, label, horizonText)
 	}
 
 	drawHorizonLegends(canvas, fonts, options)
@@ -153,8 +162,11 @@ func Horizon(ctx context.Context, destination string, input HorizonInput, option
 			"The bottom strip shows input-data quality with forecast lead time; it is not an outcome probability."), horizonMuted)
 	drawText(canvas, fonts.small, 34, 1300,
 		localized(options,
-			"ICON HHL задаёт нижнюю границу модели, а не измеренный локальный горизонт.",
-			"ICON HHL is the model boundary, not a surveyed local horizon."), horizonMuted)
+			"Рельеф: средняя/максимальная высота сектора GLO-30; * — максимум достигает 10°; атмосферный индекс не штрафуется.",
+			"Terrain: mean/maximum GLO-30 sector skyline; * means the maximum reaches 10°; the atmospheric index is not penalized."), horizonMuted)
+	drawText(canvas, fonts.tiny, 34, 1332,
+		"produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
+		horizonMuted)
 	drawText(canvas, fonts.tiny, 34, HorizonHeight-20,
 		fmt.Sprintf("%.4f, %.4f · %s · %s", input.Location.Latitude, input.Location.Longitude, forecast.HorizonAlgorithmVersion, HorizonRenderVersion), horizonMuted)
 
@@ -179,6 +191,9 @@ func drawHorizonSolarBand(canvas *image.RGBA, sky astronomy.Series, frames []val
 }
 
 func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Time, error) {
+	if input.TerrainSkyline.Version == "" {
+		input.TerrainSkyline = forecast.DisabledTerrainSkyline()
+	}
 	if err := forecast.ValidateCoordinates(input.Location.Latitude, input.Location.Longitude); err != nil {
 		return nil, time.Time{}, fmt.Errorf("horizon location: %w", err)
 	}
@@ -187,6 +202,12 @@ func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Tim
 	}
 	if strings.TrimSpace(input.Provider) == "" || strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.Grid) == "" {
 		return nil, time.Time{}, fmt.Errorf("horizon provider, run and grid metadata are required")
+	}
+	if err := input.TerrainSkyline.Validate(); err != nil {
+		return nil, time.Time{}, fmt.Errorf("horizon terrain skyline: %w", err)
+	}
+	if !input.TerrainSkyline.MatchesLocation(input.Location) {
+		return nil, time.Time{}, fmt.Errorf("horizon terrain skyline belongs to another location")
 	}
 	runTime, err := time.Parse("2006010215", input.RunID)
 	if err != nil {
@@ -223,6 +244,21 @@ func validateHorizonInput(input HorizonInput) ([]validatedHorizonFrame, time.Tim
 			}
 			if !knownHorizonLimitingFactor(result.LimitingFactor) {
 				return nil, time.Time{}, fmt.Errorf("horizon result %q has unknown limiting factor %q", result.Direction, result.LimitingFactor)
+			}
+			sector, hasSector := input.TerrainSkyline.Sector(result.Direction)
+			if input.TerrainSkyline.Enabled() {
+				expectedObstruction := sector.MaximumElevationDegrees >= result.GeometricElevationDegrees
+				if !hasSector || !result.TerrainSkylineAvailable || result.TerrainAssessment != forecast.HorizonTerrainGLO30HHL ||
+					result.TerrainSectorMeanElevationDegrees != sector.MeanElevationDegrees ||
+					result.TerrainSectorMaximumElevationDegrees != sector.MaximumElevationDegrees ||
+					result.TerrainSectorHasObstructionAtEvaluationElevation != expectedObstruction {
+					return nil, time.Time{}, fmt.Errorf("horizon result %q is inconsistent with its GLO-30 sector", result.Direction)
+				}
+			} else if result.TerrainSkylineAvailable ||
+				(result.TerrainAssessment != "" && result.TerrainAssessment != forecast.HorizonTerrainModelHHL) ||
+				result.TerrainSectorMeanElevationDegrees != 0 || result.TerrainSectorMaximumElevationDegrees != 0 ||
+				result.TerrainSectorHasObstructionAtEvaluationElevation {
+				return nil, time.Time{}, fmt.Errorf("horizon result %q contains terrain data while GLO-30 is disabled", result.Direction)
 			}
 			if _, duplicate := byDirection[result.Direction]; duplicate {
 				return nil, time.Time{}, fmt.Errorf("horizon frame %d repeats direction %q", frameIndex, result.Direction)
@@ -460,14 +496,14 @@ func horizonDirectionLabel(direction forecast.HorizonDirection, options Options)
 func horizonLimiterLabel(factor forecast.HorizonLimitingFactor, options Options) string {
 	labelsRU := map[forecast.HorizonLimitingFactor]string{
 		forecast.HorizonFactorNone: "нет", forecast.HorizonFactorUnavailable: "нет данных",
-		forecast.HorizonFactorTerrain: "рельеф (грубо)", forecast.HorizonFactorCloud: "эффективная облачная преграда",
+		forecast.HorizonFactorTerrain: "перекрытие рельефом", forecast.HorizonFactorCloud: "эффективная облачная преграда",
 		forecast.HorizonFactorSeeing: "оптический сиинг", forecast.HorizonFactorCoherence: "время когерентности τ₀",
 		forecast.HorizonFactorFog: "эвристика тумана", forecast.HorizonFactorSurfaceWind: "приземный ветер",
 		forecast.HorizonFactorPrecipitation: "осадки",
 	}
 	labelsEN := map[forecast.HorizonLimitingFactor]string{
 		forecast.HorizonFactorNone: "none", forecast.HorizonFactorUnavailable: "unavailable data",
-		forecast.HorizonFactorTerrain: "coarse terrain", forecast.HorizonFactorCloud: "effective cloud obstruction",
+		forecast.HorizonFactorTerrain: "terrain obstruction", forecast.HorizonFactorCloud: "effective cloud obstruction",
 		forecast.HorizonFactorSeeing: "optical seeing", forecast.HorizonFactorCoherence: "coherence time τ₀",
 		forecast.HorizonFactorFog: "fog heuristic", forecast.HorizonFactorSurfaceWind: "surface wind",
 		forecast.HorizonFactorPrecipitation: "precipitation",

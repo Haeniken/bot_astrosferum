@@ -6,10 +6,10 @@ The optional ICON-EU Horizon extension is implemented as a configuration-gated
 application capability. The directional atmospheric Astrodome calculator and
 authenticated account API are deployed here; the public application is owned
 by the independent `site-astrosferum` repository. The current production writer is
-production-v2 with science-kernel v30/path v23; the immutable v28/v22 full run
+production-v2 with science-kernel v33/path v23; the immutable v28/v22 full run
 remains the preceding measured baseline. Repeated cold/warm resource and
 observational gates remain open before public rollout.
-External sources last checked: 2026-07-28; last revision: 2026-08-11
+External sources last checked: 2026-07-28; last revision: 2026-08-14
 Deployment target: operator-managed host
 Deployment directory: `/opt/docker/bot-astrosferum`
 
@@ -43,7 +43,7 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 | Area | MVP decision | Reason |
 |---|---|---|
 | Executables | `bot_astrosferum` and one directional worker in this module; the site is a separate private repository/image | One science implementation, one-way site dependency, explicit failure isolation |
-| Toolchain | Go `1.26.5`, pinned in `go.mod` and the Docker builder | Reproducible current build |
+| Toolchain | Go `1.26.6`, pinned in `go.mod` and the Docker builder | Reproducible current build |
 | Runtime | Main app plus the optional directional container | Ordinary forecasts remain independent of heavy directional-dome failures and of the external site |
 | Telegram | Bot API long polling | No ingress or webhook required |
 | VK | Bots Long Poll API | No public callback endpoint required |
@@ -1361,6 +1361,13 @@ VK message_event -----+                  |
   lifecycle, deduplication, cache policy, localization, and delivery;
 - `internal/model/iconeu` reads one pinned run/period and returns normalized
   provider-neutral snapshots; it contains no index formula or user flow;
+- `internal/model/copdem` downloads and validates public immutable GLO-30 COG
+  tiles and builds one cached 360-sample skyline per quantized coordinate;
+  cold preparation runs only inside an admitted directional-worker slot and
+  never once per forecast hour;
+- Horizon attaches the sector mean, maximum, and an explicit “reaches 10°”
+  flag to every hourly cell without changing its atmospheric index; Astrodome
+  separately retains the 360-sample skyline as a physical node-occlusion mask;
 - `internal/forecast` owns spherical geometry and all directional physical and
   engineering calculations; it imports no platform or model adapter;
 - `internal/render` turns an already calculated result into one deterministic
@@ -1463,6 +1470,7 @@ one optional calculation class.
 The Horizon cache is separate from the ordinary point/render caches. Its identity
 includes E5 coordinates, rounded observer HHL,
 provider and run ID, the fixed `window=f001-f072-hourly`, Horizon algorithm version, fixed geometry parameters,
+the complete static GLO-30 profile digest/source identity,
 the complete calibration shared with Overall (`ASTRO_OVERALL_*` and
 `ASTRO_CLOUD_*` inputs), renderer algorithm version, and language. A calibration
 change therefore produces a different key rather than reusing an old result.
@@ -1470,8 +1478,15 @@ The key material is hashed for the path, so raw coordinates do not appear in
 filenames or logs. A cache hit is valid only for the exact immutable run and
 calculation contract.
 
-The scientific marker is `horizon-spherical-straight-los-tke-hmnsp99-v9`; the application
-cache schema is `horizon-cache-v4-straight-ray`. Changing either a formula or the
+On a cold miss, the coordinate/version preparation key is used only for queue
+single-flight. The isolated worker resolves and validates the immutable COG
+manifest, then returns a refined scientific identity containing the profile
+and input-manifest SHA-256 digests. The coordinator verifies and atomically
+publishes under that final identity; the preparation key is never the final
+result-cache identity.
+
+The scientific marker is `horizon-spherical-straight-los-tke-hmnsp99-glo30-informational-v12`; the application
+cache schema is `horizon-cache-v7-glo30-informational-skyline`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 
 PNG and metadata are published by staging plus atomic rename. Retention is
@@ -1551,7 +1566,7 @@ and numerical tolerances are in
 Physical breakpoints are first-class path inputs, not incidental products of
 adaptive quadrature. The current identities are
 `astrodome-science-path-v23` and
-`astrodome-science-kernel-v30-explicit-heuristics`. The maximum physical- and horizontal-event root
+`astrodome-science-kernel-v33-glo30-informational-skyline`. The maximum physical- and horizontal-event root
 localisation radius is 0.2 mm. Bit-identical represented `pathM` coordinates form
 one compound geometric breakpoint even when their event identities differ;
 the sorted union of event identities is retained and every associated
@@ -1783,7 +1798,7 @@ The preceding v28/v22 measured profile is factual: on immutable ICON-EU run
 129 nodes for 72 native hours took 33 min 14 s end to end, with peak cgroup
 memory of 15,127,642,112 bytes. Of 9,288 node-hours, 9,284 were available and
 four sub-GL2 physical spans failed closed as `integration_nonconvergence`.
-It is a historical baseline, not a measurement of the current v30/v23 writer.
+It is a historical baseline, not a measurement of the current v33/v23 writer.
 Operational scheduling advertises 30 minutes as guidance, but production configures both the Astrodome
 job and bot-to-worker request deadlines as `0s`: the estimate does not terminate
 a healthy calculation. Explicit cancellation, coordinator shutdown, and
@@ -1821,10 +1836,12 @@ running-job count.
 Completed language-neutral datasets are gzip-compressed and atomically
 published. Their identity includes coordinates, run and manifest digest,
 72-hour window, grid/digest, primitive contract, geometry/refraction/science
-versions, ephemerides, and calibration. Calculation-request schema v4 also binds the
+versions, ephemerides, calibration, and the complete static GLO-30 terrain profile. Calculation-request schema v6 also binds the
 science-path version, apparent-direction contract, and SHA-256 of the complete
 configured science calibration; the same digest is retained in the dataset.
-The narrow `astrodome-dataset-writer-v5-explicit-heuristics` identity also participates in the
+Dataset schema 7 carries the profile-derived per-node skyline elevation and
+informational obstruction predicate without changing the atmospheric state.
+The narrow `astrodome-dataset-writer-v8-glo30-informational-skyline` identity also participates in the
 calculation cache key, so a writer correction regenerates the payload without
 claiming a different scientific formula or dataset schema.
 An earlier request or a bot/worker calibration mismatch fails closed rather
@@ -1857,7 +1874,7 @@ continues to see only owner-scoped 96-hour results. Anonymous access is
 read-only: it does not expose saved points, job admission, status, cancellation,
 or any owner-scoped result.
 The fixture, stored-visualization decoder, current writer, calculator, browser,
-and cache accept only v30/v23 with an explicitly supported pinned grid profile;
+and cache accept only v33/v23 with an explicitly supported pinned grid profile;
 the production web writer uses `production-v2`. An older fixture is not migrated
 or reinterpreted and must be replaced by a successful current calculation.
 The serialized high-quality value is `good`.
@@ -1931,7 +1948,7 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v4-straight-ray` JSON; the
+versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v7-glo30-informational-skyline` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
 weather and cloud retain one exact native hourly axis, Overall retains a
 narrower exact subset of that axis when pressure-profile support ends earlier, while
@@ -1951,7 +1968,7 @@ to densify dashed presentation paths; selected-hour values remain the stored
 server samples. The separate Johnson-V diagnostic retains
 NASA GEOS-CF AOD550/total-column-ozone provenance and is not reinterpreted as
 an Overall factor.
-`horizon-interactive-v4-straight-ray` pins the Horizon cache `artifact_key`, observer
+`horizon-interactive-v7-glo30-informational-skyline` pins the Horizon cache `artifact_key`, observer
 model-surface elevation, ICON-EU provider/run/grid, Horizon science version,
 and the canonical Overall-calibration SHA-256. Its first frame is model `f001`
 and the 72 serialized frames keep the exact hourly source axis. Continuous
@@ -2026,7 +2043,7 @@ Grid, physics, acquisition contracts, and the shared coordinator/worker
 boundary are implemented here. OIDC/session/CSRF handlers, the site API,
 WebGL2/Canvas client, and deployment templates are implemented in the private
 `site-astrosferum` repository, and the controlled site plus anonymous
-read-only reference fixture are deployed. Production-v2/v30/v23 is the current writer; its complete
+read-only reference fixture are deployed. Production-v2/v33/v23 is the current writer; its complete
 current-run release measurement is recorded only after an immutable full
 rerender. The preceding v28/v22 baseline measured 9,284 available of 9,288
 node-hours in 33 min 14 s. The first five-hour finer-grid

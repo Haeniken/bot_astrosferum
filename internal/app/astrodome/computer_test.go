@@ -116,3 +116,19 @@ func TestAstrodomeDatasetLocationsKeepPresentationTimeZoneOutOfModelLocation(t *
 		t.Fatalf("model surface elevation = %v", model.SurfaceElevationM)
 	}
 }
+
+func TestAstrodomeModelTerrainBlockedNodeUsesOnlyICONHHLProvenance(t *testing.T) {
+	t.Parallel()
+	validAt := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	azimuth := 270.0
+	node := astrodomeModelTerrainBlockedNode(
+		forecast.AstrodomeGridNode{ElevationDegrees: 10, AzimuthDegrees: &azimuth},
+		validAt,
+		forecast.AstrodomePrimitiveVolumeIdentity{Provider: "icon-eu", RunID: "2026081400"},
+		forecast.AstrodomeScienceSiteInputs{},
+	)
+	if node.Available || node.State != forecast.AstrodomeScienceNodeTerrainBlocked ||
+		node.TerrainObstructionSource != forecast.AstrodomeTerrainObstructionHHL {
+		t.Fatalf("model terrain node = %+v", node)
+	}
+}

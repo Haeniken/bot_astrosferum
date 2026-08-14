@@ -24,6 +24,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 	"bot_astrosferum/internal/lightpollution"
 	"bot_astrosferum/internal/model"
+	"bot_astrosferum/internal/model/copdem"
 	"bot_astrosferum/internal/model/eccodes"
 	"bot_astrosferum/internal/model/geoscf"
 	"bot_astrosferum/internal/model/iconeu"
@@ -167,6 +168,18 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, executionLease.Close()) }()
+	terrainStore, err := copdem.NewStore(copdem.Config{
+		Enabled:         cfg.Terrain.CopernicusDEMGLO30Enabled,
+		Root:            filepath.Join(cfg.Paths.Data, "terrain", "copernicus-dem-glo30-2021"),
+		CacheLimitBytes: int64(cfg.Terrain.CacheLimit), Logf: logf,
+	})
+	if err != nil {
+		return err
+	}
+	terrainSkyline, err := terrainStore.Resolve(ctx, location)
+	if err != nil {
+		return fmt.Errorf("prepare Copernicus DEM GLO-30 skyline: %w", err)
+	}
 	currentRun, err := horizonStore.CurrentRunID()
 	if err != nil || currentRun != cloud.RunID {
 		return errors.New("ICON-EU horizon run changed before calculation")
@@ -182,12 +195,15 @@ func runRenderHorizon(ctx context.Context, args []string, stdout, stderr io.Writ
 	if err != nil {
 		return err
 	}
+	if err := forecast.ApplyTerrainSkylineToHorizon(frames, terrainSkyline); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(*output), 0o750); err != nil {
 		return fmt.Errorf("create horizon output directory: %w", err)
 	}
 	if err := render.Horizon(ctx, *output, render.HorizonInput{
 		Location: location, Provider: "ICON-EU", RunID: cloud.RunID,
-		Grid: iconeu.Coverage().GridName, Frames: frames,
+		Grid: iconeu.Coverage().GridName, Frames: frames, TerrainSkyline: terrainSkyline,
 	}, render.Options{Language: *language}); err != nil {
 		return err
 	}
@@ -469,6 +485,15 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		cfg.Paths.Data, cfg.App.ECCodesWorkers, cfg.App.PointCacheEntries,
 		int64(cfg.App.PointCacheMemoryLimit), logf,
 	)
+	terrainStore, err := copdem.NewStore(copdem.Config{
+		Enabled:         cfg.Terrain.CopernicusDEMGLO30Enabled,
+		Root:            filepath.Join(cfg.Paths.Data, "terrain", "copernicus-dem-glo30-2021"),
+		CacheLimitBytes: int64(cfg.Terrain.CacheLimit),
+		Logf:            logf,
+	})
+	if err != nil {
+		return err
+	}
 	var forecastStore model.ForecastStore = iconEUStore
 	if cfg.Providers.ICONGlobal.Enabled {
 		globalStore := iconglobal.NewStore(cfg.Paths.Data, cfg.App.ECCodesWorkers, logf)
@@ -525,13 +550,14 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			EstimatedDuration:      cfg.HorizonAnalysis.EstimatedDuration.Duration,
 			MaxStaleAge:            cfg.Providers.ICONEU.MaxStaleAge.Duration,
 			RenderAlgorithmVersion: render.HorizonRenderVersion,
+			Terrain:                terrainStore,
 		}, horizonSource, func(renderContext context.Context, destination string, input bot.HorizonRenderInput, language string) error {
 			if err := renderContext.Err(); err != nil {
 				return err
 			}
 			if err := render.Horizon(renderContext, destination, render.HorizonInput{
 				Location: input.Location, Provider: input.Provider, RunID: input.RunID,
-				Grid: input.Grid, Frames: input.Frames,
+				Grid: input.Grid, Frames: input.Frames, TerrainSkyline: input.TerrainSkyline,
 			}, render.Options{Language: language}); err != nil {
 				return err
 			}
@@ -542,7 +568,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		}
 	}
 	var directionalService *directionalRuntime
-	directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, accountResults, logf)
+	directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, terrainStore, accountResults, logf)
 	if err != nil {
 		return err
 	}

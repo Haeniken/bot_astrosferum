@@ -20,13 +20,27 @@ import (
 )
 
 const (
-	CalculationRequestSchemaVersion = 4
+	CalculationRequestSchemaVersion = 6
 	maximumCalculationRequestBytes  = 64 << 10
 	maximumNativeForecastHour       = 84
 )
 
 type TimeZoneResolver interface {
 	Resolve(latitude, longitude float64) string
+}
+
+type TerrainSkylineSource interface {
+	CacheKey(forecast.Location) (string, bool, error)
+	Resolve(context.Context, forecast.Location) (forecast.TerrainSkyline, error)
+}
+
+type disabledTerrainSkylineSource struct{}
+
+func (disabledTerrainSkylineSource) Resolve(context.Context, forecast.Location) (forecast.TerrainSkyline, error) {
+	return forecast.DisabledTerrainSkyline(), nil
+}
+func (disabledTerrainSkylineSource) CacheKey(forecast.Location) (string, bool, error) {
+	return forecast.TerrainSkylineVersion + ":disabled", true, nil
 }
 
 type CurrentManifestLoader func(string) (iconeu.LoadedDomeManifest, error)
@@ -42,6 +56,7 @@ type Config struct {
 	Now         func() time.Time
 	LoadCurrent CurrentManifestLoader
 	Calibration forecast.AstrodomeScienceCalibration
+	Terrain     TerrainSkylineSource
 }
 
 // Backend performs only admission and immutable-source pinning. Acquisition
@@ -57,6 +72,7 @@ type Backend struct {
 	loadCurrent       CurrentManifestLoader
 	calibration       forecast.AstrodomeScienceCalibration
 	calibrationDigest string
+	terrain           TerrainSkylineSource
 }
 
 // CalculationRequest is the language-neutral, immutable worker input. It
@@ -82,6 +98,8 @@ type CalculationRequest struct {
 	ScienceCalibrationVersion string                                    `json:"science_calibration_version"`
 	ScienceCalibrationSHA256  string                                    `json:"science_calibration_sha256"`
 	CelestialEphemerisVersion string                                    `json:"celestial_ephemeris_version"`
+	TerrainSkyline            forecast.TerrainSkyline                   `json:"terrain_skyline"`
+	TerrainPreparationKey     string                                    `json:"terrain_preparation_key"`
 }
 
 type manifestSnapshot struct {
@@ -101,6 +119,9 @@ func NewBackend(config Config) (*Backend, error) {
 	}
 	if config.TimeZones == nil {
 		return nil, errors.New("astrodome time-zone resolver is required")
+	}
+	if config.Terrain == nil {
+		config.Terrain = disabledTerrainSkylineSource{}
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -125,7 +146,7 @@ func NewBackend(config Config) (*Backend, error) {
 	return &Backend{
 		publicEnabled: config.Enabled, dataRoot: config.DataRoot, maxStaleAge: config.MaxStaleAge,
 		admins: admins, timeZones: config.TimeZones, now: config.Now, loadCurrent: config.LoadCurrent,
-		calibration: config.Calibration, calibrationDigest: calibrationDigest,
+		calibration: config.Calibration, calibrationDigest: calibrationDigest, terrain: config.Terrain,
 	}, nil
 }
 
@@ -182,6 +203,17 @@ func (backend *Backend) Prepare(ctx context.Context, admission directional.Astro
 	if err != nil {
 		return directional.PreparedAstrodome{}, err
 	}
+	terrainPreparationKey, terrainReady, err := backend.terrain.CacheKey(location)
+	if err != nil {
+		return directional.PreparedAstrodome{}, fmt.Errorf("identify Astrodome Copernicus DEM GLO-30 skyline: %w", err)
+	}
+	terrainSkyline := forecast.PendingTerrainSkyline(location)
+	if terrainReady {
+		terrainSkyline, err = backend.terrain.Resolve(ctx, location)
+		if err != nil {
+			return directional.PreparedAstrodome{}, fmt.Errorf("read Astrodome Copernicus DEM GLO-30 skyline: %w", err)
+		}
+	}
 	request := CalculationRequest{
 		SchemaVersion: CalculationRequestSchemaVersion,
 		SourceIdentity: forecast.AstrodomePrimitiveVolumeIdentity{
@@ -206,20 +238,39 @@ func (backend *Backend) Prepare(ctx context.Context, admission directional.Astro
 		ScienceCalibrationVersion: backend.calibration.Version,
 		ScienceCalibrationSHA256:  backend.calibrationDigest,
 		CelestialEphemerisVersion: astronomy.CelestialEphemerisVersion,
+		TerrainSkyline:            terrainSkyline,
+		TerrainPreparationKey:     terrainPreparationKey,
 	}
-	payload, err := EncodeCalculationRequest(request)
+	payload, scienceCacheKey, err := calculationScienceCacheKey(request)
 	if err != nil {
 		return directional.PreparedAstrodome{}, err
 	}
-	digest := sha256.Sum256(payload)
+	_, requestFamilyKey, err := calculationRequestFamilyKey(request)
+	if err != nil {
+		return directional.PreparedAstrodome{}, err
+	}
 	return directional.PreparedAstrodome{
-		ScienceCacheKey: directional.AstrodomeDatasetWriterVersion + ":sha256:" + hex.EncodeToString(digest[:]),
+		RequestFamilyKey: requestFamilyKey, ScienceCacheKey: scienceCacheKey,
 		Source: directional.SourceIdentity{
 			Provider: "icon-eu", RunID: snapshot.manifest.RunID, GridProfile: string(snapshot.profile.ID),
 			GeometryDigest: geometryDigest,
 		},
 		Payload: json.RawMessage(payload),
 	}, nil
+}
+
+func calculationRequestFamilyKey(request CalculationRequest) ([]byte, string, error) {
+	request.TerrainSkyline = forecast.PendingTerrainSkyline(request.RequestedLocation)
+	return calculationScienceCacheKey(request)
+}
+
+func calculationScienceCacheKey(request CalculationRequest) ([]byte, string, error) {
+	payload, err := EncodeCalculationRequest(request)
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(payload)
+	return payload, directional.AstrodomeDatasetWriterVersion + ":sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 func (backend *Backend) authorize(ctx context.Context, telegramUserID int64) error {
@@ -388,6 +439,15 @@ func (request CalculationRequest) Validate() error {
 		request.CelestialEphemerisVersion != astronomy.CelestialEphemerisVersion ||
 		!validPrefixedSHA256(request.ScienceCalibrationSHA256) {
 		return errors.New("astrodome calculation request scientific versions are inconsistent")
+	}
+	if err := request.TerrainSkyline.Validate(); err != nil {
+		return fmt.Errorf("astrodome calculation request terrain skyline: %w", err)
+	}
+	if strings.TrimSpace(request.TerrainPreparationKey) == "" {
+		return errors.New("astrodome calculation request terrain preparation identity is missing")
+	}
+	if !request.TerrainSkyline.MatchesLocation(request.RequestedLocation) {
+		return errors.New("astrodome calculation request terrain skyline belongs to another location")
 	}
 	return nil
 }

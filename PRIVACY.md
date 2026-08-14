@@ -13,4 +13,13 @@ Tokens and database credentials are read from ignored runtime files or environme
 
 The public source repository contains no production database, secrets, user identifiers, or saved user locations. Only explicitly documented, non-secret example locations and the designated public Astrodome fixture may appear in repository or public-site assets.
 
+When Copernicus DEM GLO-30 terrain analysis is enabled, the server requests
+only the public 1°×1° source tiles intersecting the 61 km static skyline around
+the submitted coordinates. The AWS public-data endpoint receives ordinary
+network metadata and the requested tile identifiers; it does not receive a
+Telegram/VK user identifier or the exact coordinate. Source tiles are kept in
+a bounded local cache and derived coordinate-keyed profiles are stored below
+the ignored runtime `data/terrain/` directory. They are not written to the
+database or repository.
+
 Before reporting a bug, remove identifiers, tokens, database dumps, exact private locations, and full bot updates. Security-sensitive reports should follow [SECURITY.md](SECURITY.md).

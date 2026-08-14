@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const HorizonInteractiveSchema = "horizon-interactive-v4-straight-ray"
+const HorizonInteractiveSchema = "horizon-interactive-v7-glo30-informational-skyline"
 
 type HorizonInteractiveDirection struct {
 	Key            forecast.HorizonDirection `json:"key"`
@@ -42,6 +42,7 @@ type HorizonInteractiveDataset struct {
 	Directions                []HorizonInteractiveDirection    `json:"directions"`
 	Frames                    []HorizonInteractiveFrame        `json:"frames"`
 	SolarPhases               []ForecastInteractiveSolarPeriod `json:"solar_phases"`
+	TerrainSkyline            forecast.TerrainSkyline          `json:"terrain_skyline"`
 }
 
 func PrepareHorizonInteractiveDataset(
@@ -50,6 +51,9 @@ func PrepareHorizonInteractiveDataset(
 	observerSurfaceElevationM float64,
 	calibration forecast.OverallIndexCalibration,
 ) (HorizonInteractiveDataset, error) {
+	if input.TerrainSkyline.Version == "" {
+		input.TerrainSkyline = forecast.DisabledTerrainSkyline()
+	}
 	frames, _, err := validateHorizonInput(input)
 	if err != nil {
 		return HorizonInteractiveDataset{}, err
@@ -89,7 +93,7 @@ func PrepareHorizonInteractiveDataset(
 		Location:                 input.Location, Provider: input.Provider, RunID: input.RunID, Grid: input.Grid,
 		ObserverSurfaceElevationM: observerSurfaceElevationM,
 		ElevationDeg:              forecast.HorizonGeometricElevationDegrees, Directions: directions, Frames: resultFrames,
-		SolarPhases: periods,
+		SolarPhases: periods, TerrainSkyline: input.TerrainSkyline,
 	}
 	if _, err := json.Marshal(dataset); err != nil {
 		return HorizonInteractiveDataset{}, fmt.Errorf("marshal interactive Horizon contract: %w", err)

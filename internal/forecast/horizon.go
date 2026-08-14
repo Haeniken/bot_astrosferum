@@ -13,8 +13,8 @@ const (
 	// straight-line-of-sight product. It is intentionally distinct from the
 	// full-refraction Astrodome kernel and from the retired Horizon v7 cache
 	// identity, even though it retains the validated v7 equations.
-	HorizonAlgorithmVersion = "horizon-spherical-straight-los-tke-hmnsp99-v9"
-	HorizonGridProfile      = "horizon-8x10deg-straight-v3"
+	HorizonAlgorithmVersion = "horizon-spherical-straight-los-tke-hmnsp99-glo30-informational-v12"
+	HorizonGridProfile      = "horizon-8x10deg-straight-glo30-informational-v5"
 
 	HorizonEarthRadiusM              = 6371008.8
 	HorizonGeometricElevationDegrees = 10.0
@@ -346,38 +346,45 @@ const (
 
 type HorizonTerrainAssessment string
 
-const HorizonTerrainModelHHL HorizonTerrainAssessment = "icon_hhl_model_surface"
+const (
+	HorizonTerrainModelHHL HorizonTerrainAssessment = "icon_hhl_model_surface"
+	HorizonTerrainGLO30HHL HorizonTerrainAssessment = "copernicus_dem_glo30_2021_and_icon_hhl"
+)
 
 type HorizonResult struct {
-	ValidAt                     time.Time                `json:"valid_at"`
-	Direction                   HorizonDirection         `json:"direction"`
-	AzimuthDegrees              float64                  `json:"azimuth_degrees"`
-	GeometricElevationDegrees   float64                  `json:"geometric_elevation_degrees"`
-	Index                       float64                  `json:"index"`
-	SeeingArcsec                float64                  `json:"seeing_arcsec"`
-	CoherenceTimeMS             float64                  `json:"coherence_time_ms"`
-	CoherenceTimeUnbounded      bool                     `json:"coherence_time_unbounded"`
-	IntegratedCn2               float64                  `json:"integrated_cn2"`
-	WindWeightedCn2             float64                  `json:"wind_weighted_cn2"`
-	CloudOpticalDepth           float64                  `json:"cloud_optical_depth"`
-	CloudTransmission           float64                  `json:"cloud_transmission"` // fraction 0..1
-	CloudTransmissionPercent    float64                  `json:"cloud_transmission_percent"`
-	CloudUnresolvedGuard        bool                     `json:"cloud_unresolved_guard"`
-	FogHeuristic                int                      `json:"fog_heuristic"`
-	HighFogHeuristic            bool                     `json:"high_fog_heuristic"`
-	TerrainBlocked              bool                     `json:"terrain_blocked"`
-	TerrainAssessment           HorizonTerrainAssessment `json:"terrain_assessment"`
-	Available                   bool                     `json:"available"`
-	ResolvedPathFraction        float64                  `json:"resolved_path_fraction"`
-	PathCoverage                float64                  `json:"path_coverage"`
-	TurbulenceProfileCoverage   float64                  `json:"turbulence_profile_coverage"`
-	CloudProfileCoverage        float64                  `json:"cloud_profile_coverage"`
-	LeadTimeQualityHeuristic    float64                  `json:"lead_time_quality_heuristic"`
-	ResolvableDirectionFraction float64                  `json:"resolvable_direction_fraction"`
-	DataQualityHeuristic        float64                  `json:"data_quality_heuristic"`
-	DataQuality                 HorizonDataQuality       `json:"data_quality"`
-	LimitingFactor              HorizonLimitingFactor    `json:"limiting_factor"`
-	LimitingFactors             []HorizonLimitingFactor  `json:"limiting_factors"`
+	ValidAt                                          time.Time                `json:"valid_at"`
+	Direction                                        HorizonDirection         `json:"direction"`
+	AzimuthDegrees                                   float64                  `json:"azimuth_degrees"`
+	GeometricElevationDegrees                        float64                  `json:"geometric_elevation_degrees"`
+	Index                                            float64                  `json:"index"`
+	SeeingArcsec                                     float64                  `json:"seeing_arcsec"`
+	CoherenceTimeMS                                  float64                  `json:"coherence_time_ms"`
+	CoherenceTimeUnbounded                           bool                     `json:"coherence_time_unbounded"`
+	IntegratedCn2                                    float64                  `json:"integrated_cn2"`
+	WindWeightedCn2                                  float64                  `json:"wind_weighted_cn2"`
+	CloudOpticalDepth                                float64                  `json:"cloud_optical_depth"`
+	CloudTransmission                                float64                  `json:"cloud_transmission"` // fraction 0..1
+	CloudTransmissionPercent                         float64                  `json:"cloud_transmission_percent"`
+	CloudUnresolvedGuard                             bool                     `json:"cloud_unresolved_guard"`
+	FogHeuristic                                     int                      `json:"fog_heuristic"`
+	HighFogHeuristic                                 bool                     `json:"high_fog_heuristic"`
+	TerrainBlocked                                   bool                     `json:"terrain_blocked"`
+	TerrainAssessment                                HorizonTerrainAssessment `json:"terrain_assessment"`
+	TerrainSkylineAvailable                          bool                     `json:"terrain_skyline_available"`
+	TerrainSectorMeanElevationDegrees                float64                  `json:"terrain_sector_mean_elevation_degrees"`
+	TerrainSectorMaximumElevationDegrees             float64                  `json:"terrain_sector_maximum_elevation_degrees"`
+	TerrainSectorHasObstructionAtEvaluationElevation bool                     `json:"terrain_sector_has_obstruction_at_evaluation_elevation"`
+	Available                                        bool                     `json:"available"`
+	ResolvedPathFraction                             float64                  `json:"resolved_path_fraction"`
+	PathCoverage                                     float64                  `json:"path_coverage"`
+	TurbulenceProfileCoverage                        float64                  `json:"turbulence_profile_coverage"`
+	CloudProfileCoverage                             float64                  `json:"cloud_profile_coverage"`
+	LeadTimeQualityHeuristic                         float64                  `json:"lead_time_quality_heuristic"`
+	ResolvableDirectionFraction                      float64                  `json:"resolvable_direction_fraction"`
+	DataQualityHeuristic                             float64                  `json:"data_quality_heuristic"`
+	DataQuality                                      HorizonDataQuality       `json:"data_quality"`
+	LimitingFactor                                   HorizonLimitingFactor    `json:"limiting_factor"`
+	LimitingFactors                                  []HorizonLimitingFactor  `json:"limiting_factors"`
 }
 
 // HorizonFrame is the eight-direction result for one forecast hour. A normal
@@ -494,7 +501,9 @@ func computeHorizonForValidatedPlan(ctx context.Context, snapshot HorizonSnapsho
 		// resolved. PathCoverage is the smaller of the turbulence/cloud coverage
 		// scores, so sparse-level interpolation and bounded model-top extension
 		// are visible rather than silently called complete. The total is capped at
-		// 0.85 because HHL supplies only coarse terrain blocking and no DEM.
+		// 0.85 because this remains a deterministic model-input heuristic rather
+		// than an observed skill probability. The independent static DEM profile does
+		// not make ICON atmospheric inputs more certain.
 		dataQualityHeuristic := math.Min(horizonMaximumDataQualityHeuristic,
 			0.50*computation.result.PathCoverage+0.30*clamp(leadQuality, 0, 1)+0.20*resolvableFraction)
 		if !computation.result.Available {
@@ -539,6 +548,39 @@ func ComputeHorizonSeries(ctx context.Context, snapshots []HorizonSnapshot, plan
 		frames[index] = HorizonFrame{ValidAt: snapshot.ValidAt, Results: results}
 	}
 	return frames, nil
+}
+
+// ApplyTerrainSkylineToHorizon attaches one immutable GLO-30 skyline to an
+// already computed hourly series. The profile itself and its sector
+// aggregation are calculated once; this pass only copies the static values.
+// The GLO-30 skyline is intentionally informational in Horizon: atmospheric
+// conditions are still reported for the fixed geometric 10-degree ray. The
+// separate boolean tells the presentation whether at least one azimuth in the
+// 45-degree sector reaches that elevation. Model-HHL intersections inside the
+// atmospheric path retain their independent fail-closed semantics.
+func ApplyTerrainSkylineToHorizon(frames []HorizonFrame, profile TerrainSkyline) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	if !profile.Enabled() {
+		return nil
+	}
+	for frameIndex := range frames {
+		for resultIndex := range frames[frameIndex].Results {
+			result := &frames[frameIndex].Results[resultIndex]
+			sector, ok := profile.Sector(result.Direction)
+			if !ok {
+				return fmt.Errorf("terrain skyline has no sector for %s", result.Direction)
+			}
+			result.TerrainSkylineAvailable = true
+			result.TerrainSectorMeanElevationDegrees = sector.MeanElevationDegrees
+			result.TerrainSectorMaximumElevationDegrees = sector.MaximumElevationDegrees
+			result.TerrainSectorHasObstructionAtEvaluationElevation =
+				sector.MaximumElevationDegrees >= result.GeometricElevationDegrees
+			result.TerrainAssessment = HorizonTerrainGLO30HHL
+		}
+	}
+	return nil
 }
 
 func horizonSnapshotDirections(snapshot HorizonSnapshot, plan HorizonPlan) (map[HorizonDirection]HorizonDirectionSnapshot, error) {

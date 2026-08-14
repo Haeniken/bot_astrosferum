@@ -3,6 +3,7 @@ package directional
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -66,6 +67,147 @@ func TestAstrodomeDatasetAcceptsShortNativeHourlyWindow(t *testing.T) {
 	}
 	if len(dataset.ValidTimes) != 70 || len(dataset.Frames) != 70 || dataset.Grid.FrameCount != 70 {
 		t.Fatalf("short dataset cardinality = %d/%d/%d", len(dataset.ValidTimes), len(dataset.Frames), dataset.Grid.FrameCount)
+	}
+}
+
+func TestAstrodomeDatasetKeepsAtmosphericNodeBelowEmbeddedGLO30Skyline(t *testing.T) {
+	t.Parallel()
+	input := completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1)
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees: float64(index), ElevationDegrees: 20, ObstacleSurfaceDistanceM: 1000,
+		}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(59.9, 30.2, 17, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.TerrainSkyline = profile
+	dataset, err := BuildAstrodomeDataset(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := dataset.Frames[0].Nodes[0]
+	if node.State != AstrodomeDatasetStateValid || node.Overall == nil ||
+		node.TerrainObstructionSource != forecast.AstrodomeTerrainObstructionNone ||
+		node.TerrainSkylineElevationDegrees == nil || *node.TerrainSkylineElevationDegrees != 20 ||
+		node.TerrainSkylineHasObstructionAtEvaluationDirection == nil ||
+		!*node.TerrainSkylineHasObstructionAtEvaluationDirection || node.LimitingFactor == "terrain_skyline" {
+		t.Fatalf("GLO-30 skyline replaced the atmospheric result: %+v", node)
+	}
+}
+
+func TestAstrodomeTerrainSkylineInformationBoundaryAndCyclicInterpolation(t *testing.T) {
+	t.Parallel()
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees: float64(index), ElevationDegrees: 1, ObstacleSurfaceDistanceM: 1000,
+		}
+	}
+	samples[359].ElevationDegrees = 12
+	samples[0].ElevationDegrees = 14
+	profile, err := forecast.NewSyntheticTerrainSkyline(59.9, 30.2, 17, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	azimuth := 359.5
+	for _, test := range []struct {
+		elevation float64
+		blocked   bool
+	}{{12, true}, {13, true}, {14, false}} {
+		skyline, blocked, err := astrodomeTerrainSkylineNodeInformation(profile, forecast.AstrodomeGridNode{
+			ElevationDegrees: test.elevation, AzimuthDegrees: &azimuth,
+		})
+		if err != nil || skyline == nil || *skyline != 13 || blocked != test.blocked {
+			t.Fatalf("elevation %.1f skyline=%v blocked=%v err=%v", test.elevation, skyline, blocked, err)
+		}
+	}
+	zenith, blocked, err := astrodomeTerrainSkylineNodeInformation(profile, forecast.AstrodomeGridNode{ElevationDegrees: 90})
+	if err != nil || zenith != nil || blocked {
+		t.Fatalf("zenith terrain information = %v, %v, %v", zenith, blocked, err)
+	}
+}
+
+func TestAstrodomeDatasetRejectsMutatedTerrainSkylineNodeInformation(t *testing.T) {
+	t.Parallel()
+	input := completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1)
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees: float64(index), ElevationDegrees: 20, ObstacleSurfaceDistanceM: 1000,
+		}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(59.9, 30.2, 17, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.TerrainSkyline = profile
+	dataset, err := BuildAstrodomeDataset(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*AstrodomeDatasetNode){
+		"missing obstruction flag": func(node *AstrodomeDatasetNode) {
+			node.TerrainSkylineHasObstructionAtEvaluationDirection = nil
+		},
+		"wrong obstruction flag": func(node *AstrodomeDatasetNode) {
+			value := false
+			node.TerrainSkylineHasObstructionAtEvaluationDirection = &value
+		},
+		"wrong skyline elevation": func(node *AstrodomeDatasetNode) {
+			value := 19.0
+			node.TerrainSkylineElevationDegrees = &value
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := dataset
+			candidate.Frames = append([]AstrodomeDatasetFrame(nil), dataset.Frames...)
+			candidate.Frames[0].Nodes = append([]AstrodomeDatasetNode(nil), dataset.Frames[0].Nodes...)
+			mutate(&candidate.Frames[0].Nodes[0])
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("mutated terrain skyline information was accepted")
+			}
+		})
+	}
+}
+
+func TestAstrodomeDatasetKeepsTerrainSkylineInformationOnUnavailableAndHHLNodes(t *testing.T) {
+	t.Parallel()
+	input := completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1)
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees: float64(index), ElevationDegrees: 20, ObstacleSurfaceDistanceM: 1000,
+		}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(59.9, 30.2, 17, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.TerrainSkyline = profile
+	unavailable := &input.Frames[0].Nodes[0]
+	unavailable.Available = false
+	unavailable.State = forecast.AstrodomeScienceNodeUnavailable
+	unavailable.Quality.Category = forecast.AstrodomeScienceQualityUnavailable
+	hhl := &input.Frames[0].Nodes[1]
+	hhl.Available = false
+	hhl.State = forecast.AstrodomeScienceNodeTerrainBlocked
+	hhl.TerrainObstructionSource = forecast.AstrodomeTerrainObstructionHHL
+	hhl.Quality.Category = forecast.AstrodomeScienceQualityUnavailable
+	dataset, err := BuildAstrodomeDataset(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, wantState := range []string{AstrodomeDatasetStateUnavailable, AstrodomeDatasetStateTerrainBlocked} {
+		node := dataset.Frames[0].Nodes[index]
+		if node.State != wantState || node.TerrainSkylineElevationDegrees == nil ||
+			*node.TerrainSkylineElevationDegrees != 20 ||
+			node.TerrainSkylineHasObstructionAtEvaluationDirection == nil ||
+			!*node.TerrainSkylineHasObstructionAtEvaluationDirection {
+			t.Fatalf("node %d did not retain independent terrain information: %+v", index, node)
+		}
 	}
 }
 
@@ -288,12 +430,23 @@ func TestAstrodomeDatasetRejectsOrderPartialUnknownAndFabricatedDiagnostics(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	withUnknown := bytes.Replace(encoded, []byte(`{"schema_version":4`), []byte(`{"unknown":true,"schema_version":4`), 1)
+	withUnknown := bytes.Replace(encoded,
+		[]byte(fmt.Sprintf(`{"schema_version":%d`, AstrodomeDatasetSchemaVersion)),
+		[]byte(fmt.Sprintf(`{"unknown":true,"schema_version":%d`, AstrodomeDatasetSchemaVersion)), 1)
 	if bytes.Equal(withUnknown, encoded) {
 		t.Fatal("unknown-field test did not mutate the current schema")
 	}
 	if _, err := DecodeAstrodomeDataset(bytes.NewReader(withUnknown)); err == nil {
 		t.Fatal("unknown JSON field was accepted")
+	}
+	previousSchema := bytes.Replace(encoded,
+		[]byte(fmt.Sprintf(`"schema_version":%d`, AstrodomeDatasetSchemaVersion)),
+		[]byte(fmt.Sprintf(`"schema_version":%d`, AstrodomeDatasetSchemaVersion-1)), 1)
+	if bytes.Equal(previousSchema, encoded) {
+		t.Fatal("previous-schema test did not mutate the current dataset")
+	}
+	if _, err := DecodeArchivedAstrodomeDataset(bytes.NewReader(previousSchema)); err == nil {
+		t.Fatal("saved-visualization decoder accepted the previous dataset schema")
 	}
 
 	node := &dataset.Frames[0].Nodes[0]

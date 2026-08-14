@@ -223,7 +223,8 @@ func (handler *HTTPHandler) submitAstrodome(w http.ResponseWriter, request *http
 	}
 	ticket, err := handler.coordinator.Submit(request.Context(), Request{
 		Kind: KindAstrodome, OwnerID: ownerID, IdempotencyKey: admission.IdempotencyKey,
-		ScienceCacheKey: prepared.ScienceCacheKey, Source: prepared.Source, Payload: prepared.Payload,
+		RequestFamilyKey: prepared.RequestFamilyKey, ScienceCacheKey: prepared.ScienceCacheKey,
+		Source: prepared.Source, Payload: prepared.Payload,
 	})
 	if err != nil {
 		writeDirectionalError(w, err)
@@ -392,8 +393,12 @@ func writeDirectionalError(w http.ResponseWriter, err error) {
 }
 
 func validatePreparedAstrodome(prepared PreparedAstrodome) (PreparedAstrodome, error) {
+	if prepared.RequestFamilyKey == "" {
+		prepared.RequestFamilyKey = prepared.ScienceCacheKey
+	}
 	_, gridProfileErr := forecast.NewAstrodomeGridProfile(forecast.AstrodomeGridProfileID(prepared.Source.GridProfile))
-	if prepared.ScienceCacheKey == "" || len(prepared.ScienceCacheKey) > 4096 ||
+	if prepared.RequestFamilyKey == "" || len(prepared.RequestFamilyKey) > 4096 ||
+		prepared.ScienceCacheKey == "" || len(prepared.ScienceCacheKey) > 4096 ||
 		prepared.Source.Provider != "icon-eu" ||
 		!validICONRunID(prepared.Source.RunID) ||
 		gridProfileErr != nil ||
