@@ -445,8 +445,9 @@ The immutable source identity contains provider, product, grid, run base time,
 run ID, manifest digest, and `astrodome-icon-primitives-v2`. Any identity
 change during reconstruction invalidates the node.
 
-The separate calculation-request schema is v4. It carries the fixed science
-and path versions, the apparent-direction contract, and
+The separate calculation-request schema is v6. It carries the fixed science
+and path versions, the apparent-direction contract, the complete validated
+static terrain skyline and its digest, and
 `science_calibration_sha256`: SHA-256 of the canonical JSON serialization of
 the complete validated `AstrodomeScienceCalibration`. The same configured
 calibration is injected into the bot and isolated worker and the digest is

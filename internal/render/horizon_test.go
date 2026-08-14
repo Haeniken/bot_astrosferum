@@ -125,6 +125,38 @@ func TestValidateHorizonInputCanonicalizesEveryFrame(t *testing.T) {
 	}
 }
 
+func TestValidateHorizonInputKeepsGLO30SkylineInformational(t *testing.T) {
+	input := horizonRenderFixture()
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees: float64(index), ElevationDegrees: 12, ObstacleSurfaceDistanceM: 1000,
+		}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(
+		input.Location.Latitude, input.Location.Longitude, 10, samples,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := forecast.ApplyTerrainSkylineToHorizon(input.Frames, profile); err != nil {
+		t.Fatal(err)
+	}
+	input.TerrainSkyline = profile
+	wantIndex := input.Frames[0].Results[0].Index
+	if _, _, err := validateHorizonInput(input); err != nil {
+		t.Fatalf("informational GLO-30 obstruction was rejected: %v", err)
+	}
+	result := input.Frames[0].Results[0]
+	if !result.Available || result.TerrainBlocked || !result.TerrainSectorHasObstructionAtEvaluationElevation || result.Index != wantIndex {
+		t.Fatalf("GLO-30 skyline changed the atmospheric cell: %+v", result)
+	}
+	input.Frames[0].Results[0].TerrainSectorHasObstructionAtEvaluationElevation = false
+	if _, _, err := validateHorizonInput(input); err == nil || !strings.Contains(err.Error(), "inconsistent with its GLO-30 sector") {
+		t.Fatalf("inconsistent informational obstruction flag error = %v", err)
+	}
+}
+
 func TestValidateHorizonInputRequiresF001ThroughF072(t *testing.T) {
 	tests := []struct {
 		name   string

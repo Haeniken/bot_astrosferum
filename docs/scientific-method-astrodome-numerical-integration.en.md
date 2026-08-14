@@ -637,9 +637,11 @@ Implemented identities:
 - refractivity: `ciddor-1996-phase-index-v1`;
 - ODE: `dormand-prince-5-4-event-v3`;
 - science path: `astrodome-science-path-v23`;
-- science kernel: `astrodome-science-kernel-v30-explicit-heuristics`.
+- science kernel: `astrodome-science-kernel-v33-glo30-informational-skyline`.
 
-Kernel v30 and path contract v23 use one strict boundary-ownership contract
+Kernel v33 retains the v30 atmospheric integration core and the v32 static
+GLO-30 profile, but makes that profile an independent informational skyline:
+it no longer replaces a completed atmospheric node state. Kernel v30 and path contract v23 use one strict boundary-ownership contract
 for physical and horizontal events: a maximum 0.2-mm root-localisation radius,
 0.4-mm proximity detection with fail-closed handling for bit-distinct roots, a
 0.5-mm side guard, and a 0.2-mm proof scale. The separate 1-mm
@@ -676,7 +678,7 @@ certify raw WMO decision breakpoints before quadrature; every partition
 mismatch in the kernel remains fail-closed.
 
 The bot calculator and cache, plus the independent site's dataset decoder and
-browser, accept only the current v30/v23 contract with an explicitly supported
+browser, accept only the current v33/v23 contract with an explicitly supported
 pinned grid profile; the production writer uses `production-v2`. Older datasets
 are not migrated or reinterpreted; a new successful calculation must replace
 an older fixture.
@@ -697,7 +699,7 @@ described as a 9,288/9,288 pass. Its report and executed test binary have
 SHA-256 values `00977e620d60029e3e3f23f4aeb31352d614c9e75af6fa9cb8050f1830afdb31`
 and `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`,
 respectively. This is a v28/v22 baseline and not a measurement of the current
-v30/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
+v33/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
 measurement, and observational validation remain separate gates.
 
 This numerical revision does not alter the product contracts: a dataset has

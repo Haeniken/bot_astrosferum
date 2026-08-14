@@ -48,12 +48,16 @@ const (
 // Request is platform-neutral. Payload is interpreted only by the registered
 // runner; the coordinator neither serializes it nor knows coordinates/models.
 type Request struct {
-	Kind            Kind
-	OwnerID         string
-	IdempotencyKey  string
-	ScienceCacheKey string
-	Source          SourceIdentity
-	Payload         json.RawMessage
+	Kind           Kind
+	OwnerID        string
+	IdempotencyKey string
+	// RequestFamilyKey remains stable when a runner refines a cold preparation
+	// identity into the exact immutable publication identity. When omitted it
+	// defaults to ScienceCacheKey for runners without two-phase preparation.
+	RequestFamilyKey string
+	ScienceCacheKey  string
+	Source           SourceIdentity
+	Payload          json.RawMessage
 }
 
 type SourceIdentity struct {
@@ -77,12 +81,17 @@ type Execution struct {
 // RunnerResult describes a completed temporary dataset. The coordinator owns
 // validation, hashing and immutable atomic publication.
 type RunnerResult struct {
-	DatasetPath     string
-	Provider        string
-	RunID           string
-	GridProfile     string
-	GeometryDigest  string
-	ContentEncoding string
+	DatasetPath string
+	// FinalScienceCacheKey binds publication to the exact scientific inputs
+	// actually used by the runner. An empty value explicitly means that the
+	// pinned Execution.ScienceCacheKey remained final; a worker that resolves a
+	// preparation identity must return the refined non-empty key.
+	FinalScienceCacheKey string
+	Provider             string
+	RunID                string
+	GridProfile          string
+	GeometryDigest       string
+	ContentEncoding      string
 }
 
 type Runner interface {
@@ -213,9 +222,10 @@ type AstrodomeAdmission struct {
 }
 
 type PreparedAstrodome struct {
-	ScienceCacheKey string
-	Source          SourceIdentity
-	Payload         json.RawMessage
+	RequestFamilyKey string
+	ScienceCacheKey  string
+	Source           SourceIdentity
+	Payload          json.RawMessage
 }
 
 type AstrodomeAvailability struct {

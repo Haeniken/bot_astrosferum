@@ -122,6 +122,8 @@ func TestHorizonDirectionalRejectsWorkerScienceIdentityDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.TerrainSkyline = forecast.DisabledTerrainSkyline()
+	request.TerrainPreparationKey = forecast.TerrainSkylineVersion + ":disabled"
 	payload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)

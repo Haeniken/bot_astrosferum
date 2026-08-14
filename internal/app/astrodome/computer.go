@@ -26,6 +26,7 @@ type ComputerConfig struct {
 	NodeWorkers        int
 	ResidentLimitBytes uint64
 	ScienceCalibration forecast.AstrodomeScienceCalibration
+	Terrain            TerrainSkylineSource
 	Now                func() time.Time
 	Logf               func(string, ...any)
 }
@@ -38,6 +39,7 @@ type Computer struct {
 	residentLimitBytes uint64
 	scienceCalibration forecast.AstrodomeScienceCalibration
 	calibrationDigest  string
+	terrain            TerrainSkylineSource
 	now                func() time.Time
 	logf               func(string, ...any)
 }
@@ -70,13 +72,16 @@ func NewComputer(config ComputerConfig) (*Computer, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.Terrain == nil {
+		config.Terrain = disabledTerrainSkylineSource{}
+	}
 	if config.Logf == nil {
 		config.Logf = func(string, ...any) {}
 	}
 	return &Computer{
 		dataRoot: config.DataRoot, tempRoot: config.TempRoot, ecCodesWorkers: config.ECCodesWorkers,
 		nodeWorkers: config.NodeWorkers, residentLimitBytes: config.ResidentLimitBytes, now: config.Now,
-		scienceCalibration: config.ScienceCalibration, calibrationDigest: calibrationDigest, logf: config.Logf,
+		scienceCalibration: config.ScienceCalibration, calibrationDigest: calibrationDigest, terrain: config.Terrain, logf: config.Logf,
 	}, nil
 }
 
@@ -90,6 +95,30 @@ func (computer *Computer) ComputeAstrodomeDataset(
 	}
 	calculationStartedAt := time.Now()
 	request, err := DecodeCalculationRequest(bytes.NewReader(payload))
+	if err != nil {
+		return result, directional.CodedError{Code: "invalid_request", Err: err}
+	}
+	_, admissionScienceCacheKey, err := calculationScienceCacheKey(request)
+	if err != nil {
+		return result, directional.CodedError{Code: "invalid_request", Err: err}
+	}
+	if request.TerrainSkyline.Source == "pending" {
+		key, _, keyErr := computer.terrain.CacheKey(request.RequestedLocation)
+		if keyErr != nil || key != request.TerrainPreparationKey {
+			return result, directional.CodedError{Code: "terrain_identity_mismatch", Err: errors.New("terrain preparation identity differs from worker configuration")}
+		}
+		resolved, resolveErr := computer.terrain.Resolve(ctx, request.RequestedLocation)
+		if resolveErr != nil {
+			return result, directional.CodedError{Code: "terrain_unavailable", Err: resolveErr}
+		}
+		request.TerrainSkyline = resolved
+	} else {
+		key, _, keyErr := computer.terrain.CacheKey(request.RequestedLocation)
+		if keyErr != nil || key != request.TerrainPreparationKey {
+			return result, directional.CodedError{Code: "terrain_identity_mismatch", Err: errors.New("terrain profile identity differs from worker configuration")}
+		}
+	}
+	_, finalScienceCacheKey, err := calculationScienceCacheKey(request)
 	if err != nil {
 		return result, directional.CodedError{Code: "invalid_request", Err: err}
 	}
@@ -216,7 +245,9 @@ func (computer *Computer) ComputeAstrodomeDataset(
 		request.SourceIdentity.RunID, len(frames), len(nodeDefinitions), time.Since(calculationStartedAt).Round(time.Millisecond))
 	requestedLocation, modelLocation := astrodomeDatasetLocations(request.RequestedLocation, height)
 	return directional.AstrodomeDatasetInput{
-		SourceIdentity: request.SourceIdentity, GeneratedAt: generatedAt,
+		AdmissionScienceCacheKey: admissionScienceCacheKey,
+		FinalScienceCacheKey:     finalScienceCacheKey,
+		SourceIdentity:           request.SourceIdentity, GeneratedAt: generatedAt,
 		SourceColumnPlanDigest: preloadReport.SourceColumnPlanDigest,
 		RequestedLocation:      requestedLocation,
 		ModelLocation:          modelLocation,
@@ -225,6 +256,7 @@ func (computer *Computer) ComputeAstrodomeDataset(
 		RefractivityVersion: forecast.AstrodomeCiddorVersion,
 		CalibrationVersion:  scienceCalibration.Version, CalibrationSHA256: computer.calibrationDigest,
 		CelestialTracks: celestialTracks,
+		TerrainSkyline:  request.TerrainSkyline,
 		Frames:          frames,
 	}, nil
 }
@@ -278,7 +310,7 @@ func (computer *Computer) computeFrameNodes(
 					var traced forecast.AstrodomeRefractedRay
 					traced, err = forecast.TraceAstrodomeRefractedRay(workerContext, field, initial, refractionCalibration)
 					if errors.Is(err, forecast.ErrAstrodomeRefractionTerrain) {
-						destination[item.index] = astrodomeTerrainBlockedNode(definition, validAt,
+						destination[item.index] = astrodomeModelTerrainBlockedNode(definition, validAt,
 							identity, site)
 						err = nil
 					} else if err == nil {
@@ -332,7 +364,7 @@ enqueue:
 	return nil
 }
 
-func astrodomeTerrainBlockedNode(
+func astrodomeModelTerrainBlockedNode(
 	definition forecast.AstrodomeGridNode,
 	validAt time.Time,
 	identity forecast.AstrodomePrimitiveVolumeIdentity,
@@ -340,8 +372,9 @@ func astrodomeTerrainBlockedNode(
 ) forecast.AstrodomeScienceNode {
 	return forecast.AstrodomeScienceNode{
 		Available: false, State: forecast.AstrodomeScienceNodeTerrainBlocked,
-		UnavailableReason: forecast.ErrAstrodomeScienceTerrainBlocked.Error(),
-		ScienceVersion:    forecast.AstrodomeScienceVersion, SourceIdentity: identity, ValidAt: validAt.UTC(),
+		TerrainObstructionSource: forecast.AstrodomeTerrainObstructionHHL,
+		UnavailableReason:        forecast.ErrAstrodomeScienceTerrainBlocked.Error(),
+		ScienceVersion:           forecast.AstrodomeScienceVersion, SourceIdentity: identity, ValidAt: validAt.UTC(),
 		ElevationDegrees: definition.ElevationDegrees, AzimuthDegrees: definition.AzimuthDegrees,
 		GeometryMode:        forecast.AstrodomeScienceGeometryRefractionFull,
 		RayGeometryVersion:  forecast.AstrodomeRefractionGeometryVersion,
@@ -365,8 +398,9 @@ func astrodomeUnavailableNode(
 	}
 	return forecast.AstrodomeScienceNode{
 		Available: false, State: forecast.AstrodomeScienceNodeUnavailable,
-		UnavailableReason: reason,
-		ScienceVersion:    forecast.AstrodomeScienceVersion, SourceIdentity: identity, ValidAt: validAt.UTC(),
+		TerrainObstructionSource: forecast.AstrodomeTerrainObstructionNone,
+		UnavailableReason:        reason,
+		ScienceVersion:           forecast.AstrodomeScienceVersion, SourceIdentity: identity, ValidAt: validAt.UTC(),
 		ElevationDegrees: definition.ElevationDegrees, AzimuthDegrees: definition.AzimuthDegrees,
 		GeometryMode:        forecast.AstrodomeScienceGeometryRefractionFull,
 		RayGeometryVersion:  forecast.AstrodomeRefractionGeometryVersion,

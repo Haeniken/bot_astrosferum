@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
-Date: 2026-08-13
-Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v9 deployed and production-verified; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v30/v23 current; v28/v22 full-run retained as the measured baseline
+Date: 2026-08-14
+Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v12 with a static informational Copernicus DEM GLO-30 native-cell skyline is current; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v33/v23 current; v28/v22 full-run retained as the measured atmospheric-path baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -13,7 +13,7 @@ Deployment target: operator-managed host
 - surface field names are normalized across ecCodes versions (`VMAX_10M`/`max_i10fg`);
 - the admin chart uses stacked successful/failed bars and MSK (UTC+3) calendar days; point menus provide a Back button.
 
-- Go `1.26.5`, `tzf v1.2.3`, and `gonum/plot v0.17.0`;
+- Go `1.26.6`, `tzf v1.2.5`, and `gonum/plot v0.17.0`;
 - Telegram accepts native locations and VK accepts geo attachments; both accept `59.9386, 30.3141` and `/forecast 59.9386 30.3141`;
 - both thin platform adapters depend on the common `internal/app/bot` handler and never import each other; VK Group Long Poll is enabled at startup, messages and native geo are normalized to the common request, while texts, keyboards, PNG photos, and lossless document uploads are translated back to VK API calls;
 - Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;
@@ -160,7 +160,7 @@ implementation consists of:
   physical slant seeing and `tau0` remain unchanged, while reference anchors
   use the exact path ratio raised to the Fried `3/5` power.
 
-The current v9 production gate passed on 2026-08-13 against immutable ICON-EU
+The preceding v9 atmospheric-path production gate passed on 2026-08-13 against immutable ICON-EU
 run `2026081300` (manifest SHA-256
 `8f329b58721a4244d13725e6c02d6610b87e7e1af05d85a576c6822dd5f49cc6`).
 It published exactly 72 frames `f001..f072` from 01:00 UTC on 13 August through
@@ -214,7 +214,7 @@ to a single azimuth-independent zenith. Completed code includes:
   coupled adaptive Dormand–Prince 5(4) ECEF ray and event closure. Refraction
   v3 requires two converged forward production passes; the reverse pass is
   reserved for reference/strict regression and release verification;
-- `astrodome-science-kernel-v30-explicit-heuristics` /
+- `astrodome-science-kernel-v33-glo30-informational-skyline` /
   `astrodome-science-path-v23`: 0.2-mm physical/horizontal root localisation,
   0.4-mm distinct-root proximity detection with fail-closed handling, a 0.5-mm
   side guard, a 0.2-mm proof scale, the unchanged 1-mm position/coordinate
@@ -289,7 +289,7 @@ to a single azimuth-independent zenith. Completed code includes:
   slant water vapour, and phase-resolved cloud extinction, followed by the
   common bounded Overall mapping and precipitation veto;
 - one configured Overall/cloud calibration shared by ordinary Overall,
-  Horizon, and Astrodome. Calculation-request schema v4 and every current
+  Horizon, and Astrodome. Calculation-request schema v6 and every current
   dataset retain the SHA-256 of the complete validated Astrodome calibration;
   a configuration change invalidates the cache by construction and a
   bot/worker mismatch fails closed;
@@ -321,7 +321,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v4-straight-ray` JSON
+  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v7-glo30-informational-skyline` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:
@@ -359,7 +359,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - gzip visualization archives with an ordinary 96-hour TTL, plus one explicit
   non-expiring `admin_fixture` visible read-only to signed-out visitors and to
   every configured Telegram administrator, but not to authenticated non-admins. The
-  fixture and saved-result decoder accept only v30/v23 with a supported pinned
+  fixture and saved-result decoder accept only v33/v23 with a supported pinned
   profile; production web output is `production-v2`. An older payload is
   rejected until a successful current same-coordinate result replaces the
   shared fixture when exact integer cross multiplication proves a smaller or
@@ -407,7 +407,7 @@ executed test-binary SHA-256 is
 `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`.
 
 This v28/v22 measurement and the older v25/v26 measurements remain diagnostic
-provenance; they do not describe the current v30/v23 writer.
+provenance; they do not describe the current v33/v23 writer.
 
 The independent angular-discretization diagnostic on the same run evaluated
 five native hours (`f002`, `f020`, `f038`, `f056`, `f073`) on the union of

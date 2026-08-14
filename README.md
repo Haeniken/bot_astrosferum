@@ -56,7 +56,10 @@ This compact index ranks hours using the modeled wind profile only. It is useful
 
 ![Plavsk directional Horizon analysis](docs/assets/examples/plavsk/en/horizon-analysis.png)
 
-This separate ICON-EU analysis compares N, NE, E, SE, S, SW, W, and NW for 72 hourly intervals `f001..f072`. Every direction follows a fast straight line of sight launched at 10° geometric elevation; atmospheric refraction remains part of Astrodome only. Read HHL as the atmospheric model surface, not a surveyed local horizon.
+This separate ICON-EU analysis compares N, NE, E, SE, S, SW, W, and NW for 72 hourly intervals `f001..f072`. Every direction follows a fast straight line of sight launched at 10° geometric elevation; atmospheric refraction remains part of Astrodome only. A static Copernicus DEM GLO-30 skyline is resolved once per coordinate: the chart shows the mean and maximum skyline elevation of eight non-overlapping 45° sectors. It explicitly marks sectors whose terrain reaches 10°, but does not replace or penalize the atmospheric index calculated at 10°. ICON HHL remains the atmospheric model surface and is never replaced by the DSM.
+
+Copernicus DEM licensing and attribution are recorded in
+[Third-party data notices](THIRD_PARTY_DATA.md).
 
 Telegram and VK support native location sharing, textual coordinates, up to 10 PostgreSQL-backed saved points per user, and administrator usage reports aggregated across both platforms. Both adapters use the same command, forecast, rendering, and persistence handler, so their calculated results are equivalent. PostgreSQL files, ICON runs, render caches, and light-pollution atlases live below `./data` and are excluded from Git.
 
@@ -65,7 +68,7 @@ it appears as a second-stage action after an ordinary ICON-EU forecast and
 renders 72 native hourly intervals `f001..f072` as one eight-direction heatmap at an
 geometric `10°` elevation. It traces a fast straight spherical line of sight,
 while Astrodome retains the fully refracted atmospheric path. Horizon uses ICON
-HHL as the model surface, shares the
+HHL as the model surface and a separate cached Copernicus DEM GLO-30 terrain skyline, shares the
 Overall calibration, and never exposes a Horizon button or job for ICON Global.
 The current run is checked before costly work, after acquisition, and
 immediately before each send, including cache hits. See
@@ -84,8 +87,10 @@ Astrodome renders up to 72 native hourly directional datasets from the explicit
 `10°` calculation boundary to one azimuth-independent zenith node. Every
 direction is computed from interpolated native ICON-EU primitives followed by a
 complete physical recalculation; finished seeing, `tau0`, cloud transmission,
-Overall, and data quality are never interpolated. The current production writer
-is production-v2/v30/v23. See [Architecture](docs/architecture.en.md), the
+Overall, and data quality are never interpolated. GLO-30 is rendered as an
+independent informational skyline: it never suppresses a completed atmospheric
+cell. The current production writer is production-v2/v33/v23 with dataset
+schema 7. See [Architecture](docs/architecture.en.md), the
 [scientific method](docs/scientific-method.en.md), and the separate
 [site repository](https://github.com/Haeniken/site-astrosferum).
 
@@ -121,7 +126,7 @@ The build applies the currently available Ubuntu security updates and removes
 the unused `pebble` helper inherited from the GDAL base image. Allow at least
 `15 GiB` of additional temporary Docker space while rebuilding and scanning.
 
-Source development and the required pre-push checks use Go `1.26.5`,
+Source development and the required pre-push checks use Go `1.26.6`,
 `golangci-lint 2.12.2`, and `govulncheck 1.6.0`. CI additionally builds the
 production image and rejects `CRITICAL` or `HIGH` Trivy findings; it does not
 produce a separate `MEDIUM`/`LOW` report.

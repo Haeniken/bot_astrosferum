@@ -46,6 +46,8 @@ services:
       GOMEMLIMIT: 24GiB
       ASTRO_HORIZON_ANALYSIS_ENABLED: ${ASTRO_HORIZON_ANALYSIS_ENABLED:-true}
       ASTRO_ASTRODOME_ENABLED: ${ASTRO_ASTRODOME_ENABLED:-true}
+      ASTRO_COPERNICUS_DEM_GLO30_ENABLED: ${ASTRO_COPERNICUS_DEM_GLO30_ENABLED:-true}
+      ASTRO_COPERNICUS_DEM_CACHE_LIMIT: ${ASTRO_COPERNICUS_DEM_CACHE_LIMIT:-20GiB}
       ASTRO_ASTRODOME_RESIDENT_LIMIT: ${ASTRO_ASTRODOME_RESIDENT_LIMIT:-10GiB}
       ASTRO_ASTRODOME_JOB_TIMEOUT: ${ASTRO_ASTRODOME_JOB_TIMEOUT:-0s}
       ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT: ${ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT:-0s}
@@ -107,8 +109,9 @@ services:
 
   # Horizon and Astrodome execute here with ASTRO_DIRECTIONAL_CONCURRENCY
   # active slots (default 1). Queue capacity is configured separately. The bot
-  # remains the only downloader/publisher: the worker sees immutable model runs
-  # read-only and writes only directional workspaces, shared leases, and temp.
+  # remains the only ICON downloader/publisher. The worker sees immutable model
+  # runs read-only; a cold admitted directional job may populate only the shared
+  # bounded GLO-30 terrain cache before continuing the calculation.
   directional_worker:
     image: bot_astrosferum:latest
     pull_policy: never
@@ -121,6 +124,8 @@ services:
       GOMEMLIMIT: ${ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT:-12GiB}
       ASTRO_HORIZON_ANALYSIS_ENABLED: ${ASTRO_HORIZON_ANALYSIS_ENABLED:-true}
       ASTRO_ASTRODOME_ENABLED: ${ASTRO_ASTRODOME_ENABLED:-true}
+      ASTRO_COPERNICUS_DEM_GLO30_ENABLED: ${ASTRO_COPERNICUS_DEM_GLO30_ENABLED:-true}
+      ASTRO_COPERNICUS_DEM_CACHE_LIMIT: ${ASTRO_COPERNICUS_DEM_CACHE_LIMIT:-20GiB}
       ASTRO_ASTRODOME_RESIDENT_LIMIT: ${ASTRO_ASTRODOME_RESIDENT_LIMIT:-10GiB}
       ASTRO_ASTRODOME_JOB_TIMEOUT: ${ASTRO_ASTRODOME_JOB_TIMEOUT:-0s}
       ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT: ${ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT:-0s}
@@ -151,6 +156,7 @@ services:
     volumes:
       - ./config/config.yaml:/app/config/config.yaml:ro
       - ./data/models:/app/data/models:ro
+      - ./data/terrain:/app/data/terrain
       - ./data/cache/directional:/app/data/cache/directional
       - ./data/state/run-leases:/app/data/state/run-leases
       - ./data/tmp/directional-worker:/app/data/tmp
@@ -173,6 +179,7 @@ services:
       retries: 5
       start_period: 30s
     networks:
+      - egress
       - astrosferum_internal
     logging:
       driver: json-file
@@ -182,8 +189,8 @@ services:
         compress: "true"
 
 networks:
-  # Egress is deliberately available only to the bot/downloader. PostgreSQL,
-  # web-to-bot traffic, and the heavy worker use the shared internal network.
+  # Egress is available to the bot's forecast downloaders and to the isolated
+  # directional worker for an admitted cold GLO-30 terrain-cache fill.
   egress:
   astrosferum_internal:
     external: true

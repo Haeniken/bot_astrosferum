@@ -107,9 +107,17 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 		completeHorizonMessenger(waiter.messenger, err)
 		return nil
 	}
+	requestFamilyKey, err := horizonRequestFamilyKey(job.request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
+	if err != nil {
+		jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
+		jobs.sendStatus(waiter.messenger, waiter.chatID, waiter.language.text(
+			"Не удалось подготовить расчёт горизонта.", "Could not prepare the horizon calculation."))
+		completeHorizonMessenger(waiter.messenger, err)
+		return nil
+	}
 	ticket, err := coordinator.Submit(ctx, directional.Request{
 		Kind: directional.KindHorizon, OwnerID: horizonDirectionalOwner(waiter.identity),
-		IdempotencyKey: job.key, ScienceCacheKey: job.key,
+		IdempotencyKey: requestFamilyKey, RequestFamilyKey: requestFamilyKey, ScienceCacheKey: job.key,
 		Source: directional.SourceIdentity{
 			Provider: "ICON-EU", RunID: job.request.RunID,
 			GridProfile: horizonDirectionalGridProfile, GeometryDigest: geometryDigest,
@@ -223,14 +231,34 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 	if err := validateHorizonRequest(request); err != nil {
 		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_payload", Err: err}
 	}
+	if request.TerrainSkyline.Version == "" {
+		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_payload", Err: errors.New("terrain skyline is required")}
+	}
+	admissionArtifactKey, err := horizonCacheKey(request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
+	if err != nil || execution.ScienceCacheKey != admissionArtifactKey {
+		return directional.RunnerResult{}, directional.CodedError{
+			Code: "science_identity_mismatch", Err: errors.New("horizon admission identity differs from the pinned request"),
+		}
+	}
+	if request.TerrainSkyline.Source == "pending" {
+		key, _, keyErr := jobs.terrain.CacheKey(request.Location)
+		if keyErr != nil || key != request.TerrainPreparationKey {
+			return directional.RunnerResult{}, directional.CodedError{Code: "terrain_identity_mismatch", Err: errors.New("terrain preparation identity differs from worker configuration")}
+		}
+		resolved, resolveErr := jobs.terrain.Resolve(ctx, request.Location)
+		if resolveErr != nil {
+			return directional.RunnerResult{}, directional.CodedError{Code: "terrain_unavailable", Err: resolveErr}
+		}
+		request.TerrainSkyline = resolved
+	} else {
+		key, _, keyErr := jobs.terrain.CacheKey(request.Location)
+		if keyErr != nil || key != request.TerrainPreparationKey {
+			return directional.RunnerResult{}, directional.CodedError{Code: "terrain_identity_mismatch", Err: errors.New("terrain profile identity differs from worker configuration")}
+		}
+	}
 	artifactKey, err := horizonCacheKey(request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
 	if err != nil {
 		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_payload", Err: err}
-	}
-	if execution.ScienceCacheKey != artifactKey {
-		return directional.RunnerResult{}, directional.CodedError{
-			Code: "science_identity_mismatch", Err: errors.New("horizon worker configuration differs from the pinned science cache identity"),
-		}
 	}
 	plan, err := forecast.NewHorizonPlan(request.Location, request.ObserverSurfaceElevationM)
 	if err != nil {
@@ -265,20 +293,23 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 	if err != nil {
 		return directional.RunnerResult{}, err
 	}
+	if err := forecast.ApplyTerrainSkylineToHorizon(frames, request.TerrainSkyline); err != nil {
+		return directional.RunnerResult{}, directional.CodedError{Code: "invalid_terrain", Err: err}
+	}
 	if err := ctx.Err(); err != nil {
 		return directional.RunnerResult{}, err
 	}
 	imageDestination := filepath.Join(execution.Workspace, horizonCacheImage)
 	renderInput := HorizonRenderInput{
 		Location: request.Location, Provider: execution.Source.Provider,
-		RunID: request.RunID, Grid: "ICON-EU 0.0625°", Frames: frames,
+		RunID: request.RunID, Grid: "ICON-EU 0.0625°", Frames: frames, TerrainSkyline: request.TerrainSkyline,
 	}
 	if err := jobs.render(ctx, imageDestination, renderInput, request.Language.renderCode()); err != nil {
 		return directional.RunnerResult{}, err
 	}
 	dataset, err := render.PrepareHorizonInteractiveDataset(render.HorizonInput{
 		Location: renderInput.Location, Provider: renderInput.Provider, RunID: renderInput.RunID,
-		Grid: renderInput.Grid, Frames: renderInput.Frames,
+		Grid: renderInput.Grid, Frames: renderInput.Frames, TerrainSkyline: renderInput.TerrainSkyline,
 	}, artifactKey, request.ObserverSurfaceElevationM, jobs.calibration)
 	if err != nil {
 		return directional.RunnerResult{}, err
@@ -306,7 +337,8 @@ func (jobs *HorizonJobs) runDirectional(ctx context.Context, execution direction
 		return directional.RunnerResult{}, directional.CodedError{Code: "render_failed", Err: errors.New("horizon renderer did not produce an image")}
 	}
 	return directional.RunnerResult{
-		DatasetPath: destination, Provider: execution.Source.Provider, RunID: execution.Source.RunID,
+		DatasetPath: destination, FinalScienceCacheKey: artifactKey,
+		Provider: execution.Source.Provider, RunID: execution.Source.RunID,
 		GridProfile: execution.Source.GridProfile, GeometryDigest: execution.Source.GeometryDigest,
 	}, nil
 }

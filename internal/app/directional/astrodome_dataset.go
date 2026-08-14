@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	AstrodomeDatasetSchemaVersion = 4
+	AstrodomeDatasetSchemaVersion = 7
 	// AstrodomeDatasetWriterVersion participates in the calculation cache key.
 	// Increment it when a writer correction requires regeneration while the
 	// already-declared dataset schema and scientific meaning remain unchanged.
-	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v5-explicit-heuristics"
+	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v8-glo30-informational-skyline"
 	maximumAstrodomeDatasetBytes  = 128 << 20
 )
 
@@ -77,6 +77,7 @@ type AstrodomeDataset struct {
 	CalibrationSHA256             string                     `json:"science_calibration_sha256,omitempty"`
 	CelestialEphemerisVersion     string                     `json:"celestial_ephemeris_version"`
 	CelestialTracks               []astronomy.CelestialTrack `json:"celestial_tracks"`
+	TerrainSkyline                forecast.TerrainSkyline    `json:"terrain_skyline"`
 	Grid                          AstrodomeDatasetGrid       `json:"grid"`
 	ValidTimes                    []time.Time                `json:"valid_times"`
 	Frames                        []AstrodomeDatasetFrame    `json:"frames"`
@@ -164,49 +165,55 @@ type AstrodomeDatasetNumericalError struct {
 }
 
 type AstrodomeDatasetNode struct {
-	AzimuthDegrees                *float64                                 `json:"azimuth_deg"`
-	ElevationDegrees              float64                                  `json:"elevation_deg"`
-	State                         string                                   `json:"state"`
-	GeometryMode                  string                                   `json:"geometry_mode"`
-	Overall                       *float64                                 `json:"overall"`
-	SeeingArcsec500NM             *float64                                 `json:"seeing_arcsec_500nm"`
-	Tau0MS500NM                   *float64                                 `json:"tau0_ms_500nm"`
-	Tau0ConservativeMS500NM       *float64                                 `json:"tau0_conservative_ms_500nm"`
-	Tau0UnboundedAbove            bool                                     `json:"tau0_unbounded_above"`
-	IntegratedCn2                 *float64                                 `json:"J"`
-	WindWeightedCn2               *float64                                 `json:"JV"`
-	DirectionAtModelTopECEF       *AstrodomeDatasetECEFVector              `json:"direction_at_model_top_ecef"`
-	NominalCloudTransmission      *float64                                 `json:"nominal_cloud_transmission"`
-	ConservativeCloudTransmission *float64                                 `json:"conservative_cloud_transmission"`
-	EffectiveCloudTransmission    *float64                                 `json:"effective_cloud_transmission"`
-	CloudOpticalDepthLiquid       *float64                                 `json:"cloud_optical_depth_liquid"`
-	CloudOpticalDepthIce          *float64                                 `json:"cloud_optical_depth_ice"`
-	SlantWaterVapourKgM2          *float64                                 `json:"slant_water_vapour_kg_m2"`
-	Factors                       *AstrodomeDatasetFactors                 `json:"factors"`
-	PenaltyContributions          []forecast.OverallPenaltyContribution    `json:"penalty_contributions"`
-	PenaltyLossFraction           *float64                                 `json:"penalty_loss_fraction"`
-	LimitingFactor                string                                   `json:"limiting_factor"`
-	DataQuality                   forecast.AstrodomeScienceQualityCategory `json:"data_quality"`
-	QualityComponents             AstrodomeDatasetQuality                  `json:"quality_components"`
-	NumericalError                AstrodomeDatasetNumericalError           `json:"numerical_error"`
+	AzimuthDegrees                                    *float64                                   `json:"azimuth_deg"`
+	ElevationDegrees                                  float64                                    `json:"elevation_deg"`
+	State                                             string                                     `json:"state"`
+	TerrainObstructionSource                          forecast.AstrodomeTerrainObstructionSource `json:"terrain_obstruction_source"`
+	TerrainSkylineElevationDegrees                    *float64                                   `json:"terrain_skyline_elevation_deg"`
+	TerrainSkylineHasObstructionAtEvaluationDirection *bool                                      `json:"terrain_skyline_has_obstruction_at_evaluation_direction"`
+	GeometryMode                                      string                                     `json:"geometry_mode"`
+	Overall                                           *float64                                   `json:"overall"`
+	SeeingArcsec500NM                                 *float64                                   `json:"seeing_arcsec_500nm"`
+	Tau0MS500NM                                       *float64                                   `json:"tau0_ms_500nm"`
+	Tau0ConservativeMS500NM                           *float64                                   `json:"tau0_conservative_ms_500nm"`
+	Tau0UnboundedAbove                                bool                                       `json:"tau0_unbounded_above"`
+	IntegratedCn2                                     *float64                                   `json:"J"`
+	WindWeightedCn2                                   *float64                                   `json:"JV"`
+	DirectionAtModelTopECEF                           *AstrodomeDatasetECEFVector                `json:"direction_at_model_top_ecef"`
+	NominalCloudTransmission                          *float64                                   `json:"nominal_cloud_transmission"`
+	ConservativeCloudTransmission                     *float64                                   `json:"conservative_cloud_transmission"`
+	EffectiveCloudTransmission                        *float64                                   `json:"effective_cloud_transmission"`
+	CloudOpticalDepthLiquid                           *float64                                   `json:"cloud_optical_depth_liquid"`
+	CloudOpticalDepthIce                              *float64                                   `json:"cloud_optical_depth_ice"`
+	SlantWaterVapourKgM2                              *float64                                   `json:"slant_water_vapour_kg_m2"`
+	Factors                                           *AstrodomeDatasetFactors                   `json:"factors"`
+	PenaltyContributions                              []forecast.OverallPenaltyContribution      `json:"penalty_contributions"`
+	PenaltyLossFraction                               *float64                                   `json:"penalty_loss_fraction"`
+	LimitingFactor                                    string                                     `json:"limiting_factor"`
+	DataQuality                                       forecast.AstrodomeScienceQualityCategory   `json:"data_quality"`
+	QualityComponents                                 AstrodomeDatasetQuality                    `json:"quality_components"`
+	NumericalError                                    AstrodomeDatasetNumericalError             `json:"numerical_error"`
 }
 
 // AstrodomeDatasetInput is produced by a calculation/acquisition adapter. The
 // dataset builder does not know the concrete ICON volume store or runner.
 type AstrodomeDatasetInput struct {
-	SourceIdentity         forecast.AstrodomePrimitiveVolumeIdentity
-	SourceColumnPlanDigest string
-	GeneratedAt            time.Time
-	RequestedLocation      AstrodomeDatasetLocation
-	ModelLocation          AstrodomeDatasetLocation
-	Profile                forecast.AstrodomeGridProfile
-	RayGeometryVersion     string
-	RefractionVersion      string
-	RefractivityVersion    string
-	CalibrationVersion     string
-	CalibrationSHA256      string
-	CelestialTracks        []astronomy.CelestialTrack
-	Frames                 []AstrodomeDatasetFrameInput
+	AdmissionScienceCacheKey string
+	FinalScienceCacheKey     string
+	SourceIdentity           forecast.AstrodomePrimitiveVolumeIdentity
+	SourceColumnPlanDigest   string
+	GeneratedAt              time.Time
+	RequestedLocation        AstrodomeDatasetLocation
+	ModelLocation            AstrodomeDatasetLocation
+	Profile                  forecast.AstrodomeGridProfile
+	RayGeometryVersion       string
+	RefractionVersion        string
+	RefractivityVersion      string
+	CalibrationVersion       string
+	CalibrationSHA256        string
+	CelestialTracks          []astronomy.CelestialTrack
+	TerrainSkyline           forecast.TerrainSkyline
+	Frames                   []AstrodomeDatasetFrameInput
 }
 
 type AstrodomeDatasetFrameInput struct {
@@ -219,11 +226,20 @@ type AstrodomeDatasetFrameInput struct {
 // BuildAstrodomeDataset maps fully recomputed physical nodes to the browser
 // shape and validates its complete consecutive one-to-72-frame product.
 func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error) {
+	if input.TerrainSkyline.Version == "" {
+		input.TerrainSkyline = forecast.DisabledTerrainSkyline()
+	}
 	if err := forecast.ValidateAstrodomePrimitiveVolumeIdentity(input.SourceIdentity); err != nil {
 		return AstrodomeDataset{}, err
 	}
 	if input.SourceIdentity.Provider != "icon-eu" || !validPrefixedSHA256(input.SourceIdentity.RunManifestDigest) {
 		return AstrodomeDataset{}, errors.New("astrodome dataset requires a canonical ICON-EU manifest identity")
+	}
+	if err := input.TerrainSkyline.Validate(); err != nil {
+		return AstrodomeDataset{}, fmt.Errorf("astrodome terrain skyline: %w", err)
+	}
+	if input.TerrainSkyline.Source == "pending" {
+		return AstrodomeDataset{}, errors.New("astrodome terrain skyline preparation is incomplete")
 	}
 	if len(input.Frames) == 0 || len(input.Frames) > forecast.AstrodomeFrameCount {
 		return AstrodomeDataset{}, fmt.Errorf("astrodome input has %d frames, want 1..%d", len(input.Frames), forecast.AstrodomeFrameCount)
@@ -239,6 +255,16 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 	digest, err := profile.GeometryDigest()
 	if err != nil {
 		return AstrodomeDataset{}, err
+	}
+	terrainElevations := make([]*float64, len(nodeDefinitions))
+	terrainObstructions := make([]bool, len(nodeDefinitions))
+	for nodeIndex, definition := range nodeDefinitions {
+		terrainElevations[nodeIndex], terrainObstructions[nodeIndex], err = astrodomeTerrainSkylineNodeInformation(
+			input.TerrainSkyline, definition,
+		)
+		if err != nil {
+			return AstrodomeDataset{}, fmt.Errorf("astrodome terrain skyline node %d: %w", nodeIndex, err)
+		}
 	}
 	validTimes := make([]time.Time, len(input.Frames))
 	frames := make([]AstrodomeDatasetFrame, len(input.Frames))
@@ -268,6 +294,8 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 			if err != nil {
 				return AstrodomeDataset{}, fmt.Errorf("map astrodome frame %d node %d: %w", frameIndex, nodeIndex, err)
 			}
+			mapped[nodeIndex].TerrainSkylineElevationDegrees = cloneFloat(terrainElevations[nodeIndex])
+			mapped[nodeIndex].TerrainSkylineHasObstructionAtEvaluationDirection = boolPointer(terrainObstructions[nodeIndex])
 		}
 		frames[frameIndex] = AstrodomeDatasetFrame{
 			ValidAt: frameInput.ValidAt.UTC(), SurfaceCommon: mapAstrodomeSurface(frameInput.Surface),
@@ -298,6 +326,7 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 		CalibrationSHA256:             input.CalibrationSHA256,
 		CelestialEphemerisVersion:     astronomy.CelestialEphemerisVersion,
 		CelestialTracks:               input.CelestialTracks,
+		TerrainSkyline:                input.TerrainSkyline,
 		Grid: AstrodomeDatasetGrid{
 			FrameCount: len(frames), NodeCount: profile.NodeCount(),
 			Rings:  append([]forecast.AstrodomeGridRing(nil), profile.Rings...),
@@ -311,6 +340,20 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 	return dataset, nil
 }
 
+func astrodomeTerrainSkylineNodeInformation(
+	profile forecast.TerrainSkyline,
+	definition forecast.AstrodomeGridNode,
+) (*float64, bool, error) {
+	if !profile.Enabled() || definition.AzimuthDegrees == nil {
+		return nil, false, nil
+	}
+	elevation, err := profile.ElevationAt(*definition.AzimuthDegrees)
+	if err != nil {
+		return nil, false, err
+	}
+	return &elevation, definition.ElevationDegrees <= elevation, nil
+}
+
 func MapAstrodomeScienceNode(definition forecast.AstrodomeGridNode, source forecast.AstrodomeScienceNode) (AstrodomeDatasetNode, error) {
 	if source.ValidAt.IsZero() || !sameNullableFloat(source.AzimuthDegrees, definition.AzimuthDegrees, 1e-7) ||
 		math.Abs(source.ElevationDegrees-definition.ElevationDegrees) > 1e-6 {
@@ -321,19 +364,29 @@ func MapAstrodomeScienceNode(definition forecast.AstrodomeGridNode, source forec
 		return AstrodomeDatasetNode{}, errors.New("science node availability contradicts its state")
 	}
 	quality := mapAstrodomeQuality(source)
+	terrainSource := source.TerrainObstructionSource
+	if terrainSource == "" && source.State != forecast.AstrodomeScienceNodeTerrainBlocked {
+		terrainSource = forecast.AstrodomeTerrainObstructionNone
+	}
 	result := AstrodomeDatasetNode{
 		AzimuthDegrees: cloneFloat(definition.AzimuthDegrees), ElevationDegrees: definition.ElevationDegrees,
 		State: mapAstrodomeNodeState(source), GeometryMode: source.GeometryMode,
-		Tau0UnboundedAbove:      source.Tau0UnboundedAbove,
-		DirectionAtModelTopECEF: cloneAstrodomeECEFVector(source.DirectionAtModelTopECEF),
-		PenaltyContributions:    []forecast.OverallPenaltyContribution{}, LimitingFactor: "unavailable_data",
+		TerrainObstructionSource: terrainSource,
+		Tau0UnboundedAbove:       source.Tau0UnboundedAbove,
+		DirectionAtModelTopECEF:  cloneAstrodomeECEFVector(source.DirectionAtModelTopECEF),
+		PenaltyContributions:     []forecast.OverallPenaltyContribution{}, LimitingFactor: "unavailable_data",
 		DataQuality: source.Quality.Category, QualityComponents: quality,
 		NumericalError: AstrodomeDatasetNumericalError{},
 	}
 	if !source.Available || source.State == forecast.AstrodomeScienceNodeUnavailable ||
 		source.State == forecast.AstrodomeScienceNodeTerrainBlocked {
 		if source.State == forecast.AstrodomeScienceNodeTerrainBlocked {
-			result.LimitingFactor = "coarse_terrain"
+			switch source.TerrainObstructionSource {
+			case forecast.AstrodomeTerrainObstructionHHL:
+				result.LimitingFactor = "coarse_terrain"
+			default:
+				return AstrodomeDatasetNode{}, errors.New("terrain-blocked science node is not an ICON HHL obstruction")
+			}
 		}
 		return result, nil
 	}
@@ -590,6 +643,8 @@ func astrodomeTwilightBand(solarAltitude float64) string {
 }
 
 func floatPointer(value float64) *float64 { return &value }
+
+func boolPointer(value bool) *bool { return &value }
 
 func cloneFloat(value *float64) *float64 {
 	if value == nil {

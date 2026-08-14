@@ -303,7 +303,8 @@ func TestHorizonCacheKeyCoversScientificAndPresentationIdentity(t *testing.T) {
 	base := horizonRequest{
 		Provider: HorizonProviderICONEU, RunID: horizonTestRunID,
 		Location:                  forecast.Location{Latitude: 59.9386, Longitude: 30.3141, TimeZone: "Europe/Moscow"},
-		ObserverSurfaceElevationM: 17, Language: languageEnglish,
+		ObserverSurfaceElevationM: 17, Language: languageEnglish, TerrainSkyline: forecast.DisabledTerrainSkyline(),
+		TerrainPreparationKey: forecast.TerrainSkylineVersion + ":disabled",
 	}
 	calibration := forecast.DefaultOverallIndexCalibration()
 	baseKey, err := horizonCacheKey(base, calibration, "render-v1")
@@ -322,6 +323,12 @@ func TestHorizonCacheKeyCoversScientificAndPresentationIdentity(t *testing.T) {
 		{name: "run", request: func() horizonRequest { value := base; value.RunID = "2026072212"; return value }(), cal: calibration, render: "render-v1"},
 		{name: "language", request: func() horizonRequest { value := base; value.Language = languageRussian; return value }(), cal: calibration, render: "render-v1"},
 		{name: "timezone", request: func() horizonRequest { value := base; value.Location.TimeZone = "UTC"; return value }(), cal: calibration, render: "render-v1"},
+		{name: "terrain", request: func() horizonRequest {
+			value := base
+			value.TerrainSkyline = syntheticHorizonTerrainSkyline(t, value.Location)
+			value.TerrainPreparationKey = "synthetic-terrain"
+			return value
+		}(), cal: calibration, render: "render-v1"},
 		{name: "calibration", request: base, cal: func() forecast.OverallIndexCalibration { value := calibration; value.CloudWeight += 0.1; return value }(), render: "render-v1"},
 		{name: "renderer", request: base, cal: calibration, render: "render-v2"},
 	}
@@ -336,6 +343,19 @@ func TestHorizonCacheKeyCoversScientificAndPresentationIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func syntheticHorizonTerrainSkyline(t *testing.T, location forecast.Location) forecast.TerrainSkyline {
+	t.Helper()
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{AzimuthDegrees: float64(index), ElevationDegrees: 1, ObstacleSurfaceDistanceM: 1000}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(location.Latitude, location.Longitude, 10, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
 }
 
 func TestHorizonJobsSingleflightFansOutAcrossPlatforms(t *testing.T) {

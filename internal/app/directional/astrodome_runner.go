@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // AstrodomeDatasetComputer is the only acquisition/calculation dependency of
@@ -44,6 +45,17 @@ func NewAstrodomeDatasetRunner(computer AstrodomeDatasetComputer) (Runner, error
 		if err := ctx.Err(); err != nil {
 			return RunnerResult{}, err
 		}
+		admissionScienceCacheKey := strings.TrimSpace(input.AdmissionScienceCacheKey)
+		if admissionScienceCacheKey == "" {
+			admissionScienceCacheKey = execution.ScienceCacheKey
+		}
+		finalScienceCacheKey := strings.TrimSpace(input.FinalScienceCacheKey)
+		if finalScienceCacheKey == "" {
+			finalScienceCacheKey = execution.ScienceCacheKey
+		}
+		if admissionScienceCacheKey != execution.ScienceCacheKey {
+			return RunnerResult{}, CodedError{Code: "science_identity_mismatch", Err: errors.New("astrodome calculation returned inconsistent science identities")}
+		}
 		dataset, err := BuildAstrodomeDataset(input)
 		if err != nil {
 			return RunnerResult{}, CodedError{Code: "invalid_dataset", Err: err}
@@ -61,7 +73,8 @@ func NewAstrodomeDatasetRunner(computer AstrodomeDatasetComputer) (Runner, error
 			return RunnerResult{}, err
 		}
 		return RunnerResult{
-			DatasetPath: destination, Provider: execution.Source.Provider, RunID: execution.Source.RunID,
+			DatasetPath: destination, FinalScienceCacheKey: finalScienceCacheKey,
+			Provider: execution.Source.Provider, RunID: execution.Source.RunID,
 			GridProfile: execution.Source.GridProfile, GeometryDigest: execution.Source.GeometryDigest,
 			ContentEncoding: "gzip",
 		}, nil

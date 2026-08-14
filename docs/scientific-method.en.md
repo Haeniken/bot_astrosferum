@@ -20,7 +20,7 @@ requirements as the ordinary forecast.
 The directional atmospheric Astrodome method in section 8 is implemented for
 ICON-EU in this repository. Its presentation and saved-visualization catalogue
 are deployed from the independent private `site-astrosferum` repository.
-Production-v2/v30/v23
+Production-v2/v33/v23
 is the current writer; the complete v28/v22 numerical measurement recorded below
 is an explicitly historical baseline;
 multi-cycle resource, release, and observational validation remain separate
@@ -643,12 +643,13 @@ serialization-consistency tolerances: `2e-6` for factor/product/Shapley loss
 and `2e-5` for the reconstructed `1…10` Overall value. These project validation
 limits are neither observational uncertainties nor permission to publish a
 loss outside `[0,1]`.
-The current Astrodome dataset schema is `4`. Its penalty semantics remain the
-bounded product definition above; schema 4 carries the explicit heuristic
+The current Astrodome dataset schema is `7`. Its penalty semantics remain the
+bounded product definition above; schema 7 carries the explicit heuristic
 contracts plus the versioned celestial distance and ring-aspect diagnostics
-from section 4.10. The narrow
-`astrodome-dataset-writer-v5-explicit-heuristics` identity participates in the
-calculation cache key. Calculation-request schema 4 also binds the
+from section 4.10, the static GLO-30 terrain profile from section 7.4, and the
+per-node informational skyline elevation/obstruction predicate. The narrow
+`astrodome-dataset-writer-v8-glo30-informational-skyline` identity participates in the
+calculation cache key. Calculation-request schema 6 also binds the
 `celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3` ephemeris
 identity, so an older or incompatible payload cannot be reused.
 An archived payload outside the declared unit interval is rejected rather than
@@ -2393,13 +2394,108 @@ describes ICON output and orography as grid-cell means in the
 [the ICON tutorial](https://www.dwd.de/DE/leistungen/nwv_icon_tutorial/pdf_einzelbaende/icon_tutorial2025.pdf)
 defines HHL as vertical half-level height; neither is a local survey.
 
-A future fine DEM must remain a separate line-of-sight occlusion resolver over
-the accepted straight trajectory. It must not replace HHL in
-the pressure, temperature, humidity, or refractive-index reconstruction.
-Atmospheric-lower-boundary and terrain-occlusion provenance must therefore be
-serialized independently; Copernicus DEM GLO-30 remains an open TODO until its
-licence, horizontal resolution, vertical datum/transform, cache identity, and
-missing-data policy are pinned.
+The implemented fine-terrain screen is a separate static Copernicus DEM GLO-30
+line-of-sight product. It never replaces HHL in pressure, temperature,
+humidity, or refractive-index reconstruction. The source is a digital surface
+model (DSM), so vegetation, buildings, and infrastructure may contribute to
+the returned surface; it is not a surveyed optical horizon. The public AWS
+distribution used by the implementation is the 2021 GLO-30 release in
+geographic WGS 84 (`EPSG:4326`), with orthometric heights in metres relative to
+EGM2008. The provider describes a nominal 30 m product and quotes absolute
+vertical accuracy below 4 m at 90% linear error; those source specifications
+are not an uncertainty estimate for the derived skyline.
+
+For observer DSM-surface orthometric height `h_0`, fixed aperture offset
+`h_a=2 m`, an accepted native raster-cell centre `p` with DSM height `h_p`,
+authalic project radius `R=6371008.8 m`, great-circle distance `s_p`, and
+initial bearing `A_p`, the direct spherical elevation of that cell is
+
+```math
+\begin{aligned}
+\alpha_p&=\frac{s_p}{R},\\
+e_p
+&=\mathrm{atan2}\!\left(
+[R+h_p]\cos\alpha_p-[R+h_0+h_a],
+[R+h_p]\sin\alpha_p
+\right),\\
+b(p)&=\left\lfloor(A_p+0.5^\circ)\bmod360^\circ\right\rfloor,\\
+\gamma_k&=\max_{p:\ 0<s_p\le61000\,\mathrm{m},\ b(p)=k}e_p,
+\qquad k=0,\ldots,359.
+\end{aligned}\tag{F19a}
+```
+
+Equation [F19a] is direct geometric occlusion without atmospheric refraction.
+The implementation visits every native GLO-30 raster-cell centre within
+61 km exactly once and assigns it to one nearest integer-degree azimuth bin;
+there is no sparse radial sampling and no hourly DEM work. The 61 km boundary
+is a versioned numerical guard: with the accepted DSM range `-500...10500 m`
+and the 2 m aperture, even the highest admissible surface above the lowest
+admissible observer is below 10 degrees at 61 km, so a farther accepted cell
+cannot reach the product's 10-degree reporting threshold. The full profile is built
+once for exact source-object manifest and coordinates quantized to `10^-5 deg`,
+then reused for every forecast hour.
+
+The AWS COG adapter validates the exact tile ID, latitude-band raster width,
+`3600` rows, Point grid, EPSG:4326, Float32 storage and unpacked DGED height
+semantics. Heights are metres in EGM2008, with canonical `NoData=-32767`,
+`scale=1`, and `offset=0`; NoData is masked before observer sampling or skyline
+maxima. The source-object ETag, byte length and SHA-256 form a sorted manifest.
+The admission/preparation key is not a scientific-result identity: after a
+cold build, Horizon and Astrodome publish only under a final key containing
+the exact profile and manifest SHA-256 digests.
+
+The eight Horizon directions own disjoint half-open 45-degree sectors. For
+`i=0,...,7`, with N at `i=0`, the exact integer-degree ownership rule is
+
+```math
+\begin{aligned}
+S_i&=\left\{k\in\{0,\ldots,359\}:\
+\left\lfloor\frac{(k+22.5)\bmod360}{45}\right\rfloor=i\right\},\\
+\overline\gamma_i&=\frac{1}{45}\sum_{k\in S_i}\gamma_k,\\
+\gamma_{i,\max}&=\max_{k\in S_i}\gamma_k.
+\end{aligned}\tag{F19b}
+```
+
+Every one-degree sample belongs to exactly one sector, including the circular
+N boundary. The Horizon chart displays `mean/maximum` and publishes the
+informational predicate `gamma_i,max >= 10 deg`, so a narrow peak cannot be
+lost in the displayed mean. This predicate reports that at least one azimuth
+inside the sector reaches the evaluation elevation; it does not alter
+availability, the atmospheric index, or its limiting factors. Astrodome keeps
+all 360 samples. At a grid-node
+azimuth `A=k+u`, `0<=u<1`, it uses only cyclic interpolation of the source
+terrain profile,
+
+```math
+\gamma(A)=(1-u)\gamma_k+u\gamma_{(k+1)\bmod360},
+\qquad I_{\mathrm{terrain}}(A,e_{\mathrm{node}})
+=\mathbf{1}\!\left[e_{\mathrm{node}}\le\gamma(A)\right].
+\tag{F19c}
+```
+
+No seeing, coherence time, cloud transmission, Overall, or confidence-like
+quantity is interpolated by [F19c]. The Astrodome always retains the completed
+refracted atmospheric cell, including its state, Overall, physical diagnostics,
+quality, and limiting factors. It serializes `gamma(A)` and the informational
+boolean `I_terrain` separately for display. The DEM profile itself remains
+direct and static and is not a surveyed or refracted optical horizon. A true
+ICON-HHL intersection or missing mandatory atmospheric input remains
+fail-closed and may coexist with the informational GLO-30 fields. Missing or
+invalid source tiles fail directional preparation when the feature is enabled.
+Disabled operation is serialized explicitly as `source=disabled`; no flat or
+HHL-derived substitute is fabricated.
+
+Horizon serializes the sector predicate as
+`terrain_sector_has_obstruction_at_evaluation_elevation`. The independent
+`terrain_blocked` field remains reserved for an ICON-HHL intersection that
+prevents completion of the mandatory atmospheric path. The two states are not
+aliases and the browser must not infer one from the other.
+
+Product definition and accuracy are from the
+[Copernicus DEM collection description](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM)
+and [Product Handbook](https://dataspace.copernicus.eu/sites/default/files/media/files/2024-06/geo1988-copernicusdem-spe-002_producthandbook_i5.0.pdf).
+The distribution and access contract are documented by the
+[Registry of Open Data on AWS](https://registry.opendata.aws/copernicus-dem/).
 
 ### 7.5. Overall and limiting factor
 
@@ -2479,7 +2575,10 @@ explicit, uncalibrated project prior justified after [F12], because the
 importance of fine resolution depends on target scale, focal length, sampling,
 and observing technique.
 
-A terrain block forces index 1. An incomplete direction is marked unavailable
+An ICON-HHL intersection of the atmospheric ray forces index 1 because the
+mandatory directional atmospheric path cannot be completed honestly. The
+separate GLO-30 sector skyline is informational and does not force index 1.
+An incomplete direction is marked unavailable
 and also carries sentinel index 1; the UI must distinguish it from a valid poor
 direction. The main limiting factor is the smallest contributing factor, with
 stable ordering only to break equal values. The presentation names that factor

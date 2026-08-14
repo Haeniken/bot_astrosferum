@@ -21,6 +21,7 @@ type Config struct {
 	HorizonAnalysis HorizonAnalysisConfig `yaml:"horizon_analysis"`
 	Directional     DirectionalConfig     `yaml:"directional"`
 	Astrodome       AstrodomeConfig       `yaml:"astrodome"`
+	Terrain         TerrainConfig         `yaml:"terrain"`
 	Paths           PathsConfig           `yaml:"paths"`
 	Providers       ProvidersConfig       `yaml:"providers"`
 	Sync            SyncConfig            `yaml:"sync"`
@@ -28,6 +29,11 @@ type Config struct {
 	Render          RenderConfig          `yaml:"render"`
 	Platforms       PlatformsConfig       `yaml:"platforms"`
 	Database        DatabaseConfig        `yaml:"database"`
+}
+
+type TerrainConfig struct {
+	CopernicusDEMGLO30Enabled bool     `yaml:"copernicus_dem_glo30_enabled"`
+	CacheLimit                ByteSize `yaml:"cache_limit"`
 }
 
 // DirectionalConfig owns the single FIFO and active-slot limit shared by
@@ -212,7 +218,8 @@ func Defaults() Config {
 			CacheEntries: 64, ResidentLimit: ByteSize(10 << 30), ProjectDiskCap: ByteSize(400 << 30), MinFreeSpace: ByteSize(100 << 30),
 			MinFreeInodes: 10_000,
 		},
-		Paths: PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
+		Terrain: TerrainConfig{CopernicusDEMGLO30Enabled: true, CacheLimit: ByteSize(20 << 30)},
+		Paths:   PathsConfig{Data: "/app/data", Temp: "/app/data/tmp"},
 		Providers: ProvidersConfig{
 			GEOSCF: GEOSCFConfig{
 				Enabled:        true,
@@ -319,6 +326,20 @@ func (c *Config) applyEnvironment() error {
 			return fmt.Errorf("parse ASTRO_ASTRODOME_ENABLED: %w", err)
 		}
 		c.Astrodome.Enabled = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_COPERNICUS_DEM_GLO30_ENABLED"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("parse ASTRO_COPERNICUS_DEM_GLO30_ENABLED: %w", err)
+		}
+		c.Terrain.CopernicusDEMGLO30Enabled = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_COPERNICUS_DEM_CACHE_LIMIT"); exists {
+		var parsed ByteSize
+		if err := parsed.UnmarshalText([]byte(strings.TrimSpace(value))); err != nil {
+			return fmt.Errorf("parse ASTRO_COPERNICUS_DEM_CACHE_LIMIT: %w", err)
+		}
+		c.Terrain.CacheLimit = parsed
 	}
 	if value, exists := os.LookupEnv("ASTRO_ASTRODOME_RESIDENT_LIMIT"); exists {
 		var parsed ByteSize
@@ -557,6 +578,9 @@ func (c Config) Validate() error {
 	// option, so validate it even while public Astrodome access is disabled.
 	if c.Astrodome.ResidentLimit < ByteSize(1<<30) || c.Astrodome.ResidentLimit > ByteSize(20<<30) {
 		problems = append(problems, "astrodome.resident_limit must be between 1GiB and 20GiB")
+	}
+	if c.Terrain.CacheLimit < ByteSize(1<<30) || c.Terrain.CacheLimit > ByteSize(100<<30) {
+		problems = append(problems, "terrain.cache_limit must be between 1GiB and 100GiB")
 	}
 	if astrodomeOperational {
 		jobTimeout := c.Astrodome.JobTimeout.Duration

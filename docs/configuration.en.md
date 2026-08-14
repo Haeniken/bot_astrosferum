@@ -197,6 +197,21 @@ Astrodome calculation. Site access policy must be consistent with
 `ASTRO_ASTRODOME_ENABLED` and `ASTRO_TELEGRAM_ADMIN_IDS`; disagreement fails
 closed at the bot API boundary.
 
+## Copernicus DEM GLO-30 terrain skyline
+
+| Variable | Recommended | Effect |
+|---|---:|---|
+| `ASTRO_COPERNICUS_DEM_GLO30_ENABLED` | `true` | Enables the static Copernicus DEM GLO-30 skyline for Horizon and Astrodome. When enabled, an unavailable/invalid tile fails directional preparation; no flat or HHL-derived substitute is invented. When disabled, the serialized source is explicitly `disabled` and ICON HHL remains the only coarse model-terrain check. |
+| `ASTRO_COPERNICUS_DEM_CACHE_LIMIT` | `20GiB` | Upper bound for cached immutable 1°×1° GLO-30 GeoTIFF tiles. Derived per-coordinate profiles are separately capped at 4096 entries. Oldest-accessed entries are pruned; source data and profiles stay below `data/terrain/` and are excluded from Git. Allowed range: `1GiB..100GiB`. |
+
+The profile is calculated once per source version and coordinates rounded to
+`1e-5°`, not once per forecast hour. A cold miss is admitted to the shared
+directional queue before the isolated worker downloads and validates the public
+Cloud Optimized GeoTIFF tiles. Bot and worker then reuse the shared bounded
+profile cache. Calculation-request schema 6 binds that profile; Horizon cache
+schema 7 and Astrodome dataset schema 7 invalidate older payloads by
+construction.
+
 ## Shared Overall, Horizon, and Astrodome calibration
 
 The remaining optional variables form one calibration shared by the Overall
@@ -204,7 +219,7 @@ Astronomy Index, the optional Horizon directional index, and Astrodome. The repo
 defaults below are the recommended production profile; change them as one
 reviewed calibration set rather than tuning individual values casually. The
 complete calibration is part of each Horizon/Astrodome cache key. Astrodome
-calculation-request schema v4 carries the SHA-256 of its canonical complete
+calculation-request schema v6 carries the SHA-256 of its canonical complete
 calibration, the worker rejects a bot/worker digest mismatch, and the dataset
 retains the same digest as provenance. A change therefore produces a new
 identity instead of reusing a result calculated with old values. Invalid or

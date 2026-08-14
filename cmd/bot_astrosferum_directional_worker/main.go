@@ -22,6 +22,7 @@ import (
 	"bot_astrosferum/internal/app/bot"
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/config"
+	"bot_astrosferum/internal/model/copdem"
 	"bot_astrosferum/internal/model/iconeu"
 	"bot_astrosferum/internal/render"
 )
@@ -119,6 +120,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 func newExecutionHandler(cfg config.Config, credential []byte, logf func(string, ...any)) (http.Handler, error) {
+	terrainStore, err := copdem.NewStore(copdem.Config{
+		Enabled: cfg.Terrain.CopernicusDEMGLO30Enabled, Root: filepath.Join(cfg.Paths.Data, "terrain", "copernicus-dem-glo30-2021"),
+		CacheLimitBytes: int64(cfg.Terrain.CacheLimit), Logf: logf,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize worker Copernicus DEM store: %w", err)
+	}
 	horizonSource := iconeu.NewHorizonStore(
 		cfg.Paths.Data, filepath.Join(cfg.Paths.Temp, "horizon-batch"),
 		cfg.HorizonAnalysis.CDOWorkers, logf,
@@ -134,13 +142,14 @@ func newExecutionHandler(cfg config.Config, credential []byte, logf func(string,
 		EstimatedDuration:      cfg.HorizonAnalysis.EstimatedDuration.Duration,
 		MaxStaleAge:            cfg.Providers.ICONEU.MaxStaleAge.Duration,
 		RenderAlgorithmVersion: render.HorizonRenderVersion,
+		Terrain:                terrainStore,
 	}, horizonSource, func(renderContext context.Context, destination string, input bot.HorizonRenderInput, language string) error {
 		if err := renderContext.Err(); err != nil {
 			return err
 		}
 		if err := render.Horizon(renderContext, destination, render.HorizonInput{
 			Location: input.Location, Provider: input.Provider, RunID: input.RunID,
-			Grid: input.Grid, Frames: input.Frames,
+			Grid: input.Grid, Frames: input.Frames, TerrainSkyline: input.TerrainSkyline,
 		}, render.Options{Language: language}); err != nil {
 			return err
 		}
@@ -160,7 +169,7 @@ func newExecutionHandler(cfg config.Config, credential []byte, logf func(string,
 	computer, err := astrodome.NewComputer(astrodome.ComputerConfig{
 		DataRoot: cfg.Paths.Data, TempRoot: filepath.Join(cfg.Paths.Temp, "astrodome"),
 		ECCodesWorkers: cfg.HorizonAnalysis.CDOWorkers, ResidentLimitBytes: uint64(cfg.Astrodome.ResidentLimit),
-		ScienceCalibration: scienceCalibration, Logf: logf,
+		ScienceCalibration: scienceCalibration, Terrain: terrainStore, Logf: logf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize worker Astrodome computer: %w", err)

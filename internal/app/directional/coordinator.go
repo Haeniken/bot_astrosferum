@@ -39,25 +39,27 @@ type Coordinator struct {
 }
 
 type directionalJob struct {
-	id              string
-	kind            Kind
-	scienceDigest   string
-	scienceCacheKey string
-	source          SourceIdentity
-	payload         json.RawMessage
-	owners          map[string]struct{}
-	idempotencyKeys map[string]string
-	state           State
-	createdAt       time.Time
-	updatedAt       time.Time
-	startedAt       time.Time
-	finishedAt      time.Time
-	result          Result
-	failureCode     string
-	err             error
-	runCancel       context.CancelFunc
-	done            chan struct{}
-	doneOnce        sync.Once
+	id                  string
+	kind                Kind
+	scienceDigest       string
+	publishedDigest     string
+	requestFamilyDigest string
+	scienceCacheKey     string
+	source              SourceIdentity
+	payload             json.RawMessage
+	owners              map[string]struct{}
+	idempotencyKeys     map[string]string
+	state               State
+	createdAt           time.Time
+	updatedAt           time.Time
+	startedAt           time.Time
+	finishedAt          time.Time
+	result              Result
+	failureCode         string
+	err                 error
+	runCancel           context.CancelFunc
+	done                chan struct{}
+	doneOnce            sync.Once
 }
 
 type Ticket struct {
@@ -189,6 +191,14 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		string(request.Kind), request.ScienceCacheKey, request.Source.Provider,
 		request.Source.RunID, request.Source.GridProfile, request.Source.GeometryDigest,
 	)
+	requestFamilyKey := strings.TrimSpace(request.RequestFamilyKey)
+	if requestFamilyKey == "" {
+		requestFamilyKey = request.ScienceCacheKey
+	}
+	requestFamilyDigest := digestParts(
+		string(request.Kind), requestFamilyKey, request.Source.Provider,
+		request.Source.RunID, request.Source.GridProfile, request.Source.GeometryDigest,
+	)
 	idempotencyDigest := digestParts(request.OwnerID, string(request.Kind), request.IdempotencyKey)
 	now := coordinator.config.Now().UTC()
 
@@ -215,7 +225,7 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		return nil, ErrUnavailable
 	}
 	if existing, exists := coordinator.idempotency[idempotencyDigest]; exists {
-		if existing.scienceDigest != scienceDigest {
+		if existing.requestFamilyDigest != requestFamilyDigest {
 			coordinator.mutex.Unlock()
 			return nil, ErrIdempotencyConflict
 		}
@@ -243,7 +253,8 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 			return nil, err
 		}
 		job := &directionalJob{
-			id: jobID, kind: request.Kind, scienceDigest: scienceDigest, scienceCacheKey: request.ScienceCacheKey, source: request.Source,
+			id: jobID, kind: request.Kind, scienceDigest: scienceDigest, requestFamilyDigest: requestFamilyDigest,
+			scienceCacheKey: request.ScienceCacheKey, source: request.Source,
 			owners: make(map[string]struct{}), idempotencyKeys: make(map[string]string),
 			state: StateReady, createdAt: now, updatedAt: now, finishedAt: now,
 			result: cached, done: make(chan struct{}),
@@ -271,7 +282,8 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		return nil, err
 	}
 	job := &directionalJob{
-		id: jobID, kind: request.Kind, scienceDigest: scienceDigest, scienceCacheKey: request.ScienceCacheKey, source: request.Source,
+		id: jobID, kind: request.Kind, scienceDigest: scienceDigest, requestFamilyDigest: requestFamilyDigest,
+		scienceCacheKey: request.ScienceCacheKey, source: request.Source,
 		payload: append(json.RawMessage(nil), request.Payload...),
 		owners:  make(map[string]struct{}), idempotencyKeys: make(map[string]string),
 		state: StateQueued, createdAt: now, updatedAt: now, done: make(chan struct{}),
@@ -344,7 +356,10 @@ func (coordinator *Coordinator) OpenResult(ownerID, jobID string) (*os.File, Res
 		coordinator.mutex.Unlock()
 		return nil, Result{}, ErrNotFound
 	}
-	scienceDigest := job.scienceDigest
+	scienceDigest := job.publishedDigest
+	if scienceDigest == "" {
+		scienceDigest = job.scienceDigest
+	}
 	coordinator.mutex.Unlock()
 	return coordinator.cache.open(scienceDigest)
 }
@@ -472,13 +487,24 @@ func (coordinator *Coordinator) execute(ctx context.Context, runner Runner, job 
 		})
 	}
 	var result Result
+	publicationDigest := job.scienceDigest
+	finalScienceCacheKey := job.scienceCacheKey
 	if err == nil {
+		if candidate := strings.TrimSpace(runnerResult.FinalScienceCacheKey); candidate != "" {
+			finalScienceCacheKey = candidate
+		}
 		if !runnerResultMatchesSource(runnerResult, job.source) {
 			err = CodedError{Code: "source_mismatch", Err: errors.New("runner result differs from pinned source")}
+		} else if len(finalScienceCacheKey) > 4096 {
+			err = CodedError{Code: "science_identity_mismatch", Err: errors.New("runner did not return a valid final science cache identity")}
 		} else if contextErr := ctx.Err(); contextErr != nil {
 			err = contextErr
 		} else {
-			result, err = coordinator.cache.publish(ctx, job.kind, job.scienceDigest, workspace, runnerResult)
+			publicationDigest = digestParts(
+				string(job.kind), finalScienceCacheKey, job.source.Provider,
+				job.source.RunID, job.source.GridProfile, job.source.GeometryDigest,
+			)
+			result, err = coordinator.cache.publish(ctx, job.kind, publicationDigest, workspace, runnerResult)
 		}
 	}
 	if workspace != "" {
@@ -494,6 +520,14 @@ func (coordinator *Coordinator) execute(ctx context.Context, runner Runner, job 
 	if !job.terminal() {
 		if err == nil {
 			job.result = result
+			if coordinator.scienceJobs[job.scienceDigest] == job {
+				delete(coordinator.scienceJobs, job.scienceDigest)
+			}
+			job.publishedDigest = publicationDigest
+			job.scienceCacheKey = finalScienceCacheKey
+			if _, exists := coordinator.scienceJobs[publicationDigest]; !exists {
+				coordinator.scienceJobs[publicationDigest] = job
+			}
 			coordinator.finishJobLocked(job, StateReady, result, "", nil, now)
 		} else {
 			code := failureCode(err)
@@ -659,6 +693,9 @@ func (coordinator *Coordinator) removeCompletedLocked(job *directionalJob) {
 	if coordinator.scienceJobs[job.scienceDigest] == job {
 		delete(coordinator.scienceJobs, job.scienceDigest)
 	}
+	if job.publishedDigest != "" && coordinator.scienceJobs[job.publishedDigest] == job {
+		delete(coordinator.scienceJobs, job.publishedDigest)
+	}
 	for digest := range job.idempotencyKeys {
 		if coordinator.idempotency[digest] == job {
 			delete(coordinator.idempotency, digest)
@@ -694,6 +731,9 @@ func validateRequest(request Request) error {
 	}
 	if request.ScienceCacheKey == "" || len(request.ScienceCacheKey) > 4096 {
 		return errors.New("directional science cache key is invalid")
+	}
+	if len(request.RequestFamilyKey) > 4096 {
+		return errors.New("directional request family key is invalid")
 	}
 	for _, value := range []string{request.Source.Provider, request.Source.RunID, request.Source.GridProfile, request.Source.GeometryDigest} {
 		if strings.TrimSpace(value) == "" || len(value) > 4096 {

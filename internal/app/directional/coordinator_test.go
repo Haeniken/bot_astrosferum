@@ -72,6 +72,105 @@ func TestCoordinatorPinsScienceCacheKeyIntoExecution(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPublishesResolvedScienceIdentityAndReusesIt(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	runner := RunnerFunc(func(_ context.Context, execution Execution) (RunnerResult, error) {
+		calls.Add(1)
+		result, err := writeRunnerDataset(execution, `{"resolved":true}`)
+		result.FinalScienceCacheKey = "final-profile-digest-key"
+		return result, err
+	})
+	coordinator := newTestCoordinator(t, t.TempDir(), 1, 4, time.Hour, time.Now)
+	registerBoth(t, coordinator, runner)
+	startCoordinator(t, coordinator)
+
+	first, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindHorizon, OwnerID: "owner-1", IdempotencyKey: "prepare-1", RequestFamilyKey: "stable-family",
+		ScienceCacheKey: "preparation-key", Source: testSourceIdentity(), Payload: json.RawMessage(`"payload"`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := coordinator.OpenResult("owner-1", first.ID())
+	if err != nil {
+		t.Fatalf("open result published under refined identity: %v", err)
+	}
+	_ = file.Close()
+	second := submitTest(t, coordinator, KindHorizon, "owner-2", "prepare-2", "final-profile-digest-key", "ignored")
+	if _, err := second.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("runner calls = %d, want one resolved publication reused from cache", got)
+	}
+	retry, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindHorizon, OwnerID: "owner-1", IdempotencyKey: "prepare-1",
+		RequestFamilyKey: "stable-family", ScienceCacheKey: "final-profile-digest-key",
+		Source: testSourceIdentity(), Payload: json.RawMessage(`"ignored"`),
+	})
+	if err != nil {
+		t.Fatalf("idempotent retry using final identity: %v", err)
+	}
+	if _, err := retry.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorIdempotentRetryJoinsRunningRefinedRequestFamily(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	runner := RunnerFunc(func(ctx context.Context, execution Execution) (RunnerResult, error) {
+		calls.Add(1)
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return RunnerResult{}, ctx.Err()
+		}
+		result, err := writeRunnerDataset(execution, `{"resolved":true}`)
+		result.FinalScienceCacheKey = "final-profile-digest-key"
+		return result, err
+	})
+	coordinator := newTestCoordinator(t, t.TempDir(), 1, 4, time.Hour, time.Now)
+	registerBoth(t, coordinator, runner)
+	startCoordinator(t, coordinator)
+
+	first, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindHorizon, OwnerID: "owner", IdempotencyKey: "same-attempt", RequestFamilyKey: "stable-family",
+		ScienceCacheKey: "preparation-key", Source: testSourceIdentity(), Payload: json.RawMessage(`"payload"`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	retry, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindHorizon, OwnerID: "owner", IdempotencyKey: "same-attempt", RequestFamilyKey: "stable-family",
+		ScienceCacheKey: "final-profile-digest-key", Source: testSourceIdentity(), Payload: json.RawMessage(`"ignored"`),
+	})
+	if err != nil {
+		t.Fatalf("running idempotent retry using refined science identity: %v", err)
+	}
+	if retry.ID() != first.ID() {
+		t.Fatalf("retry job = %q, want existing %q", retry.ID(), first.ID())
+	}
+	close(release)
+	if _, err := first.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retry.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("runner calls = %d, want one", got)
+	}
+}
+
 func TestCoordinatorMixedKindsStrictFIFOAndSingleActive(t *testing.T) {
 	runner := newControlledRunner()
 	coordinator := newTestCoordinator(t, t.TempDir(), 8, 32, time.Hour, time.Now)

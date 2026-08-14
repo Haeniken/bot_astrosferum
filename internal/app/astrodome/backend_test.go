@@ -129,6 +129,9 @@ func TestBackendPreparePinsProductionGridForDenseStorageAndRollingWindow(t *test
 		request.CelestialEphemerisVersion != astronomy.CelestialEphemerisVersion {
 		t.Fatalf("calculation request provenance = %+v", request)
 	}
+	if request.TerrainSkyline.Source != "disabled" || request.TerrainSkyline.Version != forecast.TerrainSkylineVersion {
+		t.Fatalf("calculation request terrain provenance = %+v", request.TerrainSkyline)
+	}
 	if strings.Contains(string(prepared.Payload), admission.Point.Name) || strings.Contains(string(prepared.Payload), `"language"`) {
 		t.Fatal("presentation/private point metadata leaked into the science payload")
 	}
@@ -145,6 +148,61 @@ func TestBackendPreparePinsProductionGridForDenseStorageAndRollingWindow(t *test
 	if !strings.HasPrefix(prepared.ScienceCacheKey, directional.AstrodomeDatasetWriterVersion+":sha256:") {
 		t.Fatalf("calculation cache identity = %q", prepared.ScienceCacheKey)
 	}
+}
+
+type fixedTerrainSkylineSource struct{ profile forecast.TerrainSkyline }
+
+func (source fixedTerrainSkylineSource) CacheKey(forecast.Location) (string, bool, error) {
+	return "fixed-terrain-profile", true, nil
+}
+
+func (source fixedTerrainSkylineSource) Resolve(context.Context, forecast.Location) (forecast.TerrainSkyline, error) {
+	return source.profile, nil
+}
+
+func TestBackendBindsTerrainDigestToRequestAndCacheIdentity(t *testing.T) {
+	t.Parallel()
+	manifest := astrodomeManifestFixture(t, model.StorageProfileDense)
+	location := forecast.Location{Latitude: 55, Longitude: 37, TimeZone: "UTC"}
+	samples := make([]forecast.TerrainSkylineSample, forecast.TerrainSkylineAzimuthCount)
+	for index := range samples {
+		samples[index] = forecast.TerrainSkylineSample{
+			AzimuthDegrees:           float64(index),
+			ElevationDegrees:         -3.141592653589793 + float64(index)*0.017453292519943295,
+			ObstacleSurfaceDistanceM: 60.123456789012345 + float64(index)*149.98765432109876,
+		}
+	}
+	profile, err := forecast.NewSyntheticTerrainSkyline(location.Latitude, location.Longitude, 100, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newBackend := func(terrain TerrainSkylineSource) *Backend {
+		backend, err := NewBackend(Config{
+			Enabled: true, DataRoot: "/unused", MaxStaleAge: 12 * time.Hour, TimeZones: fixedTimeZone("UTC"),
+			Now: func() time.Time { return manifest.BaseTime }, LoadCurrent: func(string) (iconeu.LoadedDomeManifest, error) { return manifest, nil },
+			Calibration: forecast.DefaultAstrodomeScienceCalibration(), Terrain: terrain,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return backend
+	}
+	admission := directional.AstrodomeAdmission{TelegramUserID: 1, Point: directional.SavedPoint{Latitude: location.Latitude, Longitude: location.Longitude}}
+	enabled, err := newBackend(fixedTerrainSkylineSource{profile}).Prepare(context.Background(), admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := newBackend(disabledTerrainSkylineSource{}).Prepare(context.Background(), admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.ScienceCacheKey == disabled.ScienceCacheKey || bytes.Equal(enabled.Payload, disabled.Payload) {
+		t.Fatal("terrain provenance did not change immutable Astrodome request/cache identity")
+	}
+	if len(enabled.Payload) > maximumCalculationRequestBytes {
+		t.Fatalf("GLO-30 request payload has %d bytes, maximum is %d", len(enabled.Payload), maximumCalculationRequestBytes)
+	}
+	t.Logf("representative GLO-30 request payload: %d bytes", len(enabled.Payload))
 }
 
 func TestCalculationRequestRejectsStaleCelestialEphemeris(t *testing.T) {

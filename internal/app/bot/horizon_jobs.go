@@ -28,7 +28,7 @@ const (
 	HorizonActionID       ActionID = "horizon.v1"
 	HorizonProviderICONEU string   = "icon-eu"
 
-	horizonCacheSchema     = "horizon-cache-v4-straight-ray"
+	horizonCacheSchema     = "horizon-cache-v7-glo30-informational-skyline"
 	horizonActionKeyFile   = ".horizon-action-key"
 	horizonActionTagBytes  = 8
 	horizonActionCoreParts = 4
@@ -59,6 +59,20 @@ type HorizonSource interface {
 	Series(context.Context, string, forecast.HorizonPlan) ([]forecast.HorizonSnapshot, error)
 }
 
+type TerrainSkylineSource interface {
+	CacheKey(forecast.Location) (string, bool, error)
+	Resolve(context.Context, forecast.Location) (forecast.TerrainSkyline, error)
+}
+
+type disabledTerrainSkylineSource struct{}
+
+func (disabledTerrainSkylineSource) Resolve(context.Context, forecast.Location) (forecast.TerrainSkyline, error) {
+	return forecast.DisabledTerrainSkyline(), nil
+}
+func (disabledTerrainSkylineSource) CacheKey(forecast.Location) (string, bool, error) {
+	return forecast.TerrainSkylineVersion + ":disabled", true, nil
+}
+
 // HorizonMessenger is the exact delivery/acknowledgement subset used by the
 // heavy workflow. HorizonJobs never imports either platform package.
 type HorizonMessenger interface {
@@ -81,11 +95,12 @@ type HorizonDatasetMessenger interface {
 // HorizonRenderInput contains only already-fetched and already-computed data.
 // A render adapter can map it directly to render.HorizonInput.
 type HorizonRenderInput struct {
-	Location forecast.Location
-	Provider string
-	RunID    string
-	Grid     string
-	Frames   []forecast.HorizonFrame
+	Location       forecast.Location
+	Provider       string
+	RunID          string
+	Grid           string
+	Frames         []forecast.HorizonFrame
+	TerrainSkyline forecast.TerrainSkyline
 }
 
 // HorizonRenderFunc renders one PNG at destination. Implementations should
@@ -102,6 +117,7 @@ type HorizonJobsConfig struct {
 	EstimatedDuration      time.Duration
 	MaxStaleAge            time.Duration
 	RenderAlgorithmVersion string
+	Terrain                TerrainSkylineSource
 }
 
 // HorizonButtonRequest is built from the successfully delivered ordinary
@@ -120,6 +136,8 @@ type horizonRequest struct {
 	Location                  forecast.Location
 	ObserverSurfaceElevationM float64
 	Language                  userLanguage
+	TerrainSkyline            forecast.TerrainSkyline
+	TerrainPreparationKey     string
 }
 
 type horizonWaiter struct {
@@ -173,6 +191,7 @@ type HorizonJobs struct {
 	logf               func(string, ...any)
 	now                func() time.Time
 	compute            func(context.Context, []forecast.HorizonSnapshot, forecast.HorizonPlan, forecast.OverallIndexCalibration) ([]forecast.HorizonFrame, error)
+	terrain            TerrainSkylineSource
 	mu                 sync.Mutex
 	started            bool
 	closed             bool
@@ -234,9 +253,12 @@ func NewHorizonJobs(config HorizonJobsConfig, source HorizonSource, renderer Hor
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	if config.Terrain == nil {
+		config.Terrain = disabledTerrainSkylineSource{}
+	}
 	deliveryCapacity := max(16, config.QueueSize*8)
 	return &HorizonJobs{
-		config: config, source: source, render: renderer, calibration: calibration,
+		config: config, source: source, terrain: config.Terrain, render: renderer, calibration: calibration,
 		cache: cache, actionKey: actionKey, resolver: resolver, logf: logf, now: time.Now,
 		compute: forecast.ComputeHorizonSeries, queue: make(chan *horizonJob, config.QueueSize),
 		delivery:           make(chan horizonDelivery, deliveryCapacity),
@@ -428,6 +450,27 @@ func (jobs *HorizonJobs) deliverRequest(ctx context.Context, platform string, me
 		return nil
 	}
 	request.Location.TimeZone = jobs.resolveTimeZone(request.Location)
+	terrainKey, ready, err := jobs.terrain.CacheKey(request.Location)
+	if err != nil {
+		jobs.sendStatus(messenger, chatID, language.text(
+			"Не удалось подготовить профиль рельефа Copernicus DEM GLO-30.",
+			"Could not prepare the Copernicus DEM GLO-30 terrain skyline."))
+		completeHorizonMessenger(messenger, err)
+		return nil
+	}
+	request.TerrainPreparationKey = terrainKey
+	if ready {
+		request.TerrainSkyline, err = jobs.terrain.Resolve(ctx, request.Location)
+		if err != nil {
+			jobs.sendStatus(messenger, chatID, language.text(
+				"Не удалось прочитать профиль рельефа Copernicus DEM GLO-30.",
+				"Could not read the Copernicus DEM GLO-30 terrain skyline."))
+			completeHorizonMessenger(messenger, err)
+			return nil
+		}
+	} else {
+		request.TerrainSkyline = forecast.PendingTerrainSkyline(request.Location)
+	}
 	key, err := horizonCacheKey(request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
 	if err != nil {
 		jobs.sendStatus(messenger, chatID, language.text(
@@ -535,6 +578,14 @@ func validateHorizonRequest(request horizonRequest) error {
 	}
 	if !finiteHorizon(request.ObserverSurfaceElevationM) || request.ObserverSurfaceElevationM < -1000 || request.ObserverSurfaceElevationM > 10000 || request.ObserverSurfaceElevationM != math.Round(request.ObserverSurfaceElevationM) {
 		return ErrInvalidActionData
+	}
+	if request.TerrainSkyline.Version != "" {
+		if err := request.TerrainSkyline.Validate(); err != nil {
+			return ErrInvalidActionData
+		}
+		if !request.TerrainSkyline.MatchesLocation(request.Location) {
+			return ErrInvalidActionData
+		}
 	}
 	return nil
 }
@@ -701,6 +752,9 @@ func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCa
 	if err := validateHorizonRequest(request); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(request.TerrainPreparationKey) == "" {
+		return "", ErrInvalidActionData
+	}
 	calibrationJSON, err := json.Marshal(calibration)
 	if err != nil {
 		return "", err
@@ -716,6 +770,8 @@ func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCa
 		fmt.Sprintf("hhl_m=%d", int64(math.Round(request.ObserverSurfaceElevationM))),
 		"timezone=" + strings.TrimSpace(request.Location.TimeZone),
 		"forecast=" + forecast.HorizonAlgorithmVersion,
+		"terrain_preparation=" + request.TerrainPreparationKey,
+		"terrain_profile=" + horizonTerrainCacheIdentity(request.TerrainSkyline),
 		"grid_profile=" + forecast.HorizonGridProfile,
 		"render=" + strings.TrimSpace(renderAlgorithmVersion),
 		fmt.Sprintf("geometric_elevation=%.6f", forecast.HorizonGeometricElevationDegrees),
@@ -727,6 +783,22 @@ func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCa
 	}, "|")
 	digest := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func horizonTerrainCacheIdentity(profile forecast.TerrainSkyline) string {
+	switch profile.Source {
+	case "disabled":
+		return profile.Version + ":disabled"
+	case "pending":
+		return profile.Version + ":pending"
+	default:
+		return profile.Version + ":profile_sha256=" + profile.DigestSHA256 + ":manifest_sha256=" + profile.InputManifestSHA256
+	}
+}
+
+func horizonRequestFamilyKey(request horizonRequest, calibration forecast.OverallIndexCalibration, renderAlgorithmVersion string) (string, error) {
+	request.TerrainSkyline = forecast.PendingTerrainSkyline(request.Location)
+	return horizonCacheKey(request, calibration, renderAlgorithmVersion)
 }
 
 func (jobs *HorizonJobs) enqueue(candidate *horizonJob, waiter horizonWaiter) (position int, joined bool, err error) {
@@ -858,6 +930,33 @@ func (jobs *HorizonJobs) process(job *horizonJob) {
 	}
 	ctx, cancel := context.WithTimeout(jobs.root, jobs.config.JobTimeout)
 	defer cancel()
+	if job.request.TerrainSkyline.Source == "pending" {
+		key, _, keyErr := jobs.terrain.CacheKey(job.request.Location)
+		if keyErr != nil || key != job.request.TerrainPreparationKey {
+			err := errors.New("terrain preparation identity differs from runner configuration")
+			jobs.logJobError("terrain_identity", job, err)
+			jobs.deliverJob(job, "", err)
+			return
+		}
+		resolved, resolveErr := jobs.terrain.Resolve(ctx, job.request.Location)
+		if resolveErr != nil {
+			jobs.logJobError("terrain_preparation", job, resolveErr)
+			jobs.deliverJob(job, "", resolveErr)
+			return
+		}
+		job.request.TerrainSkyline = resolved
+	}
+	finalKey, keyErr := horizonCacheKey(job.request, jobs.calibration, jobs.config.RenderAlgorithmVersion)
+	if keyErr != nil {
+		jobs.logJobError("terrain_identity", job, keyErr)
+		jobs.deliverJob(job, "", keyErr)
+		return
+	}
+	publicationKey := finalKey
+	if path, ok := jobs.cache.load(publicationKey, jobs.now()); ok {
+		jobs.deliverJob(job, path, nil)
+		return
+	}
 	snapshots, err := jobs.source.Series(ctx, job.request.RunID, job.plan)
 	if err != nil {
 		jobs.logJobError("source", job, err)
@@ -880,22 +979,28 @@ func (jobs *HorizonJobs) process(job *horizonJob) {
 		jobs.deliverJob(job, "", err)
 		return
 	}
+	if err := forecast.ApplyTerrainSkylineToHorizon(frames, job.request.TerrainSkyline); err != nil {
+		jobs.logJobError("terrain", job, err)
+		jobs.deliverJob(job, "", err)
+		return
+	}
 	if err := ctx.Err(); err != nil {
 		jobs.logJobError("calculation", job, err)
 		jobs.deliverJob(job, "", err)
 		return
 	}
-	path, err := jobs.cache.publishBundle(job.key, jobs.now(), func(destination, datasetDestination string) error {
+	path, err := jobs.cache.publishBundle(publicationKey, jobs.now(), func(destination, datasetDestination string) error {
 		if renderErr := jobs.render(ctx, destination, HorizonRenderInput{
 			Location: job.request.Location, Provider: "ICON-EU",
 			RunID: job.request.RunID, Grid: "ICON-EU 0.0625°", Frames: frames,
+			TerrainSkyline: job.request.TerrainSkyline,
 		}, job.request.Language.renderCode()); renderErr != nil {
 			return renderErr
 		}
 		dataset, datasetErr := render.PrepareHorizonInteractiveDataset(render.HorizonInput{
 			Location: job.request.Location, Provider: "ICON-EU", RunID: job.request.RunID,
-			Grid: "ICON-EU 0.0625°", Frames: frames,
-		}, job.key, job.request.ObserverSurfaceElevationM, jobs.calibration)
+			Grid: "ICON-EU 0.0625°", Frames: frames, TerrainSkyline: job.request.TerrainSkyline,
+		}, publicationKey, job.request.ObserverSurfaceElevationM, jobs.calibration)
 		if datasetErr != nil {
 			return datasetErr
 		}
