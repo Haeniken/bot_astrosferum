@@ -90,7 +90,7 @@ complete physical recalculation; finished seeing, `tau0`, cloud transmission,
 Overall, and data quality are never interpolated. GLO-30 is rendered as an
 independent informational skyline: it never suppresses a completed atmospheric
 cell. The current production writer is production-v2/v33/v23 with dataset
-schema 7. See [Architecture](docs/architecture.en.md), the
+schema 8. See [Architecture](docs/architecture.en.md), the
 [scientific method](docs/scientific-method.en.md), and the separate
 [site repository](https://github.com/Haeniken/site-astrosferum).
 

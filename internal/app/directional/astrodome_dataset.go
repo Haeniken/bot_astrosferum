@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	AstrodomeDatasetSchemaVersion = 7
+	AstrodomeDatasetSchemaVersion = 8
 	// AstrodomeDatasetWriterVersion participates in the calculation cache key.
 	// Increment it when a writer correction requires regeneration while the
 	// already-declared dataset schema and scientific meaning remain unchanged.
-	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v8-glo30-informational-skyline"
+	AstrodomeDatasetWriterVersion = "astrodome-dataset-writer-v9-observing-ephemerides"
 	maximumAstrodomeDatasetBytes  = 128 << 20
 )
 
@@ -77,6 +77,7 @@ type AstrodomeDataset struct {
 	CalibrationSHA256             string                     `json:"science_calibration_sha256,omitempty"`
 	CelestialEphemerisVersion     string                     `json:"celestial_ephemeris_version"`
 	CelestialTracks               []astronomy.CelestialTrack `json:"celestial_tracks"`
+	PolarisTrack                  astronomy.PolarisTrack     `json:"polaris_track"`
 	TerrainSkyline                forecast.TerrainSkyline    `json:"terrain_skyline"`
 	Grid                          AstrodomeDatasetGrid       `json:"grid"`
 	ValidTimes                    []time.Time                `json:"valid_times"`
@@ -212,6 +213,7 @@ type AstrodomeDatasetInput struct {
 	CalibrationVersion       string
 	CalibrationSHA256        string
 	CelestialTracks          []astronomy.CelestialTrack
+	PolarisTrack             astronomy.PolarisTrack
 	TerrainSkyline           forecast.TerrainSkyline
 	Frames                   []AstrodomeDatasetFrameInput
 }
@@ -326,6 +328,7 @@ func BuildAstrodomeDataset(input AstrodomeDatasetInput) (AstrodomeDataset, error
 		CalibrationSHA256:             input.CalibrationSHA256,
 		CelestialEphemerisVersion:     astronomy.CelestialEphemerisVersion,
 		CelestialTracks:               input.CelestialTracks,
+		PolarisTrack:                  input.PolarisTrack,
 		TerrainSkyline:                input.TerrainSkyline,
 		Grid: AstrodomeDatasetGrid{
 			FrameCount: len(frames), NodeCount: profile.NodeCount(),

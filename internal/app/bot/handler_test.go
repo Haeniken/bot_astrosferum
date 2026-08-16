@@ -593,7 +593,7 @@ func TestStructuredWebsiteForecastSkipsPNGRasterizationAndDelivery(t *testing.T)
 	if err := handler.replyToLocation(t.Context(), 501, 501, 59.9386, 30.3141, languageEnglish); err != nil {
 		t.Fatal(err)
 	}
-	if len(messenger.dataset) == 0 || !strings.Contains(string(messenger.dataset), `"schema_version":"forecast-interactive-v5-explicit-heuristics"`) {
+	if len(messenger.dataset) == 0 || !strings.Contains(string(messenger.dataset), `"schema_version":"forecast-interactive-v6-observing-ephemerides"`) {
 		t.Fatalf("structured website dataset = %q", messenger.dataset)
 	}
 	if messenger.photos != 0 || messenger.documents != 0 {

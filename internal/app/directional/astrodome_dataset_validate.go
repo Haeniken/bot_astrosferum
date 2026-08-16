@@ -104,8 +104,13 @@ func (dataset AstrodomeDataset) validate() error {
 	if err := forecast.ValidateAstrodomeValidTimes(dataset.ValidTimes); err != nil {
 		return err
 	}
-	if err := validateAstrodomeCelestialTracks(dataset.CelestialEphemerisVersion, dataset.CelestialTracks, dataset.ValidTimes); err != nil {
+	if err := validateAstrodomeCelestialTracks(dataset.CelestialEphemerisVersion, dataset.CelestialTracks, dataset.ValidTimes, forecast.Location{
+		Latitude: dataset.RequestedLocation.Latitude, Longitude: dataset.RequestedLocation.Longitude, TimeZone: dataset.RequestedLocation.TimeZone,
+	}); err != nil {
 		return err
+	}
+	if err := astronomy.ValidatePolarisTrack(dataset.PolarisTrack, dataset.ValidTimes); err != nil {
+		return fmt.Errorf("astrodome Polaris track: %w", err)
 	}
 	if err := validateAstrodomeDatasetGrid(dataset.Grid, profile, len(dataset.ValidTimes)); err != nil {
 		return err
@@ -175,11 +180,11 @@ func validateAstrodomeTerrainSkylineNode(
 	return nil
 }
 
-func validateAstrodomeCelestialTracks(version string, tracks []astronomy.CelestialTrack, validTimes []time.Time) error {
+func validateAstrodomeCelestialTracks(version string, tracks []astronomy.CelestialTrack, validTimes []time.Time, location forecast.Location) error {
 	if version != astronomy.CelestialEphemerisVersion {
 		return fmt.Errorf("astrodome celestial ephemeris version must be %q", astronomy.CelestialEphemerisVersion)
 	}
-	return astronomy.ValidateCelestialTracks(tracks, validTimes)
+	return astronomy.ValidateCelestialTracksForLocation(tracks, validTimes, location)
 }
 
 func validateAstrodomeDirectionContract(dataset AstrodomeDataset) error {

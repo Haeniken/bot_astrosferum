@@ -896,7 +896,7 @@ The displayed `Transparency heuristic, %` row is a versioned ordering rule, not 
 
 DWD defines [`VIS` in metres and `TQV` in kg/m²](https://isabel.dwd.de/DWD/publikationen/dokumentation/grib/DWD_GRIB2_PARAMETER.htm); kg/m² is numerically equivalent to mm PWV. True optical transparency needs direct AOD/extinction observations: [DWD derives AOD and PWV through Sun, Moon, and stellar photometry](https://www.dwd.de/EN/research/observing_atmosphere/lindenberg_column/radiation/photometry.html). The proxy is therefore only for comparing hours in one forecast and is unsuitable for absolute photometry.
 
-A droplet means a small `T−Td` spread and possible dew and never penalizes seeing. Each event icon is placed at its actual X position. Mercury through Neptune use the published [JPL approximate-position elements](https://ssd.jpl.nasa.gov/planets/approx_pos.html) with one light-time iteration; Pluto uses the Meeus periodic series. The same versioned hourly topocentric coordinates feed chart 1 and the Astrodome, and an independent all-body regression is checked against a JPL Horizons `AIRLESS` observer table. They are planning ephemerides rather than integrated navigation ephemerides. The photorealistic body icons are presentation-only and do not encode angular size, phase, orientation, or brightness.
+A droplet means a small `T−Td` spread and possible dew and never penalizes seeing. Each event icon is placed at its actual X position. Mercury through Neptune use the published [JPL approximate-position elements](https://ssd.jpl.nasa.gov/planets/approx_pos.html) with one light-time iteration; Pluto uses the Meeus periodic series. The same versioned hourly topocentric coordinates feed chart 1 and the Astrodome, and an independent all-body regression is checked against a JPL Horizons `AIRLESS` observer table. They are planning ephemerides rather than integrated navigation ephemerides. The photorealistic body icons are presentation-only and do not encode angular size, phase, orientation, or brightness; the interactive result reports those server-computed diagnostics separately.
 
 Preferred implementation: one pure-Go renderer based on `gonum/plot` and `golang.org/x/image` with an embedded Cyrillic-capable font. A Python/Matplotlib container is unnecessary.
 
@@ -1839,9 +1839,9 @@ published. Their identity includes coordinates, run and manifest digest,
 versions, ephemerides, calibration, and the complete static GLO-30 terrain profile. Calculation-request schema v6 also binds the
 science-path version, apparent-direction contract, and SHA-256 of the complete
 configured science calibration; the same digest is retained in the dataset.
-Dataset schema 7 carries the profile-derived per-node skyline elevation and
+Dataset schema 8 carries the profile-derived per-node skyline elevation and
 informational obstruction predicate without changing the atmospheric state.
-The narrow `astrodome-dataset-writer-v8-glo30-informational-skyline` identity also participates in the
+The narrow `astrodome-dataset-writer-v9-observing-ephemerides` identity also participates in the
 calculation cache key, so a writer correction regenerates the payload without
 claiming a different scientific formula or dataset schema.
 An earlier request or a bot/worker calibration mismatch fails closed rather
@@ -1948,7 +1948,7 @@ JSON, while a website-only miss deliberately skips PNG rasterization. Horizon re
 model-surface height under the same model-work queue, then uses the same
 per-user checks, Horizon cache, shared directional FIFO, and renderer as the
 signed bot action. The bot serializes those already prepared values as
-versioned `forecast-interactive-v5-explicit-heuristics` or `horizon-interactive-v7-glo30-informational-skyline` JSON; the
+versioned `forecast-interactive-v6-observing-ephemerides` or `horizon-interactive-v7-glo30-informational-skyline` JSON; the
 browser never reimplements a formula or interpolates a finished result. The
 weather and cloud retain one exact native hourly axis, Overall retains a
 narrower exact subset of that axis when pressure-profile support ends earlier, while
@@ -1957,12 +1957,20 @@ axis; none is resampled from another. Overall may cover a narrower exact subset
 when the current surface/cloud window extends beyond pressure-profile support.
 Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
-`forecast-interactive-v5-explicit-heuristics` also pins `algorithms.overall` as
+`forecast-interactive-v6-observing-ephemerides` also pins `algorithms.overall` as
 `overall-astronomy-index-v2-fog-heuristic-availability`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
 `algorithms.overall_calibration_sha256` and the exact
-`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3` ephemeris identity. It carries ten
-canonical tracks whose samples match the exact weather-hour axis. The browser
+`celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4` ephemeris identity. It carries ten
+canonical tracks whose samples match the exact weather-hour axis, including
+observer distance, angular diameter, phase, illuminated fraction, explicit
+Johnson-V applicability/value, solar elongation, daily culmination, Mars
+season, and Saturn ring opening. The status distinguishes published-domain
+values, explicit out-of-domain absence for Venus/Jupiter/Saturn, and the
+labeled Mars/Pluto planning approximations. Astrodome schema 8 additionally
+carries one strict SIMBAD revised-Hipparcos Polaris track with fixed
+ICRS/J2000 SynScan
+coordinates; Polaris is not added to Forecast 1/7 or Overall. The browser
 validates this provenance before drawing and uses spherical interpolation only
 to densify dashed presentation paths; selected-hour values remain the stored
 server samples. The separate Johnson-V diagnostic retains
