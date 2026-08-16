@@ -3,7 +3,7 @@
 [← Certified geometry and root isolation](scientific-method-astrodome-numerical-roots.en.md) ·
 [Main scientific method](scientific-method.en.md)
 
-**Status:** part of the canonical scientific method, version 2.1. Splitting the
+**Status:** part of the canonical scientific method, version 2.2. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 
@@ -26,7 +26,7 @@ representative by strictly more than $0.0005$ m; a
 probe at exactly the guard is not accepted. Every omitted one-sided
 classification sliver between an event and its physical probe first attempts
 an independent Lipschitz or one-sided derivative clearance. If neither proof
-closes, path v23 records the sliver in the limited approximation union from
+closes, path v24 records the sliver in the limited approximation union from
 (A28g); it may be published only below the one-metre cumulative ceiling.
 The science-kernel endpoint probe requests the 0.5-mm side guard and, for a
 short event-forced interval, is clipped only where the independently derived
@@ -37,7 +37,7 @@ empty only with a Lipschitz-clearance proof; otherwise it is refined locally to
 `0.0002 m`. At that proof scale it must yield sign-changing root
 evidence; any unresolved leaf fails closed without an overlap exception.
 Boundary ownership is never delegated to a floating-point `nextafter` step.
-Path v23 retains the v22 contraction of one same-event bracket whose
+Path v24 retains the v23 contraction of one same-event bracket whose
 existence and uniqueness have already been proved. It does not change the
 0.2-mm root radius, 0.2-mm terminal proof scale, 0.4-mm distinct-root
 proximity rejection, 0.5-mm side guard, bit-identical compounding,
@@ -49,7 +49,7 @@ probes neither merge bit-distinct roots nor choose a physical side inside the
 0.5-mm guard.
 
 For an omitted endpoint sliver, ordinary Lipschitz clearance remains the first
-test. HHL, full-level, cloud-tier, and raw bilinear PBL-clamp predicates also
+test. HHL, full-level, cloud-tier, and raw bilinear PBL predicates also
 have a one-sided derivative certificate. Let $x_p$ be the nearest unambiguously
 interior probe, $I_s$ the sliver between it and the horizontal-cell endpoint,
 $S_p$ the secant/curvature derivative enclosure on the adjacent fully interior
@@ -261,7 +261,7 @@ construct one without inventing a physical bound. Instead, v29 exposes the
 insufficient quadrature evidence as limited quality and uses a positive
 interior point estimate with a deliberately broad engineering allowance.
 
-The v29/v23 rule selection is exact:
+The v34/v24 rule selection is exact:
 
 - a panel with two numerical endpoints uses G7/K15 and its 1-cm adaptive
   floor;
@@ -273,7 +273,7 @@ The v29/v23 rule selection is exact:
   certified safe interior exists and the cumulative approximation ceiling is
   not exceeded;
 - an impossible certified split or any partition-signature mismatch also
-  fails closed. Path contract v23 must isolate and certify every reachable raw
+  fails closed. Path contract v24 must isolate and certify every reachable raw
   WMO decision breakpoint before quadrature; the science kernel never creates
   a breakpoint reactively.
 
@@ -341,7 +341,7 @@ r_l&=r_r=r.
 Thus the right absolute budget is the residual rather than an independently
 rounded product, so the two represented budgets preserve the incoming budget.
 The relative tolerance is unchanged. Every adaptive midpoint is explicitly
-marked numerical, whereas each breakpoint certified by path contract v23 —
+marked numerical, whereas each breakpoint certified by path contract v24 —
 including a raw WMO decision breakpoint — remains physical. Consequently each
 child is checked against the floor corresponding to its actual endpoint types,
 rather than inheriting the parent's two-sided guard.
@@ -608,7 +608,7 @@ rather than embedded; GL5/GL3 shares only the centre, GL3/GL2 shares no nodes,
 and GL2/GL1 shares no nodes. The
 half-tolerance repeat in reference mode and the partition-signature checks are
 engineering consistency tests, not proofs of smoothness. The quadrature also checks the actual HMNSP99
-branch at its evaluation nodes. Path contract v23 must already have isolated
+branch at its evaluation nodes. Path contract v24 must already have isolated
 every reachable raw WMO decision breakpoint; any categorical mismatch observed
 by quadrature fails closed rather than invoking an automatic kernel split.
 These science-partition tolerances do not relax the separately validated ODE
@@ -636,12 +636,12 @@ Implemented identities:
   `astrodome-icon-sphere-refraction-full-ciddor-dopri54-v3`;
 - refractivity: `ciddor-1996-phase-index-v1`;
 - ODE: `dormand-prince-5-4-event-v3`;
-- science path: `astrodome-science-path-v23`;
-- science kernel: `astrodome-science-kernel-v33-glo30-informational-skyline`.
+- science path: `astrodome-science-path-v24-native-mh`;
+- science kernel: `astrodome-science-kernel-v34-native-mh-glo30-informational-skyline`.
 
 Kernel v33 retains the v30 atmospheric integration core and the v32 static
 GLO-30 profile, but makes that profile an independent informational skyline:
-it no longer replaces a completed atmospheric node state. Kernel v30 and path contract v23 use one strict boundary-ownership contract
+it no longer replaces a completed atmospheric node state. Kernel v34 and path contract v24 use one strict boundary-ownership contract
 for physical and horizontal events: a maximum 0.2-mm root-localisation radius,
 0.4-mm proximity detection with fail-closed handling for bit-distinct roots, a
 0.5-mm side guard, and a 0.2-mm proof scale. The separate 1-mm
@@ -652,23 +652,21 @@ no `preview` override. An accepted root retains its complete evidence bracket;
 the stored representative cannot substitute for the interval proof or choose
 a side inside the guard.
 
-Path contract v23 retains the v22 secant/curvature monotonicity certificate and
+Path contract v24 retains the v23 secant/curvature monotonicity certificate and
 outward corner/interval arithmetic described above and adds the safeguarded
-interval-Newton contractor in (A26h) and paired-probe rule (A26j). A mixed PBL cell is first
-partitioned at strictly isolated `MH-500 m` and `MH-2000 m` decision roots;
-each resulting interval must prove one branch of the clamp before receiving
-the smooth certificate. Unresolved interior decision evidence remains
-fail-closed; only the explicitly bounded endpoint-sliver case follows (A28g).
-Where the upper clamp makes the PBL boundary exactly identical to the
-low-cloud top `HSURF+2000 m`, the planner registers the common zero set once
-rather than creating a false pair of distinct roots. Likewise,
+interval-Newton contractor in (A26h) and paired-probe rule (A26j). The native
+PBL boundary is the single smooth bilinear surface `HSURF+MH`; it receives the
+same residual, side-guard, secant and curvature proofs without 500/2000-m
+decision predicates. Missing/non-positive `MH` and unresolved interior root
+evidence remain fail closed; only the explicitly bounded endpoint-sliver case
+follows (A28g). Likewise,
 `mean-lapse(lower, upper=lower+1)` is not registered twice because it is
 algebraically identical to the instantaneous `lower/next-level` lapse
 predicate; the WMO decision itself is still evaluated.
 
 The dynamic dense-DOPRI formation-sum bound, direct ECEF denominators,
 $U=\max\{1,U_B\}$, explicit residual intervals, and ECEF grid predicates are
-part of path v23. Kernel v30 retains the removal of the ill-conditioned
+part of path v24. Kernel v34 retains the removal of the ill-conditioned
 extrapolatory Q5/Q3 path, adds positive-weight GL3/GL2 and GL2/GL1 pairs, and
 uses the limited positive midpoint path below the GL2 floor under the explicit
 one-metre cumulative approximation ceiling. Rule-specific recursion allocates
@@ -678,7 +676,7 @@ certify raw WMO decision breakpoints before quadrature; every partition
 mismatch in the kernel remains fail-closed.
 
 The bot calculator and cache, plus the independent site's dataset decoder and
-browser, accept only the current v33/v23 contract with an explicitly supported
+browser, accept only the current v34/v24 contract with an explicitly supported
 pinned grid profile; the production writer uses `production-v2`. Older datasets
 are not migrated or reinterpreted; a new successful calculation must replace
 an older fixture.
@@ -699,7 +697,7 @@ described as a 9,288/9,288 pass. Its report and executed test binary have
 SHA-256 values `00977e620d60029e3e3f23f4aeb31352d614c9e75af6fa9cb8050f1830afdb31`
 and `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`,
 respectively. This is a v28/v22 baseline and not a measurement of the current
-v33/v23 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
+v34/v24 writer. Repeated cold/warm cycles, simultaneous synchronization, payload
 measurement, and observational validation remain separate gates.
 
 This numerical revision does not alter the product contracts: a dataset has

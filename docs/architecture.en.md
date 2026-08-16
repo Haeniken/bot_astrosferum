@@ -6,7 +6,7 @@ The optional ICON-EU Horizon extension is implemented as a configuration-gated
 application capability. The directional atmospheric Astrodome calculator and
 authenticated account API are deployed here; the public application is owned
 by the independent `site-astrosferum` repository. The current production writer is
-production-v2 with science-kernel v33/path v23; the immutable v28/v22 full run
+production-v2 with science-kernel v34/path v24; the immutable v28/v22 full run
 remains the preceding measured baseline. Repeated cold/warm resource and
 observational gates remain open before public rollout.
 External sources last checked: 2026-07-28; last revision: 2026-08-14
@@ -679,7 +679,7 @@ smooth intensity penalty from one deterministic model member.
 
 Optical turbulence uses a hybrid calculation. Each hour takes its PBL boundary
 from single-level `ICON MH` and applies
-`h_PBL=clamp(MH,500,2000) m AGL`. From the surface to `h_PBL`, native ICON
+`h_PBL=MH m AGL` for a positive native mixed-layer depth. From the surface to `h_PBL`, native ICON
 `T/P/TKE/HHL` supplies `Cn²` through the Masciadri expression
 `3.35e−6·P^[2(1−2R/cp)]·theta^(−10/3)·|dtheta/dz|^(4/3)·TKE^(2/3)`;
 the centred gradient is evaluated on consecutive model levels `58…74`, then
@@ -692,12 +692,19 @@ multiplier is added. Each interval trapezoid averages endpoint values of
 `Cn²·|V|^(5/3)`; it never raises an interval-mean speed to `5/3`, which would
 bias the convex wind moment low by Jensen's inequality.
 
+Missing/non-positive `MH`, or contiguous native TKE support that does not
+reach it, is unavailable rather than silently replacing the provider
+boundary. At a geometric cut inside a pressure layer, pressure is reconstructed
+linearly in `ln(P)`; temperature and wind retain their documented primitive
+interpolation.
+
 The scalar Overall hour is rejected if vertical profile coverage or geometric
 `h^(5/3)`-moment coverage is below `90%`, or if the model/profile top is below
-`15 km AGL`. The stricter `complete` state requires both coverages at least
-`99%` and a top at or above `18 km AGL`. Consequently a valid `15…18 km`
-profile can be used only as partial, and every `ProfileQuality != complete`
-sets the chart's `!` marker.
+`15 km AGL`. The stricter `model_domain_complete` state requires both coverages
+at least `99%` and a top at or above `18 km AGL`. It means complete inside that
+retained model domain; it does not bound a positive turbulence
+tail above the model top. Consequently a valid `15…18 km` profile can be used
+only as partial, and every other `ProfileQuality` sets the chart's `!` marker.
 
 Seeing and `tau0` map logarithmically between `.env` boundaries
 `0.5…2.0 arcsec` and `5.2…1.6 ms`; `tau0` contributes inside the turbulence
@@ -1074,7 +1081,7 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v7
+  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v8
   dew_version: dew-v1
   conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
@@ -1088,8 +1095,6 @@ algorithms:
   overall_bad_seeing_arcsec: 2.0
   overall_best_coherence_time_ms: 5.2
   overall_bad_coherence_time_ms: 1.6
-  overall_boundary_layer_min_m: 500
-  overall_boundary_layer_top_m: 2000
   overall_ground_cn2_scale: 1.0
   overall_unresolved_cloud_obstruction: 0.45
   overall_surface_wind_max_penalty: 0.20
@@ -1238,7 +1243,7 @@ Do not log tokens, full update payloads, private message text, or exact user coo
 
 ### Stage 0 — mandatory data-source spike
 
-Measured results and remaining checks are consolidated in the [scientific method](scientific-method.en.md#6-data-source-contracts-and-server-verification). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global pressure, surface, model-level cloud/PBL data and native-grid point extraction are validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
+Measured results and remaining checks are consolidated in the [scientific method data-source contract](scientific-method-data-sources.en.md). ICON-EU keys, domain, current full-run volume, and timing are measured; ICON Global pressure, surface, model-level cloud/PBL data and native-grid point extraction are validated; ICON-Ru discovery metadata and topic are known. A real WIS notification and observational calibration remain outstanding.
 
 1. Download a minimal complete ICON-EU field set and record real filenames/GRIB keys.
 2. Confirm the open data geometry contains Saint Petersburg and Moscow.
@@ -1405,7 +1410,7 @@ values are never interpolated. CDO remapping weights are generated once per
 immutable footprint and reused. Astrodome retains its independent full Ciddor/
 Dormand--Prince refracted path. The scientific
 equations and limitations are specified in
-[the Horizon section of the scientific method](scientific-method.en.md#7-directional-horizon-analysis).
+[the Horizon section of the scientific method](scientific-method-horizon.en.md).
 
 Run identity is checked before any cache reuse or heavy work. The source checks
 the same current run before and after acquisition, the workflow checks again
@@ -1485,7 +1490,7 @@ and input-manifest SHA-256 digests. The coordinator verifies and atomically
 publishes under that final identity; the preparation key is never the final
 result-cache identity.
 
-The scientific marker is `horizon-spherical-straight-los-tke-hmnsp99-glo30-informational-v12`; the application
+The scientific marker is `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13`; the application
 cache schema is `horizon-cache-v7-glo30-informational-skyline`. Changing either a formula or the
 serialized/rendered contract requires changing the corresponding marker.
 
@@ -1565,8 +1570,8 @@ and numerical tolerances are in
 
 Physical breakpoints are first-class path inputs, not incidental products of
 adaptive quadrature. The current identities are
-`astrodome-science-path-v23` and
-`astrodome-science-kernel-v33-glo30-informational-skyline`. The maximum physical- and horizontal-event root
+`astrodome-science-path-v24-native-mh` and
+`astrodome-science-kernel-v34-native-mh-glo30-informational-skyline`. The maximum physical- and horizontal-event root
 localisation radius is 0.2 mm. Bit-identical represented `pathM` coordinates form
 one compound geometric breakpoint even when their event identities differ;
 the sorted union of event identities is retained and every associated
@@ -1646,23 +1651,19 @@ order in planner and kernel. Reachability proofs enumerate only predicates the
 discrete WMO algorithm can actually read. Smooth HHL, full-level, surface,
 cloud-tier, and WMO-bilinear boundaries retain the secant/curvature
 transversality certificate. At omitted horizontal-cell endpoint slivers, HHL,
-full-level, cloud-tier, and raw bilinear PBL-clamp predicates may additionally
+full-level, cloud-tier, and raw bilinear PBL predicates may additionally
 transport the adjacent interior derivative enclosure by the certified
 second-derivative bound. If neither the Lipschitz nor one-sided proof excludes a
-root, v23 records only the omitted sliver in the limited one-metre budget while
+root, v24 records only the omitted sliver in the limited one-metre budget while
 retaining complete root isolation over the certified interior.
-PBL receives the full root certificate only after the complete interval
-is certified inside one branch of `clamp(MH,500 m,2000 m)`. In a mixed cell,
-the planner strictly isolates the native bilinear decision roots `MH-500 m`
-and `MH-2000 m`, makes their evidence brackets mandatory endpoints, proves one
-branch on each resulting partition, and only then isolates the smooth PBL
-surface. Indeterminate/overlapping branch evidence fails closed. When the
-upper clamp makes the PBL boundary exactly equal to the low-cloud top
-`HSURF+2000 m`, the common zero set is registered once. Path v23 retains the v22
-the algebraically justified single registration of the shared
+PBL is the single smooth bilinear surface `HSURF+MH` for positive native
+`MH`. Path v24 isolates it directly with the same certified
+secant/curvature and residual-enclosure machinery; no 500/2000-m decision
+roots or clamp branches exist. Missing/non-positive `MH` remains fail closed.
+Path v24 retains the v23 algebraically justified single registration of the shared
 `mean-lapse(lower, upper=lower+1)` and instantaneous-lapse zero set.
 
-Path v23 retains the v22 contractor for a monotone root whose existence
+Path v24 retains the v23 contractor for a monotone root whose existence
 and uniqueness were already proved by strict opposite endpoint residual
 intervals and a derivative enclosure that excludes zero. It preserves that
 ancestor certificate and a separate root enclosure, then intersects the
@@ -1728,7 +1729,7 @@ accepted adaptive science pass and propagates its guarded higher/lower-rule
 estimates. The independent half-tolerance repeat, including its one-time split
 of every original physical/physical interval, is reserved for regression,
 calibration, and release verification. Any partition-signature mismatch fails
-closed: path v23 must certify raw WMO breakpoints before integration, and the
+closed: path v24 must certify raw WMO breakpoints before integration, and the
 kernel no longer auto-splits them. Finished seeing, `tau0`, cloud transmission,
 or Overall values are never interpolated.
 
@@ -1798,7 +1799,7 @@ The preceding v28/v22 measured profile is factual: on immutable ICON-EU run
 129 nodes for 72 native hours took 33 min 14 s end to end, with peak cgroup
 memory of 15,127,642,112 bytes. Of 9,288 node-hours, 9,284 were available and
 four sub-GL2 physical spans failed closed as `integration_nonconvergence`.
-It is a historical baseline, not a measurement of the current v33/v23 writer.
+It is a historical baseline, not a measurement of the current v34/v24 writer.
 Operational scheduling advertises 30 minutes as guidance, but production configures both the Astrodome
 job and bot-to-worker request deadlines as `0s`: the estimate does not terminate
 a healthy calculation. Explicit cancellation, coordinator shutdown, and
@@ -1874,7 +1875,7 @@ continues to see only owner-scoped 96-hour results. Anonymous access is
 read-only: it does not expose saved points, job admission, status, cancellation,
 or any owner-scoped result.
 The fixture, stored-visualization decoder, current writer, calculator, browser,
-and cache accept only v33/v23 with an explicitly supported pinned grid profile;
+and cache accept only v34/v24 with an explicitly supported pinned grid profile;
 the production web writer uses `production-v2`. An older fixture is not migrated
 or reinterpreted and must be replaced by a successful current calculation.
 The serialized high-quality value is `good`.
@@ -1958,7 +1959,7 @@ when the current surface/cloud window extends beyond pressure-profile support.
 Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
 `forecast-interactive-v6-observing-ephemerides` also pins `algorithms.overall` as
-`overall-astronomy-index-v2-fog-heuristic-availability`, `algorithms.cloud_obstruction` as
+`overall-astronomy-index-v3-native-mh-logp`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
 `algorithms.overall_calibration_sha256` and the exact
 `celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4` ephemeris identity. It carries ten
@@ -2051,7 +2052,7 @@ Grid, physics, acquisition contracts, and the shared coordinator/worker
 boundary are implemented here. OIDC/session/CSRF handlers, the site API,
 WebGL2/Canvas client, and deployment templates are implemented in the private
 `site-astrosferum` repository, and the controlled site plus anonymous
-read-only reference fixture are deployed. Production-v2/v33/v23 is the current writer; its complete
+read-only reference fixture are deployed. Production-v2/v34/v24 is the current writer; its complete
 current-run release measurement is recorded only after an immutable full
 rerender. The preceding v28/v22 baseline measured 9,284 available of 9,288
 node-hours in 33 min 14 s. The first five-hour finer-grid

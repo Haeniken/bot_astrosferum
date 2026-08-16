@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestOpticalTurbulenceProfileQualityNamesModelDomainCompleteness(t *testing.T) {
+	if OpticalTurbulenceProfileModelDomainComplete != "model_domain_complete" {
+		t.Fatalf("model-domain profile quality = %q", OpticalTurbulenceProfileModelDomainComplete)
+	}
+}
+
 func TestOpticalTurbulenceProfileDerivesPhysicalMomentsOnce(t *testing.T) {
 	const (
 		surfaceM = 100.0
@@ -83,7 +89,7 @@ func TestOpticalTurbulenceProfileQualityRequiresLowerStratosphere(t *testing.T) 
 		validLayerFraction: 1,
 	}
 	metrics := opticalTurbulenceMetricsFromProfile(profile)
-	if metrics.ProfileQuality != OpticalTurbulenceProfileComplete {
+	if metrics.ProfileQuality != OpticalTurbulenceProfileModelDomainComplete {
 		t.Fatalf("full lower-stratosphere profile quality = %q, want complete", metrics.ProfileQuality)
 	}
 }

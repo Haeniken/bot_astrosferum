@@ -117,7 +117,7 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-mh-hmnsp99-v7
+  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v8
   dew_version: dew-v1
   conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
@@ -137,9 +137,7 @@ algorithms:
   overall_bad_seeing_arcsec: 2.0
   overall_best_coherence_time_ms: 5.2
   overall_bad_coherence_time_ms: 1.6
-  # ICON hourly MH is clamped to this AGL range before the TKE integral.
-  overall_boundary_layer_min_m: 500
-  overall_boundary_layer_top_m: 2000
+  # Multiplicative calibration of the native-MH Masciadri/TKE contribution.
   overall_ground_cn2_scale: 1.0
   # Low-cloud CLC uncertainty guard; middle/high use 55%/18% of it.
   overall_unresolved_cloud_obstruction: 0.45

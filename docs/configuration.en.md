@@ -189,7 +189,7 @@ return owner-scoped status and a versioned interactive JSON dataset retained
 for 96 hours; they reuse the configured queues, preserve the prepared
 scientific values exactly, skip PNG rasterization on a website-only cache miss,
 and do not send platform messages. Forecast JSON pins
-`overall-astronomy-index-v2-fog-heuristic-availability`, `effective-cloud-obstruction-v1`, and the SHA-256
+`overall-astronomy-index-v3-native-mh-logp`, `effective-cloud-obstruction-v1`, and the SHA-256
 of the complete Overall calibration used for that result. The site may use a dedicated
 least-privilege PostgreSQL role, but stopping or removing it must not affect
 Telegram, VK, model synchronization, ordinary forecasts, Horizon, or
@@ -235,7 +235,6 @@ inconsistent values stop the application during configuration validation.
 | `ASTRO_OVERALL_PRECIPITATION_DETECT_MM` | `0.05` | Detection threshold for deterministic hourly precipitation. At or above it, ordinary Overall applies a binary operational veto and returns index 1; intensity is deliberately not converted into a smooth penalty. This field is retained in the shared calibration identity but the current directional Horizon calculation does not ingest precipitation. |
 | `ASTRO_OVERALL_GOOD_SEEING_ARCSEC` / `ASTRO_OVERALL_BAD_SEEING_ARCSEC` | `0.5` / `2.0` | Best and poor reference limits for logarithmically mapping modeled seeing to quality. |
 | `ASTRO_OVERALL_BEST_COHERENCE_TIME_MS` / `ASTRO_OVERALL_BAD_COHERENCE_TIME_MS` | `5.2` / `1.6` | Best and poor reference limits for mapping `tau0` to its guard factor. |
-| `ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M` / `ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M` | `500` / `2000` | Lower/upper clamps for the ICON mixed-layer depth used by the hybrid TKE + HMNSP99 turbulence integration. |
 | `ASTRO_OVERALL_GROUND_CN2_SCALE` | `1.0` | Multiplier for ground-layer `Cn2`; values above `1` increase the modeled near-ground turbulence contribution. |
 | `ASTRO_OVERALL_UNRESOLVED_CLOUD_OBSTRUCTION` | `0.45` | Maximum low-cloud diagnostic guard when `CLC` is not represented by resolved `QC/QI`; middle/high guards are smaller fixed fractions. |
 | `ASTRO_OVERALL_SURFACE_WIND_MAX_PENALTY` | `0.20` | Maximum fractional surface-wind/gust penalty; `0.20` preserves at least an `0.80` factor from this guard alone. |

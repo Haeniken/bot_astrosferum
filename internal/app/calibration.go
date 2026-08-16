@@ -17,8 +17,6 @@ func OverallCalibration(value config.AlgorithmsConfig) forecast.OverallIndexCali
 		GoodSeeingArcsec:      value.OverallGoodSeeingArcsec, BadSeeingArcsec: value.OverallBadSeeingArcsec,
 		BestCoherenceTimeMS:          value.OverallBestCoherenceTimeMS,
 		BadCoherenceTimeMS:           value.OverallBadCoherenceTimeMS,
-		BoundaryLayerMinM:            value.OverallBoundaryLayerMinM,
-		BoundaryLayerTopM:            value.OverallBoundaryLayerTopM,
 		GroundCn2Scale:               value.OverallGroundCn2Scale,
 		UnresolvedCloudObstruction:   value.OverallUnresolvedCloudObstruction,
 		SurfaceWindMaxPenalty:        value.OverallSurfaceWindMaxPenalty,

@@ -38,9 +38,10 @@ const (
 	// OpticalTurbulenceProfileLimited retains physical diagnostics but signals
 	// incomplete sampling or an insufficient model top.
 	OpticalTurbulenceProfileLimited OpticalTurbulenceProfileQuality = "limited"
-	// OpticalTurbulenceProfileComplete has at least 99% structural coverage and
-	// reaches the configured lower-stratosphere completeness boundary.
-	OpticalTurbulenceProfileComplete OpticalTurbulenceProfileQuality = "complete"
+	// OpticalTurbulenceProfileModelDomainComplete has at least 99% structural
+	// coverage and reaches the lower-stratosphere model-domain boundary. It does
+	// not claim that unmodelled turbulence above ProfileTopAGLM is zero.
+	OpticalTurbulenceProfileModelDomainComplete OpticalTurbulenceProfileQuality = "model_domain_complete"
 )
 
 // OpticalTurbulenceMetrics keeps the standard moments and derived parameters
@@ -336,7 +337,7 @@ func clipVerticalProfileAbove(levels []VerticalLevel, minimumHeightM float64) []
 	lower, upper := levels[index-1], levels[index]
 	fraction := (minimumHeightM - lower.HeightM) / (upper.HeightM - lower.HeightM)
 	cut := VerticalLevel{
-		PressureHPA:  lower.PressureHPA + fraction*(upper.PressureHPA-lower.PressureHPA),
+		PressureHPA:  interpolatePositiveLog(lower.PressureHPA, upper.PressureHPA, fraction),
 		HeightM:      minimumHeightM,
 		TemperatureK: interpolateFinite(lower.TemperatureK, upper.TemperatureK, fraction),
 		UMS:          interpolateFinite(lower.UMS, upper.UMS, fraction),
@@ -408,7 +409,7 @@ func opticalTurbulenceMetricsFromProfile(profile opticalTurbulenceProfile) Optic
 	metrics.ProfileQuality = OpticalTurbulenceProfileLimited
 	if metrics.ProfileVerticalCoverage >= 0.99 && metrics.ProfileHeightMomentCoverage >= 0.99 &&
 		metrics.ProfileTopAGLM >= minimumCompleteTurbulenceProfileTopAGLM {
-		metrics.ProfileQuality = OpticalTurbulenceProfileComplete
+		metrics.ProfileQuality = OpticalTurbulenceProfileModelDomainComplete
 	}
 	return metrics
 }
@@ -514,6 +515,24 @@ func absInt(value int) int {
 
 func potentialTemperature(temperatureK, pressureHPA float64) float64 {
 	return temperatureK * math.Pow(1000/pressureHPA, 0.286)
+}
+
+// interpolatePositiveLog reconstructs a positive pressure-like primitive
+// linearly in log space. For hydrostatic layers this preserves the exponential
+// pressure-height relation, returns the exact endpoints, and remains positive
+// and monotone for every fraction in [0,1]. Invalid inputs fail closed as NaN.
+func interpolatePositiveLog(lower, upper, fraction float64) float64 {
+	if !finite(lower) || !finite(upper) || lower <= 0 || upper <= 0 ||
+		!finite(fraction) || fraction < 0 || fraction > 1 {
+		return math.NaN()
+	}
+	if fraction == 0 {
+		return lower
+	}
+	if fraction == 1 {
+		return upper
+	}
+	return math.Exp(math.Log(lower) + fraction*math.Log(upper/lower))
 }
 
 func validProfileTemperature(value float64) bool {

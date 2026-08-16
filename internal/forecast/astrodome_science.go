@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	AstrodomeScienceVersion                = "astrodome-science-kernel-v33-glo30-informational-skyline"
+	AstrodomeScienceVersion                = "astrodome-science-kernel-v34-native-mh-glo30-informational-skyline"
 	AstrodomeScienceGeometryStraight       = "straight-compat"
 	AstrodomeScienceGeometryRefractionFull = "refraction-full"
-	AstrodomeSciencePathContractVersion    = "astrodome-science-path-v23"
+	AstrodomeSciencePathContractVersion    = "astrodome-science-path-v24-native-mh"
 	// Root evidence is localized to a maximum 0.2-millimetre radius. The
 	// independent cluster scale rejects distinct unresolved events, while the
 	// larger side guard keeps every branch-sensitive quadrature sample strictly
@@ -239,7 +239,7 @@ func ResolveAstrodomeScienceBoundaryHeights(
 	native AstrodomeScienceNativeContext,
 	calibration AstrodomeScienceCalibration,
 ) (AstrodomeScienceBoundaryHeights, error) {
-	if !finite(native.SurfaceHeightM) || !finite(native.MixedLayerDepthM) || native.MixedLayerDepthM < 0 {
+	if !finite(native.SurfaceHeightM) || !finite(native.MixedLayerDepthM) || native.MixedLayerDepthM <= 0 {
 		return AstrodomeScienceBoundaryHeights{}, fmt.Errorf("astrodome native boundary context is invalid")
 	}
 	if err := calibration.Validate(); err != nil {
@@ -250,8 +250,7 @@ func ResolveAstrodomeScienceBoundaryHeights(
 		return AstrodomeScienceBoundaryHeights{}, err
 	}
 	return AstrodomeScienceBoundaryHeights{
-		BoundaryLayerTopM: native.SurfaceHeightM + clamp(native.MixedLayerDepthM,
-			calibration.Overall.BoundaryLayerMinM, calibration.Overall.BoundaryLayerTopM),
+		BoundaryLayerTopM: native.SurfaceHeightM + native.MixedLayerDepthM,
 		TropopauseHeightM: tropopause, TropopauseMethod: method,
 		TropopauseBoundaryKind: kind, TropopauseLowerLevelIndex: lowerLevel,
 		TropopauseUpperLevelIndex: upperLevel,
@@ -1518,7 +1517,7 @@ func (evaluator *astrodomeScienceEvaluator) evaluate(ctx context.Context, pathM 
 		evaluator.nativeCache[key] = native
 	}
 	if native.HorizontalCellID != interval.cellID || !finite(native.SurfaceHeightM) ||
-		!finite(native.MixedLayerDepthM) || native.MixedLayerDepthM < 0 {
+		!finite(native.MixedLayerDepthM) || native.MixedLayerDepthM <= 0 {
 		return astrodomeScienceEvaluation{}, fmt.Errorf("%w: native context changed outside declared cell %q", ErrAstrodomeScienceIncompletePartition, interval.cellID)
 	}
 	tropopauseHeightM, tropopauseMethod, err := astrodomeScienceTropopause(native.ThermalProfile)
@@ -1612,7 +1611,7 @@ func astrodomeScienceIntegrand(state AstrodomeReconstructedAtmosphere, tangent A
 		astrodomeSciencePoissonExponent*state.VerticalDerivatives.PressurePaPerM/state.PressurePa)
 	_, east, north, _ := astrodomeObserverBasis(state.Location, state.HeightM)
 	horizontalShear := math.Hypot(state.VerticalDerivatives.WindECEFPerM.dot(east), state.VerticalDerivatives.WindECEFPerM.dot(north))
-	pblTopM := native.SurfaceHeightM + clamp(native.MixedLayerDepthM, calibration.Overall.BoundaryLayerMinM, calibration.Overall.BoundaryLayerTopM)
+	pblTopM := native.SurfaceHeightM + native.MixedLayerDepthM
 	cn2 := 0.0
 	regime := "masciadri-pbl"
 	if state.HeightM < pblTopM {

@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
 Date: 2026-08-14
-Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v12 with a static informational Copernicus DEM GLO-30 native-cell skyline is current; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v33/v23 current; v28/v22 full-run retained as the measured atmospheric-path baseline
+Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v13 with a static informational Copernicus DEM GLO-30 native-cell skyline is current; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v34/v24 current; v28/v22 full-run retained as the measured atmospheric-path baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -214,8 +214,8 @@ to a single azimuth-independent zenith. Completed code includes:
   coupled adaptive Dormand–Prince 5(4) ECEF ray and event closure. Refraction
   v3 requires two converged forward production passes; the reverse pass is
   reserved for reference/strict regression and release verification;
-- `astrodome-science-kernel-v33-glo30-informational-skyline` /
-  `astrodome-science-path-v23`: 0.2-mm physical/horizontal root localisation,
+- `astrodome-science-kernel-v34-native-mh-glo30-informational-skyline` /
+  `astrodome-science-path-v24-native-mh`: 0.2-mm physical/horizontal root localisation,
   0.4-mm distinct-root proximity detection with fail-closed handling, a 0.5-mm
   side guard, a 0.2-mm proof scale, the unchanged 1-mm position/coordinate
   evaluation ceiling, a versioned limited midpoint result at or below
@@ -248,7 +248,7 @@ to a single azimuth-independent zenith. Completed code includes:
   outward-rounded one-sided residual enclosure accepts a sliver only when zero
   is excluded; this covers bounded motion both away from and toward zero
   without evaluating the ambiguously owned endpoint. If neither proof excludes
-  a root, path v23 records only that omitted sliver in the one-metre limited
+  a root, path v24 records only that omitted sliver in the one-metre limited
   budget; it must still certify every interior WMO breakpoint before quadrature,
   and any kernel partition mismatch fails closed;
 - exact per-sample evaluation errors: 1 mm is only the rejection ceiling;
@@ -264,9 +264,9 @@ to a single azimuth-independent zenith. Completed code includes:
   never given its nominal sign, and an irreducible information floor remains
   fail-closed. Acceptance still requires both root radii to be at most 0.2 mm;
   the 0.4-mm distinct-root threshold and 0.5-mm side guard are unchanged;
-- mixed PBL cells are partitioned at strictly isolated native `MH-500 m` and
-  `MH-2000 m` decisions before a smooth clamp branch is solved; the upper
-  `HSURF+2000 m`/low-cloud identity is registered only once;
+- PBL is the single certified bilinear surface `HSURF+MH` for positive native
+  `MH`; no 500/2000-m clamp decisions remain and missing/non-positive `MH`
+  fails closed;
 - four-dimensional reconstruction of native ICON-EU primitives. Spatial and
   temporal interpolation happens before every nonlinear formula; no finished
   seeing, `tau0`, cloud transmission, Overall, or quality value is
@@ -330,7 +330,7 @@ to a single azimuth-independent zenith. Completed code includes:
   no resampling between them; Overall never extends outside pressure-profile
   support;
   Go serializes the additive Overall penalty points and the browser only draws
-  them. The payload pins `overall-astronomy-index-v2-fog-heuristic-availability`,
+  them. The payload pins `overall-astronomy-index-v3-native-mh-logp`,
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
   website-only cache miss skips PNG rasterization. It additionally carries ten
   exact, canonical hourly topocentric tracks under
@@ -364,7 +364,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - gzip visualization archives with an ordinary 96-hour TTL, plus one explicit
   non-expiring `admin_fixture` visible read-only to signed-out visitors and to
   every configured Telegram administrator, but not to authenticated non-admins. The
-  fixture and saved-result decoder accept only v33/v23 with a supported pinned
+  fixture and saved-result decoder accept only v34/v24 with a supported pinned
   profile; production web output is `production-v2`. An older payload is
   rejected until a successful current same-coordinate result replaces the
   shared fixture when exact integer cross multiplication proves a smaller or
@@ -412,7 +412,7 @@ executed test-binary SHA-256 is
 `7831ec7a451930890645e6baba42cb5ea39322e4075ee6c935909c4002fef518`.
 
 This v28/v22 measurement and the older v25/v26 measurements remain diagnostic
-provenance; they do not describe the current v33/v23 writer.
+provenance; they do not describe the current v34/v24 writer.
 
 The independent angular-discretization diagnostic on the same run evaluated
 five native hours (`f002`, `f020`, `f038`, `f056`, `f073`) on the union of
@@ -458,8 +458,8 @@ Production uses the following replacement:
 - `cloud-hourly-v4` publishes exactly 187 messages per hour:
   `CLC/P/T/QC/QI` at all 27 retained model levels, `U/V` on consecutive
   `58…74`, `TKE` on half levels `58…75`, plus separate `HHL` geometry;
-- Masciadri `Cn²` is integrated trapezoidally from the surface to the hourly
-  `h_PBL=clamp(ICON_MH,500,2000) m AGL`; HMNSP99 applies only above that same
+- Masciadri `Cn²` is integrated trapezoidally from the surface to the positive
+  native hourly `h_PBL=ICON_MH m AGL`; HMNSP99 applies only above that same
   boundary, and total `J` gives model-derived seeing at 500 nm;
 - `tau0` comes from `integral(Cn²·|V|^(5/3)dz)`; there is no second direction
   penalty because vector shear already includes wind rotation;
@@ -487,7 +487,7 @@ Production uses the following replacement:
   field names, as well as entries without `MH`, `T`, or native layer
   thickness, cannot be reused as current data;
 - version markers match the new contract:
-  `seeing-hybrid-tke-mh-hmnsp99-v7`,
+  `seeing-hybrid-tke-native-mh-hmnsp99-logp-v8`,
   `conditions-v8-precip-veto-penalty-decomposition`,
   `render-v18-celestial-distance`, and
   `shared-render-v24-explicit-heuristics`; Reference V is
@@ -498,8 +498,8 @@ Production uses the following replacement:
 A server-side fixed-2-km calculation without fitting (`ground Cn² scale=1`)
 produced control-case seeing of `2.221″` at `f042` and `3.644″` at `f048`; the
 ground layer held 88.36% and 94.43% of `J`, respectively. After adding
-`MH=396 m` at both leads, the unbounded cutoff gave `1.9075″/2.5158″` and the
-production 500 m minimum gave `1.9145″/2.5478″`. This is a server-only
+`MH=396 m` at both leads, the native cutoff gave `1.9075″/2.5158″` and the
+former 500 m minimum gave `1.9145″/2.5478″`. This is a historical server-only
 root-cause regression, not observational calibration. Production sync of
 `surface-hourly-v17`/`cloud-hourly-v4` for run `2026072106` is complete, the
 new image is deployed, and the live Telegram CLI path passed for the historical control case. See the
@@ -527,7 +527,7 @@ The new production run `2026072106` was checked at historical control case. Init
 extraction of the expanded `187×79` cloud bundle took `1m14s`; a disk-cache hit
 then takes `2 ms`, and a repeated full seven-PNG CLI render takes about `4.1 s`.
 The 69 available future hours have Overall `1.00…4.58` with no exact `10`,
-seeing `0.72…2.84″`, `tau0=1.72…3.50 ms`, and an applied MH clamp of
+seeing `0.72…2.84″`, `tau0=1.72…3.50 ms`, under the former applied MH clamp
 `500…2000 m`. Cloud transmission is below 50% in 47 hours and seeing is at
 least `2″` in 21 hours, explaining the low distribution for this run.
 
@@ -542,5 +542,5 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 3. Continue accumulating observational verification data for every forecast
    method and monitor both platform adapters in production.
 
-Production `seeing-hybrid-tke-mh-hmnsp99-v7` is not observationally calibrated until compared
+`seeing-hybrid-tke-native-mh-hmnsp99-logp-v8` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

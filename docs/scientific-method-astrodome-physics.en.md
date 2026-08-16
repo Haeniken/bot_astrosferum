@@ -3,7 +3,7 @@
 [← Main scientific method](scientific-method.en.md) ·
 [Certified geometry and root isolation →](scientific-method-astrodome-numerical-roots.en.md)
 
-**Status:** part of the canonical scientific method, version 2.1. Splitting the
+**Status:** part of the canonical scientific method, version 2.2. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 
@@ -479,11 +479,13 @@ The dynamic boundary-layer top is
 
 ```math
 h_{\mathrm{PBL}}=H_{\mathrm{SURF}}+
-\mathrm{clamp}(MH,500\ \mathrm m,2000\ \mathrm m).
+MH,\qquad MH>0.
 \tag{A13}
 ```
 
-Below it, the Masciadri TKE kernel is evaluated pointwise; above it, HMNSP99's
+No project clamp replaces this provider primitive; missing/non-positive `MH`
+or insufficient native vertical support is unavailable. Below it, the
+Masciadri TKE kernel is evaluated pointwise; above it, HMNSP99's
 tropospheric/stratospheric branch uses the local reconstructed primitives and
 the thermal-tropopause diagnosis. The formulae and provenance are exactly
 Sections 3.1 and 4.2–4.4; Astrodome changes the integration path, not these

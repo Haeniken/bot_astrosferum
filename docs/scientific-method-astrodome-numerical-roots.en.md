@@ -4,7 +4,7 @@
 [Main scientific method](scientific-method.en.md) ·
 [Quadrature and model-top closure →](scientific-method-astrodome-numerical-integration.en.md)
 
-**Status:** part of the canonical scientific method, version 2.1. Splitting the
+**Status:** part of the canonical scientific method, version 2.2. Splitting the
 method across several files changes presentation only and allows GitHub to
 render every mathematical expression reliably.
 
@@ -263,46 +263,22 @@ so the actual sample-specific dense-ECEF bound $e_r$, not the 1-mm ceiling,
 enters each residual interval directly. Longitude and latitude events coalesce only under the explicit
 compound-corner identity rule; ordinary nearby events remain fail-closed.
 
-Smooth physical HHL, full-level, surface, and fixed cloud-tier boundaries, and
-smooth bilinear WMO decision predicates, additionally receive a local
+Smooth physical HHL, full-level, surface, fixed cloud-tier and PBL boundaries,
+and smooth bilinear WMO decision predicates additionally receive a local
 transversality certificate before the generic terminal-leaf rule is used. The
-PBL boundary receives the same certificate only inside a partition with one
-proved branch of `clamp(MH,500 m,2000 m)`. Bilinear weights are non-negative
-and sum to one, so an outward-expanded four-corner range can prove a complete
-cell to be on the lower constant, identity, or upper constant branch. For a
-mixed cell the planner first isolates both raw bilinear decision fields
+PBL boundary is the single bilinear field
 
 ```math
-D_{500}(s)=MH(s)-500\ \mathrm{m},
-\qquad
-D_{2000}(s)=MH(s)-2000\ \mathrm{m}.
+g_{\mathrm{PBL}}(s)=h_{\mathrm{ray}}(s)-H_{\mathrm{SURF}}(s)-MH(s).
 \tag{A26e1}
 ```
 
-Their strict root evidence becomes mandatory path endpoints. Each resulting
-subinterval must clear the 0.5-mm side guard and must give the same certified
-branch at all one-sided and quarter probes before the corresponding smooth PBL
-surface is isolated. At the midpoint $m=(a+b)/2$ of such an interval, with
-half-width $h=(b-a)/2$, reconstructed depth $M(m)$, a certified path Lipschitz
-bound $L_M$, and its unit-aware binary64 enclosure $\eta_M$, the
-implementation forms
-
-```math
-I_M=
-\left[
-\mathrm{down}\!\left(M(m)-L_Mh-\eta_M\right),
-\mathrm{up}\!\left(M(m)+L_Mh+\eta_M\right)
-\right].
-```
-
-If $I_M\subseteq(-\infty,500\,\mathrm m]$, the smooth boundary fields are
-`HSURF + const`; if $I_M\subseteq[500\,\mathrm m,2000\,\mathrm m]$, they are
-`HSURF + MH`; and if $I_M\subseteq[2000\,\mathrm m,\infty)$, they are again
-`HSURF + const`. Indeterminate decision evidence, evidence entering a
-branch-sensitive probe span, or a branch change inside a certified partition
-fails closed. On the upper branch, `HSURF+2000 m` is algebraically identical
-to the configured low-cloud top; that shared physical zero set is registered
-once rather than rejected as two nearby events.
+Both `HSURF` and positive native `MH` use the same non-negative bilinear
+weights. Their outward coordinate/evaluation bounds, ray-height bound,
+Lipschitz bound and secant/curvature certificate are propagated directly to
+the residual. There are no project clamp branches or 500/2000-m decision
+roots. Missing/non-positive `MH`, unresolved root evidence, or failure to clear
+the 0.5-mm side guard remains fail closed.
 Let $\boldsymbol r(s)$ be the stored DOPRI dense ray,
 $\rho=\lVert\boldsymbol r\rVert$, $p=\sqrt{x^2+y^2}$, and let $U_B$ and $A$
 be outward Bernstein bounds for $\lVert\boldsymbol r'\rVert$ and

@@ -18,7 +18,7 @@ const (
 	DefaultOverallPrecipitationDetectMM = 0.05
 	// OverallIndexAlgorithmVersion identifies the scientific interpretation of
 	// OverallIndexFrame independently from any renderer or transport.
-	OverallIndexAlgorithmVersion = "overall-astronomy-index-v2-fog-heuristic-availability"
+	OverallIndexAlgorithmVersion = "overall-astronomy-index-v3-native-mh-logp"
 )
 
 const (
@@ -88,8 +88,6 @@ type OverallIndexCalibration struct {
 	BadSeeingArcsec       float64
 	BestCoherenceTimeMS   float64
 	BadCoherenceTimeMS    float64
-	BoundaryLayerMinM     float64
-	BoundaryLayerTopM     float64
 	GroundCn2Scale        float64
 	// UnresolvedCloudObstruction is the maximum low-cloud obstruction used
 	// only when diagnostic CLC is not represented by grid-scale QC/QI. Middle
@@ -112,7 +110,7 @@ func DefaultOverallIndexCalibration() OverallIndexCalibration {
 		PrecipitationDetectMM: DefaultOverallPrecipitationDetectMM,
 		GoodSeeingArcsec:      0.5, BadSeeingArcsec: 2.0,
 		BestCoherenceTimeMS: 5.2, BadCoherenceTimeMS: 1.6,
-		BoundaryLayerMinM: 500, BoundaryLayerTopM: 2000, GroundCn2Scale: 1,
+		GroundCn2Scale:             1,
 		UnresolvedCloudObstruction: 0.45,
 		SurfaceWindMaxPenalty:      0.20,
 		SurfaceWindStartMS:         8.5, SurfaceWindFullMS: 15,
@@ -128,7 +126,7 @@ func (calibration OverallIndexCalibration) Validate() error {
 		calibration.PossibleFogFactor, calibration.HighFogFactor, calibration.PrecipitationDetectMM,
 		calibration.GoodSeeingArcsec, calibration.BadSeeingArcsec,
 		calibration.BestCoherenceTimeMS, calibration.BadCoherenceTimeMS,
-		calibration.BoundaryLayerMinM, calibration.BoundaryLayerTopM, calibration.GroundCn2Scale,
+		calibration.GroundCn2Scale,
 		calibration.UnresolvedCloudObstruction, calibration.SurfaceWindMaxPenalty,
 		calibration.SurfaceWindStartMS, calibration.SurfaceWindFullMS,
 		calibration.SurfaceGustStartMS, calibration.SurfaceGustFullMS,
@@ -165,11 +163,6 @@ func (calibration OverallIndexCalibration) Validate() error {
 	}
 	if calibration.BadCoherenceTimeMS <= 0 || calibration.BestCoherenceTimeMS <= calibration.BadCoherenceTimeMS {
 		return fmt.Errorf("overall coherence-time thresholds must be positive and ordered bad < best")
-	}
-	if !finite(calibration.BoundaryLayerMinM) || !finite(calibration.BoundaryLayerTopM) ||
-		calibration.BoundaryLayerMinM < 100 || calibration.BoundaryLayerTopM < calibration.BoundaryLayerMinM ||
-		calibration.BoundaryLayerTopM > 4000 {
-		return fmt.Errorf("overall boundary-layer bounds must satisfy 100 <= minimum <= maximum <= 4000 metres")
 	}
 	if calibration.GroundCn2Scale < 0.05 || calibration.GroundCn2Scale > 20 {
 		return fmt.Errorf("overall ground Cn2 scale must be between 0.05 and 20")
@@ -305,10 +298,10 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		if !cloudAvailable {
 			return nil, fmt.Errorf("native ICON ground-layer profile is unavailable at %s", frame.ValidAt.Format(time.RFC3339))
 		}
-		if !finite(frame.MixedLayerDepthM) || frame.MixedLayerDepthM < 0 {
+		if !finite(frame.MixedLayerDepthM) || frame.MixedLayerDepthM <= 0 {
 			return nil, fmt.Errorf("ICON mixed-layer depth is invalid at %s", frame.ValidAt.Format(time.RFC3339))
 		}
-		boundaryLayerDepthM := clampSurfaceValue(frame.MixedLayerDepthM, calibration.BoundaryLayerMinM, calibration.BoundaryLayerTopM)
+		boundaryLayerDepthM := frame.MixedLayerDepthM
 		metrics, groundLayerPhysics := HybridOpticalTurbulenceMetrics(
 			profile, cloudFrame.Levels, cloud.SurfaceElevationM,
 			boundaryLayerDepthM, calibration.GroundCn2Scale,
@@ -378,7 +371,7 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		}
 		normalized := 1 - penaltyLoss
 		dataCompleteness := OverallDataComplete
-		if !fogAssessmentAvailable || !condensatePhysics || !physicalCoherence || metrics.ProfileQuality != OpticalTurbulenceProfileComplete {
+		if !fogAssessmentAvailable || !condensatePhysics || !physicalCoherence || metrics.ProfileQuality != OpticalTurbulenceProfileModelDomainComplete {
 			dataCompleteness = OverallDataPartial
 		}
 		result = append(result, OverallIndexFrame{

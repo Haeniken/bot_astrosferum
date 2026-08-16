@@ -330,8 +330,6 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 	t.Setenv("ASTRO_OVERALL_BAD_SEEING_ARCSEC", "3.0")
 	t.Setenv("ASTRO_OVERALL_BEST_COHERENCE_TIME_MS", "6.0")
 	t.Setenv("ASTRO_OVERALL_BAD_COHERENCE_TIME_MS", "1.5")
-	t.Setenv("ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M", "700")
-	t.Setenv("ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M", "1800")
 	t.Setenv("ASTRO_OVERALL_GROUND_CN2_SCALE", "1.2")
 	t.Setenv("ASTRO_OVERALL_UNRESOLVED_CLOUD_OBSTRUCTION", "0.4")
 	t.Setenv("ASTRO_OVERALL_SURFACE_WIND_MAX_PENALTY", "0.15")
@@ -349,8 +347,7 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 		cfg.Algorithms.OverallHighFogFactor != 0.05 || cfg.Algorithms.OverallPrecipitationDetectMM != 0.08 ||
 		cfg.Algorithms.OverallGoodSeeingArcsec != 0.6 ||
 		cfg.Algorithms.OverallBadSeeingArcsec != 3.0 || cfg.Algorithms.OverallBestCoherenceTimeMS != 6.0 ||
-		cfg.Algorithms.OverallBadCoherenceTimeMS != 1.5 || cfg.Algorithms.OverallBoundaryLayerMinM != 700 ||
-		cfg.Algorithms.OverallBoundaryLayerTopM != 1800 ||
+		cfg.Algorithms.OverallBadCoherenceTimeMS != 1.5 ||
 		cfg.Algorithms.OverallGroundCn2Scale != 1.2 || cfg.Algorithms.OverallUnresolvedCloudObstruction != 0.4 ||
 		cfg.Algorithms.OverallSurfaceWindMaxPenalty != 0.15 || cfg.Algorithms.OverallSurfaceWindStartMS != 9.0 ||
 		cfg.Algorithms.OverallSurfaceWindFullMS != 16.0 || cfg.Algorithms.OverallSurfaceGustStartMS != 13.0 ||
@@ -362,7 +359,7 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 	cfg := Defaults()
 	algorithms := cfg.Algorithms
-	if algorithms.SeeingVersion != "seeing-hybrid-tke-mh-hmnsp99-v7" ||
+	if algorithms.SeeingVersion != "seeing-hybrid-tke-native-mh-hmnsp99-logp-v8" ||
 		algorithms.ConditionsVersion != "conditions-v8-precip-veto-penalty-decomposition" ||
 		cfg.Render.Version != "render-v18-celestial-distance" {
 		t.Fatalf("unexpected algorithm/render versions: %+v %+v", algorithms, cfg.Render)
@@ -372,31 +369,11 @@ func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 		algorithms.OverallPossibleFogFactor != 0.75 ||
 		algorithms.OverallPrecipitationDetectMM != 0.05 ||
 		algorithms.OverallBestCoherenceTimeMS != 5.2 || algorithms.OverallBadCoherenceTimeMS != 1.6 ||
-		algorithms.OverallBoundaryLayerMinM != 500 || algorithms.OverallBoundaryLayerTopM != 2000 ||
 		algorithms.OverallGroundCn2Scale != 1 ||
 		algorithms.OverallUnresolvedCloudObstruction != 0.45 || algorithms.OverallSurfaceWindMaxPenalty != 0.20 ||
 		algorithms.OverallSurfaceWindStartMS != 8.5 || algorithms.OverallSurfaceWindFullMS != 15 ||
 		algorithms.OverallSurfaceGustStartMS != 12 || algorithms.OverallSurfaceGustFullMS != 22 {
 		t.Fatalf("unexpected overall-index defaults: %+v", algorithms)
-	}
-}
-
-func TestOverallBoundaryLayerBoundsValidation(t *testing.T) {
-	tests := []struct {
-		minimum float64
-		maximum float64
-	}{
-		{minimum: 99, maximum: 2000},
-		{minimum: 2100, maximum: 2000},
-		{minimum: 500, maximum: 4001},
-	}
-	for _, test := range tests {
-		cfg := Defaults()
-		cfg.Algorithms.OverallBoundaryLayerMinM = test.minimum
-		cfg.Algorithms.OverallBoundaryLayerTopM = test.maximum
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "boundary-layer bounds") {
-			t.Fatalf("bounds [%v, %v] validation error = %v", test.minimum, test.maximum, err)
-		}
 	}
 }
 

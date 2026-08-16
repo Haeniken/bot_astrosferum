@@ -344,6 +344,57 @@ configuration, or documentation change that can affect the checked result.
 ```bash
 set -euo pipefail
 
+go_version='1.26.6'
+golangci_lint_version='v2.12.2'
+govulncheck_version='v1.7.0'
+trivy_version='v0.74.0'
+trivy_digest='sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
+
+latest_github_release() {
+  local release_url
+  release_url="$(
+    curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$1/releases/latest"
+  )"
+  printf '%s\n' "${release_url##*/}"
+}
+
+require_latest() {
+  local tool="$1" pinned="$2" latest="$3"
+  if [[ -z "$latest" || "$latest" != "$pinned" ]]; then
+    printf '%s pin %s is not the latest stable release %s\n' \
+      "$tool" "$pinned" "${latest:-unknown}" >&2
+    exit 1
+  fi
+}
+
+require_latest_major() {
+  local component="$1" pinned_major="$2" latest="$3"
+  if [[ -z "$latest" || "$latest" != "v${pinned_major}."* ]]; then
+    printf '%s major v%s is not current; latest stable release is %s\n' \
+      "$component" "$pinned_major" "${latest:-unknown}" >&2
+    exit 1
+  fi
+}
+
+require_latest Go "go${go_version}" "$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n 1)"
+require_latest golangci-lint "$golangci_lint_version" "$(latest_github_release golangci/golangci-lint)"
+require_latest govulncheck "$govulncheck_version" "$(
+  curl -fsSL https://proxy.golang.org/golang.org/x/vuln/@latest |
+    sed -nE 's/.*"Version":"([^"]+)".*/\1/p'
+)"
+require_latest Trivy "$trivy_version" "$(latest_github_release aquasecurity/trivy)"
+require_latest_major actions/checkout 7 "$(latest_github_release actions/checkout)"
+require_latest_major actions/setup-go 7 "$(latest_github_release actions/setup-go)"
+require_latest_major golangci-lint-action 9 "$(latest_github_release golangci/golangci-lint-action)"
+require_latest_major govulncheck-action 1 "$(latest_github_release golang/govulncheck-action)"
+
+trivy_runtime_version="$(
+  docker run --rm "aquasec/trivy@${trivy_digest}" version --format json |
+    sed -nE 's/.*"Version":"([^"]+)".*/v\1/p'
+)"
+require_latest 'Trivy digest' "$trivy_version" "$trivy_runtime_version"
+
 if ! unformatted="$(gofmt -l ./cmd ./internal)"; then
   printf 'gofmt failed to inspect the configured paths\n' >&2
   exit 1
@@ -358,11 +409,11 @@ go test -count=1 ./...
 go vet ./...
 
 if command -v golangci-lint >/dev/null 2>&1 &&
-   golangci-lint --version 2>/dev/null | grep -Eq 'version 2\.12\.2([[:space:]]|$)'; then
+   golangci-lint --version 2>/dev/null | grep -Fq "version ${golangci_lint_version#v}"; then
   golangci-lint run ./...
 else
   docker run --rm -v "$PWD:/app:ro" -w /app \
-    golangci/golangci-lint:v2.12.2 golangci-lint run ./...
+    "golangci/golangci-lint:${golangci_lint_version}" golangci-lint run ./...
 fi
 
 build_dir="$(mktemp -d)"
@@ -370,7 +421,7 @@ trap 'rm -rf "$build_dir"' EXIT
 
 go build -o "$build_dir/bot_astrosferum" ./cmd/bot_astrosferum
 
-go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+go run "golang.org/x/vuln/cmd/govulncheck@${govulncheck_version}" ./...
 ```
 
 Fix every source finding.
@@ -379,8 +430,15 @@ Distinguish source findings from environment, network, toolchain, permission,
 and infrastructure failures. Do not change source code merely to conceal an
 environment failure.
 
-The required golangci-lint version is `v2.12.2`. A different installed
-version does not satisfy this gate; use the pinned container instead.
+Before every push, compare every pinned verification tool, toolchain, and CI
+action with its official latest stable release: Go, golangci-lint,
+govulncheck, Trivy, and the GitHub Actions used by the verification workflow.
+The Trivy image must remain immutable by digest, and its embedded version must
+equal the current stable tag. If any pin is stale, stop: review the upstream
+release, update `AGENTS.md`, CI, Docker/build inputs, and versioned
+documentation as applicable, then rerun the complete gate. Do not use floating
+`latest` images. A different installed version does not satisfy the gate; use
+the pinned container instead.
 
 Do not substitute a different golangci-lint or govulncheck version without
 an explicit reason recorded in the task result.
