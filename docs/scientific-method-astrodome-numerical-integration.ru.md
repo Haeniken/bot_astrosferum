@@ -651,7 +651,7 @@ Production принимает накопленную встроенную оце
 - полная рефракция:
   `astrodome-icon-sphere-refraction-full-ciddor-dopri54-v3`;
 - показатель преломления: `ciddor-1996-phase-index-v1`;
-- интегратор ОДУ: `dormand-prince-5-4-event-v3`;
+- интегратор ОДУ: `dormand-prince-5-4-fsal-event-v4`;
 - путь научного расчёта: `astrodome-science-path-v24-native-mh`;
 - научное ядро: `astrodome-science-kernel-v34-native-mh-glo30-informational-skyline`.
 

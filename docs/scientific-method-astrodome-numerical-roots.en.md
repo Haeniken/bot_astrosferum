@@ -22,7 +22,7 @@ The 1-cm floor applies only to adaptively created numerical panels. A rejected
 smooth panel may reuse recursive tolerance subdivision only while both
 represented children remain strictly above their applicable floors.
 Intervals split at native horizontal/HHL, PBL, thermal-tropopause, cloud-tier,
-terrain, and model-top events. Path contract v23 must isolate every reachable
+terrain, and model-top events. The current path contract v24 must isolate every reachable
 raw WMO decision breakpoint before integration; any physical-partition
 signature mismatch observed by quadrature fails closed. When the WMO
 thermal diagnosis has no finite result, the `P<200 hPa` HMNSP99 fallback is
@@ -82,17 +82,22 @@ R_{ij}&\ge 0
 
 The height differences and both products in $R_{ij}$ are accumulated by one
 fixed binary64 expansion using error-free `TwoSum` transforms and
-`TwoProduct` residuals obtained with `FMA`. The path planner and the science
-kernel call this same provider-neutral comparator after reconstructing the
-same native HHL/T primitives in the same order. The 5-km eligibility and
-2-km-span comparisons use the corresponding compensated signed difference.
+`TwoProduct` residuals obtained with `FMA`. The path planner calls this
+provider-neutral comparator after reconstructing the native HHL/T primitives
+and retains the proved branch plus its selected native level indices for every
+resulting region. During quadrature the science kernel reconstructs only those
+selected levels, reapplies the same canonical height/log-pressure boundary
+operation, and fails closed if the selection is structurally invalid or no
+longer brackets the declared fallback. It does not rescan the full profile.
+The 5-km eligibility and 2-km-span comparisons use the corresponding
+compensated signed difference.
 This certifies the numerical decision for the decoded and reconstructed
 binary64 model primitives; it is not a claim that ICON meteorological
 uncertainty is micrometric.
 
 For `upper=lower+1`, the first mean-lapse residual is algebraically identical
 to the instantaneous `lower/next-level` residual in (A26a). The WMO decision
-still evaluates both logical conditions, but the current path contract v23
+still evaluates both logical conditions, but the current path contract v24
 continues the v12 rule of registering their shared physical zero set only
 once. This avoids treating one surface as two distinct roots without
 coalescing any genuinely different event identities.

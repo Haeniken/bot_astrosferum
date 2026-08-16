@@ -212,8 +212,11 @@ to a single azimuth-independent zenith. Completed code includes:
   archive-only;
 - ICON-sphere straight geometry and full Ciddor moist-air refraction with a
   coupled adaptive Dormand–Prince 5(4) ECEF ray and event closure. Refraction
-  v3 requires two converged forward production passes; the reverse pass is
-  reserved for reference/strict regression and release verification;
+  `dormand-prince-5-4-fsal-event-v4` retains the accepted seventh-stage field
+  sample, computes the derivative once from the exact normalized endpoint,
+  and reuses that normalized-start derivative for the next bit-identical state,
+  while still requiring two converged forward production passes; the reverse
+  pass is reserved for reference/strict regression and release verification;
 - `astrodome-science-kernel-v34-native-mh-glo30-informational-skyline` /
   `astrodome-science-path-v24-native-mh`: 0.2-mm physical/horizontal root localisation,
   0.4-mm distinct-root proximity detection with fail-closed handling, a 0.5-mm
@@ -256,7 +259,7 @@ to a single azimuth-independent zenith. Completed code includes:
   field-specific coordinate uncertainty, physical height residuals sum their
   actual ray/operand terms, and 200 hPa propagates native H/P coordinate and
   arithmetic intervals;
-- the path-v23 monotone-root contractor preserves the ancestor existence and
+- the path-v24 monotone-root contractor preserves the ancestor existence and
   uniqueness proof, then intersects a separate root enclosure with
   outward-rounded safeguarded interval-Newton images at endpoints and midpoint.
   An insufficient midpoint contraction is followed by paired off-centre probes
@@ -414,6 +417,37 @@ executed test-binary SHA-256 is
 This v28/v22 measurement and the older v25/v26 measurements remain diagnostic
 provenance; they do not describe the current v34/v24 writer.
 
+The exact phase-1 hot-path writer was then measured twice on the production
+host with ten node workers, eight CDO workers, a persistent pool, a two-frame
+prepared-state window, `GOMEMLIMIT=12GiB`, and the complete 72×129 grid. On
+immutable run `2026081606` (manifest
+`e2eeae9d3617089e8008d5f5abaf24b06707569c2cc0c5490a96e9491c0ecdb0`), all
+9,288 node-hours were calculated in `26m07.679s`, including a `4m41.816s`
+preload: 8,514 were valid and 774 were calculated precipitation vetoes. Report
+SHA-256 was `2eadfeb1aea1a56da0f7536c631850630b9729997b535b8088386b50f49f9c45`;
+test-binary SHA-256 was
+`2702e5f3dbea572c6efac8a8813052655d64a1fbc10489ac1bf8619b721bead4`.
+
+On later immutable run `2026081612` (manifest
+`8352ab80818e5126b108b0676a68202bce17d881a65a3f6338614b2442030f71`), the
+same shape completed in `23m33.700s`, including a `3m52.033s` preload and a
+`19m41.667s` science phase: 8,642 nodes were valid, 645 were calculated
+precipitation vetoes, and one was fail-closed `integration_nonconvergence`.
+That node (`f067/node 99`) contained an 18.421382-mm numerical child that could
+not be split above the unchanged 10-mm endpoint floors. A focused replay on
+unmodified `main` failed in the same cell, interval, and component with ratio
+1.58747 versus 1.58745, proving
+that the unavailable state is not introduced by the prepared cache, pool, or
+FSAL path. Report SHA-256 was
+`ae5ad04ac5672addb16d04d92e48b99d03541acfc9f957445585138eca8da845`;
+test-binary SHA-256 was
+`061b854968e5ed8ca4f172880c0046f3d9df42da127fcc041db85e4cfd8fb506`.
+The second run peaked at 18,532,704,256 cgroup bytes with no pressure or OOM
+events under a 32-GiB hard limit. A prior 24-GiB trial reached the hard boundary
+and accumulated `memory.events.max`, so 32 GiB is retained as headroom rather
+than claimed as a minimum. The two measurements used different immutable runs
+and therefore are not a controlled same-run cold/warm pair.
+
 The independent angular-discretization diagnostic on the same run evaluated
 five native hours (`f002`, `f020`, `f038`, `f056`, `f073`) on the union of
 production-v2, dense-v1, and a 513-node uniform-32 reference: 789 distinct
@@ -435,8 +469,8 @@ The following work is still pending and must not be reported as completed:
 - define and validate angular-discretization acceptance criteria on multiple
   sites/runs; the five-hour result above does not establish that
   production-v2 is scientifically sufficient;
-- cold/warm 129-node CPU, RSS/cgroup, PSI, disk-peak, and gzip-payload
-  benchmarks on the production host, including simultaneous model sync;
+- a controlled same-run cold/warm 129-node comparison plus CPU, PSI,
+  disk-peak, and gzip-payload measurements, including simultaneous model sync;
 - ordinary-forecast and live Horizon latency non-regression while the
   directional worker is busy, plus worker OOM/timeout/rollback checks;
 - end-to-end browser, Telegram OIDC, edge/origin restriction, security-log,
@@ -546,8 +580,9 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 
 ## Next vertical slice
 
-1. Run the production Astrodome cold/warm benchmark and full current-run
-   scientific contract check.
+1. Complete the controlled same-run cold/warm and simultaneous-sync resource
+   gates; keep the exact phase-1 hot path as the fallback while the separate
+   single-pass refraction certificate is developed and validated.
 2. Maintain Telegram OIDC, the pinned Alice→Dragon origin, browser smoke,
    canary, and rollback procedures in the private site repository.
 3. Continue accumulating observational verification data for every forecast

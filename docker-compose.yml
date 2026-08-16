@@ -165,8 +165,8 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 128
-    mem_limit: ${ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT:-24g}
-    cpus: "${ASTRO_DIRECTIONAL_WORKER_CPU_LIMIT:-8.00}"
+    mem_limit: ${ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT:-32g}
+    cpus: "${ASTRO_DIRECTIONAL_WORKER_CPU_LIMIT:-10.00}"
     stop_grace_period: 2m
     healthcheck:
       test: ["CMD", "/usr/local/bin/bot_astrosferum_directional_worker", "--healthcheck", "http://127.0.0.1:18084/healthz"]

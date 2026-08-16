@@ -146,13 +146,15 @@ and HTTPS access to DWD, NASA GEOS-CF, Telegram, VK, and the configured atlas so
 required; neither platform's long polling needs an inbound application port.
 
 The optional Astrodome deployment adds an isolated directional worker shared
-with Horizon. The initial, deliberately conservative candidate gives that
-worker four CPUs, a `24 GB` cgroup hard limit, and `GOMEMLIMIT=12GiB`. It also
+with Horizon. The current host-specific candidate gives that
+worker ten CPUs, a `32 GB` cgroup hard limit, and `GOMEMLIMIT=12GiB`. It also
 enforces a `400 GiB` project-footprint ceiling and a `150 GiB` free-space
 reserve before dome admission. These are rollout guardrails, not measured
-minimum requirements: do not reduce them or publish a smaller production
-profile until cold/warm full-dome, concurrent model-sync, memory-pressure, and
-ordinary-forecast latency benchmarks pass. The shared active-slot limit is
+minimum requirements. A measured full run peaked at 18.53 GB without cgroup
+pressure under this limit, whereas a 24 GiB trial reached its hard boundary;
+do not reduce the headroom or publish a smaller production profile until
+same-run cold/warm, concurrent model-sync, memory-pressure, and ordinary-forecast
+latency benchmarks pass. The shared active-slot limit is
 `ASTRO_DIRECTIONAL_CONCURRENCY=1` by default; increasing it can multiply the
 full-dome resident footprint and requires repeating those resource tests. The
 optional website is deployed from the independent `site-astrosferum`
