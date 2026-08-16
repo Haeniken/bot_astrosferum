@@ -344,6 +344,20 @@ configuration, or documentation change that can affect the checked result.
 ```bash
 set -euo pipefail
 
+golangci_lint_version='v2.12.2'
+latest_golangci_lint_version="$(
+  curl -fsSL https://api.github.com/repos/golangci/golangci-lint/releases/latest |
+    sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' |
+    head -n 1
+)"
+
+if [[ -z "$latest_golangci_lint_version" ||
+      "$latest_golangci_lint_version" != "$golangci_lint_version" ]]; then
+  printf 'golangci-lint pin %s is not the latest stable release %s\n' \
+    "$golangci_lint_version" "${latest_golangci_lint_version:-unknown}" >&2
+  exit 1
+fi
+
 if ! unformatted="$(gofmt -l ./cmd ./internal)"; then
   printf 'gofmt failed to inspect the configured paths\n' >&2
   exit 1
@@ -358,11 +372,11 @@ go test -count=1 ./...
 go vet ./...
 
 if command -v golangci-lint >/dev/null 2>&1 &&
-   golangci-lint --version 2>/dev/null | grep -Eq 'version 2\.12\.2([[:space:]]|$)'; then
+   golangci-lint --version 2>/dev/null | grep -Fq "version ${golangci_lint_version#v}"; then
   golangci-lint run ./...
 else
   docker run --rm -v "$PWD:/app:ro" -w /app \
-    golangci/golangci-lint:v2.12.2 golangci-lint run ./...
+    "golangci/golangci-lint:${golangci_lint_version}" golangci-lint run ./...
 fi
 
 build_dir="$(mktemp -d)"
@@ -379,8 +393,12 @@ Distinguish source findings from environment, network, toolchain, permission,
 and infrastructure failures. Do not change source code merely to conceal an
 environment failure.
 
-The required golangci-lint version is `v2.12.2`. A different installed
-version does not satisfy this gate; use the pinned container instead.
+The required golangci-lint version is `v2.12.2`. Before every push, compare
+that pin with the official GitHub `releases/latest` stable tag. If they differ,
+stop: review the upstream release, update the pin in `AGENTS.md`, CI, and
+versioned documentation, then rerun the complete gate. Do not use a floating
+`latest` image. A different installed version does not satisfy this gate; use
+the pinned container instead.
 
 Do not substitute a different golangci-lint or govulncheck version without
 an explicit reason recorded in the task result.
