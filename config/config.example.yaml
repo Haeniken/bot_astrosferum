@@ -117,7 +117,7 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v8
+  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v9
   dew_version: dew-v1
   conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0

@@ -92,7 +92,7 @@ func (store VerticalStore) Cloud(ctx context.Context, location forecast.Location
 		return forecast.CloudSeries{}, fmt.Errorf("extracted %d of %d cloud frames", completed, len(frames))
 	}
 	return forecast.CloudSeries{
-		Location: location, Provider: manifest.Provider, Product: "ICON-EU native-layer CLC/QC/QI/T + lower-atmosphere U/V/TKE",
+		Location: location, Provider: manifest.Provider, Product: cloudProductName,
 		RunID: manifest.RunID, BaseTime: manifest.BaseTime, GeneratedAt: time.Now().UTC(),
 		TurbulenceValidUntil: manifest.CloudSteps[len(manifest.CloudSteps)-1].ValidAt,
 		SurfaceElevationM:    surfaceElevationM, Frames: frames,
@@ -134,7 +134,10 @@ func ExtractCloudFrame(ctx context.Context, runner CommandRunner, path string, l
 }
 
 func cloudFrameFromValues(values map[cloudValueKey]float64, validAt time.Time, modelLevels, groundModelLevels []int, heights map[int]float64, sourceName string) (forecast.CloudFrame, error) {
-	frame := forecast.CloudFrame{ValidAt: validAt, Levels: make([]forecast.CloudLevel, 0, len(modelLevels))}
+	frame := forecast.CloudFrame{
+		ValidAt: validAt, Levels: make([]forecast.CloudLevel, 0, len(modelLevels)),
+		TurbulenceLevels: make([]forecast.CloudLevel, 0, len(groundModelLevels)),
+	}
 	for _, level := range modelLevels {
 		cover, coverOK := values[cloudValueKey{"ccl", level}]
 		pressure, pressureOK := values[cloudValueKey{"pres", level}]
@@ -150,24 +153,40 @@ func cloudFrameFromValues(values map[cloudValueKey]float64, validAt time.Time, m
 		if !finitePositiveCloudExtraction(pressure) || !finitePositiveCloudExtraction(temperature) || !finitePositiveCloudExtraction(layerThicknessM) {
 			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid pressure, temperature, or HHL thickness at model level %d", sourceName, level)
 		}
-		u, v, tke := math.NaN(), math.NaN(), math.NaN()
-		if containsCloudModelLevel(groundModelLevels, level) {
-			var uOK, vOK bool
-			u, uOK = values[cloudValueKey{"u", level}]
-			v, vOK = values[cloudValueKey{"v", level}]
-			lowerTKE, lowerTKEOK := values[cloudValueKey{"tke", level}]
-			upperTKE, upperTKEOK := values[cloudValueKey{"tke", level + 1}]
-			if !uOK || !vOK || lowerTKEOK != upperTKEOK {
-				return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete ground-layer dynamics at model level %d", sourceName, level)
-			}
-			if lowerTKEOK {
-				tke = math.Max(0, (lowerTKE+upperTKE)/2)
-			}
-		}
 		frame.Levels = append(frame.Levels, forecast.CloudLevel{
 			ModelLevel: level, PressureHPA: pressure / 100, HeightM: (halfLevelA + halfLevelB) / 2, LayerThicknessM: layerThicknessM,
-			TemperatureK: temperature, UMS: u, VMS: v, TKEJkg: tke,
+			TemperatureK: temperature, UMS: math.NaN(), VMS: math.NaN(), TKEJkg: math.NaN(),
 			CoverPercent: cover, CloudLiquidKgKg: math.Max(0, liquid), CloudIceKgKg: math.Max(0, ice),
+		})
+	}
+	for _, level := range groundModelLevels {
+		pressure, pressureOK := values[cloudValueKey{"pres", level}]
+		temperature, temperatureOK := values[cloudValueKey{"t", level}]
+		u, uOK := values[cloudValueKey{"u", level}]
+		v, vOK := values[cloudValueKey{"v", level}]
+		lowerTKE, lowerTKEOK := values[cloudValueKey{"tke", level}]
+		upperTKE, upperTKEOK := values[cloudValueKey{"tke", level + 1}]
+		halfLevelA, halfLevelAOK := heights[level]
+		halfLevelB, halfLevelBOK := heights[level+1]
+		if !pressureOK || !temperatureOK || !uOK || !vOK || lowerTKEOK != upperTKEOK || !halfLevelAOK || !halfLevelBOK {
+			return forecast.CloudFrame{}, fmt.Errorf("%s has incomplete native turbulence state at model level %d", sourceName, level)
+		}
+		layerThicknessM := math.Abs(halfLevelA - halfLevelB)
+		if !finitePositiveCloudExtraction(pressure) || !finitePositiveCloudExtraction(temperature) ||
+			!finitePositiveCloudExtraction(layerThicknessM) || math.IsNaN(u) || math.IsInf(u, 0) || math.IsNaN(v) || math.IsInf(v, 0) {
+			return forecast.CloudFrame{}, fmt.Errorf("%s has invalid native turbulence state at model level %d", sourceName, level)
+		}
+		tke := math.NaN()
+		if lowerTKEOK {
+			if !finiteCloudExtraction(lowerTKE) || lowerTKE < 0 || !finiteCloudExtraction(upperTKE) || upperTKE < 0 {
+				return forecast.CloudFrame{}, fmt.Errorf("%s has invalid native TKE at model level %d", sourceName, level)
+			}
+			tke = (lowerTKE + upperTKE) / 2
+		}
+		frame.TurbulenceLevels = append(frame.TurbulenceLevels, forecast.CloudLevel{
+			ModelLevel: level, PressureHPA: pressure / 100,
+			HeightM: (halfLevelA + halfLevelB) / 2, LayerThicknessM: layerThicknessM,
+			TemperatureK: temperature, UMS: u, VMS: v, TKEJkg: tke,
 		})
 	}
 	return frame, nil
@@ -180,6 +199,10 @@ func containsCloudModelLevel(levels []int, wanted int) bool {
 
 func finitePositiveCloudExtraction(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0
+}
+
+func finiteCloudExtraction(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 type cloudValueKey struct {

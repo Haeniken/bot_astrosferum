@@ -20,7 +20,7 @@ one-hour precipitation interval precedes the analysis time. The
 directions and azimuths are
 `N=0`, `NE=45`, `E=90`, `SE=135`, `S=180`, `SW=225`, `W=270`, and `NW=315 deg`.
 The scientific contract is versioned as
-`horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13`.
+`horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14`.
 
 All eight directions use that same `f001..f072` time axis. Native hourly
 surface, cloud, TKE, MH, and visibility terms are used directly. Pressure-level
@@ -123,7 +123,7 @@ or refracted coordinate.
 
 Published `HorizonResult` turbulence and wind values are evaluated at the
 500 m ground-track midpoint panels of [F13]--[F15]. Equations [F16]--[F17]
-define the current v13 production calculation. Only raw pressure-level state is
+define the current v14 production calculation. Only raw pressure-level state is
 interpolated in time; every nonlinear optical result is recomputed hourly.
 
 At each segment midpoint and forecast hour, the ray altitude selects exactly one
@@ -212,7 +212,7 @@ represented by the sampled `C_n^2` profile.
 
 Published cloud transmission is evaluated from the same straight-ray midpoint
 panels. Equation [F18] and its grouping by unique horizontal ICON cell and
-height tier define the current v13 closure. Fog and precipitation are hourly
+height tier define the current v14 closure. Fog and precipitation are hourly
 observer-cell diagnostics and therefore identical in all eight directions.
 
 At each ray midpoint the retained native-level `P/T/QC/QI/CLC` profile is

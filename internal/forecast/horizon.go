@@ -13,7 +13,7 @@ const (
 	// straight-line-of-sight product. It is intentionally distinct from the
 	// full-refraction Astrodome kernel and from the retired Horizon v7 cache
 	// identity, even though it retains the validated v7 equations.
-	HorizonAlgorithmVersion = "horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13"
+	HorizonAlgorithmVersion = "horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14"
 	HorizonGridProfile      = "horizon-8x10deg-straight-glo30-informational-v5"
 
 	HorizonEarthRadiusM              = 6371008.8
@@ -640,7 +640,7 @@ func computeHorizonDirection(ctx context.Context, validAt time.Time, observer Lo
 			continue
 		}
 		cn2, uMS, vMS, turbulenceQuality, turbulenceOK := localHorizonTurbulence(
-			data.Vertical.Levels, data.Cloud.Levels, data.Surface, data.SurfaceElevationM,
+			data.Vertical.Levels, data.Cloud.nativeTurbulenceLevels(), data.Surface, data.SurfaceElevationM,
 			geometry.RayHeightM, calibration,
 		)
 		cloud, cloudQuality, cloudOK := localHorizonCloud(data.Cloud.Levels, geometry.RayHeightM, data.SurfaceElevationM)

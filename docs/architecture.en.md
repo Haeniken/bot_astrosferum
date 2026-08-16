@@ -1,7 +1,7 @@
 # bot-astrosferum: KISS architecture
 
 Status: implemented MVP, architecture revision 0.4; the
-`surface-hourly-v17`/`cloud-hourly-v4` data contract is live in production.
+`surface-hourly-v17`/`cloud-hourly-v6-native-mh` is the current data contract.
 The optional ICON-EU Horizon extension is implemented as a configuration-gated
 application capability. The directional atmospheric Astrodome calculator and
 authenticated account API are deployed here; the public application is owned
@@ -394,26 +394,28 @@ An incomplete run can never become current.
 
 The current hourly ICON-EU contract consists of two independently validated
 sets. `surface-hourly-v17` contains 17 single-level messages at every
-`f000…f078`, including `MH`/`mld` in metres. `cloud-hourly-v4` contains exactly
-187 messages per hour: `CLC/P/T/QC/QI` on all 27 retained full levels, `U/V`
-on consecutive lower levels `58…74`, and `TKE` on half levels `58…75`; a
-separate time-invariant bundle carries the required `HHL`. The manifest
+`f000…f078`, including `MH`/`mld` in metres. `cloud-hourly-v6-native-mh`
+contains exactly 245 messages per hour: `CLC/P/T/QC/QI` on all 27 retained
+cloud levels, a separate consecutive `P/T/U/V` turbulence chain on full
+levels `44…74`, and `TKE` on half levels `44…75`; P/T messages already present
+in the cloud subset are not duplicated. A separate time-invariant bundle
+carries the required `HHL`. The manifest
 switches only after every file passes message-count, shortName, level, size,
 and SHA-256 validation.
 
 ICON Global publishes the same cloud/PBL contract on the full native grid. Its
-height-equivalent indices are `71,76,81,86,91,94,96,98,
-100,102,104…120` for `CLC/P/T/QC/QI`, `104…120` for lower `U/V`, and
-`104…121` for half-level `TKE/HHL`. These are the ICON-EU indices shifted by
-`+46`, verified against actual HHL heights in the common domain. The complete
+cloud indices are `71,76,81,86,91,94,96,98,
+100,102,104…120` for `CLC/P/T/QC/QI`; an independent complete-grid HHL proof
+selects `87…120` for the native `P/T/U/V` turbulence chain and `87…121` for
+half-level `TKE/HHL`. The complete
 79-hour extension is validated in a staging directory and exposed by one
 atomic manifest replacement. Point extraction applies the official Global
 grid before the shared cloud extractor, so rendering and Overall use the same
 types and equations for both providers.
 
 DWD Global publishes model-level TKE only through `+48 h`. Bundles through
-that time contain 187 messages; `+49…+78 h` bundles retain every
-`CLC/P/T/QC/QI/U/V` message (169 total) and intentionally omit TKE. The cloud
+that time contain 260 messages; `+49…+78 h` bundles retain every required
+`CLC/P/T/QC/QI/U/V` message (225 total) and intentionally omit TKE. The cloud
 heatmap therefore remains hourly for the full horizon, while the hybrid
 TKE/HMNSP99 Overall series ends at the last native-TKE time instead of
 extrapolating turbulence. Pressure-level wind/seeing diagnostics continue.
@@ -486,8 +488,8 @@ in section 29, not the ordinary point cache.
 Provider-specific point cache keys:
 
 ```text
-ICON-EU:     point-v7-explicit-heuristics/<run>/<grid-cell>.gob.gz
-ICON Global: point-v3-explicit-heuristics/<run>/<grid-cell>.gob.gz
+ICON-EU:     point-v8-native-mh-support/<run>/<grid-cell>.gob.gz
+ICON Global: point-v4-native-mh-support/<run>/<grid-cell>.gob.gz
 ```
 
 ## 14. Normalization and quality checks
@@ -559,8 +561,10 @@ continuous lower section:
 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74
 ```
 
-Every one of the 27 levels carries `CLC/P/T/QC/QI`; consecutive full levels
-`58…74` also carry `U/V`, while TKE comes from bounding half levels `58…75`.
+Every one of the 27 cloud levels carries `CLC/P/T/QC/QI`. A distinct minimal
+native turbulence chain carries `P/T/U/V` on consecutive full levels `44…74`,
+while TKE comes from bounding half levels `44…75`; overlapping P/T messages
+are stored only once.
 `HHL` provides actual
 geometry and the model surface. The continuous lower section is required for
 the centred `theta` gradient and trapezoidal PBL integration; sparse levels
@@ -682,7 +686,7 @@ from single-level `ICON MH` and applies
 `h_PBL=MH m AGL` for a positive native mixed-layer depth. From the surface to `h_PBL`, native ICON
 `T/P/TKE/HHL` supplies `Cn²` through the Masciadri expression
 `3.35e−6·P^[2(1−2R/cp)]·theta^(−10/3)·|dtheta/dz|^(4/3)·TKE^(2/3)`;
-the centred gradient is evaluated on consecutive model levels `58…74`, then
+the centred gradient is evaluated on consecutive model levels `44…74`, then
 integrated trapezoidally from `HHL75`. Above that same hourly `h_PBL`, HMNSP99
 uses pressure-level `T/U/V/FI`. `J_total=J_ground+J_free` becomes zenith long-exposure seeing at
 `500 nm` through the standard integral. Wind enters
@@ -1081,7 +1085,7 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v8
+  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v9
   dew_version: dew-v1
   conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
@@ -1490,9 +1494,12 @@ and input-manifest SHA-256 digests. The coordinator verifies and atomically
 publishes under that final identity; the preparation key is never the final
 result-cache identity.
 
-The scientific marker is `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13`; the application
-cache schema is `horizon-cache-v7-glo30-informational-skyline`. Changing either a formula or the
-serialized/rendered contract requires changing the corresponding marker.
+The scientific marker is `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14`; the application
+cache schema is `horizon-cache-v8-native-mh-support`. The cache-schema change rejects
+same-run artifacts that recorded unavailable turbulence before the native `P/T/U/V/TKE`
+chain was extended through the encoded `3000 m` MH ceiling. Changing a formula,
+provider-input coverage, or the serialized/rendered contract requires changing the
+corresponding marker.
 
 PNG and metadata are published by staging plus atomic rename. Retention is
 bounded by a hard `CreatedAt` TTL and entry count; mtime is used only for LRU
@@ -1959,7 +1966,7 @@ when the current surface/cloud window extends beyond pressure-profile support.
 Additive Overall
 penalty points are serialized by Go, not reconstructed in JavaScript.
 `forecast-interactive-v6-observing-ephemerides` also pins `algorithms.overall` as
-`overall-astronomy-index-v3-native-mh-logp`, `algorithms.cloud_obstruction` as
+`overall-astronomy-index-v4-native-mh-logp`, `algorithms.cloud_obstruction` as
 `effective-cloud-obstruction-v1`, and carries
 `algorithms.overall_calibration_sha256` and the exact
 `celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4` ephemeris identity. It carries ten

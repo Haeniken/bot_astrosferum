@@ -100,6 +100,10 @@ func (runner *horizonSeriesRunner) CombinedOutput(_ context.Context, name string
 			row("qc", float64(level), 0)
 			row("qi", float64(level), 0)
 		}
+		for _, level := range cloudGroundThermodynamicOnlyLevels() {
+			row("pres", float64(level), 100000-float64(75-level)*1500)
+			row("t", float64(level), 280-float64(75-level)*0.9)
+		}
 		for _, level := range DefaultCloudGroundModelLevels {
 			row("u", float64(level), 4)
 			row("v", float64(level), 2)

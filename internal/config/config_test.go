@@ -359,7 +359,7 @@ func TestOverallIndexEnvironmentOverrides(t *testing.T) {
 func TestOverallIndexDefaultsMatchForecastCalibration(t *testing.T) {
 	cfg := Defaults()
 	algorithms := cfg.Algorithms
-	if algorithms.SeeingVersion != "seeing-hybrid-tke-native-mh-hmnsp99-logp-v8" ||
+	if algorithms.SeeingVersion != "seeing-hybrid-tke-native-mh-hmnsp99-logp-v9" ||
 		algorithms.ConditionsVersion != "conditions-v8-precip-veto-penalty-decomposition" ||
 		cfg.Render.Version != "render-v18-celestial-distance" {
 		t.Fatalf("unexpected algorithm/render versions: %+v %+v", algorithms, cfg.Render)

@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,6 +26,44 @@ type cloudMetadataRunner struct {
 	metadata string
 }
 
+type cloudBundleTestRunner struct{}
+
+func (cloudBundleTestRunner) CombinedOutput(_ context.Context, name string, args ...string) ([]byte, error) {
+	path := args[len(args)-1]
+	var metadata strings.Builder
+	if strings.Contains(path, "geometry.grib2") {
+		if name == "grib_count" {
+			return []byte(strconv.Itoa(len(cloudGeometryLevels()))), nil
+		}
+		for _, level := range cloudGeometryLevels() {
+			fmt.Fprintf(&metadata, "HHL generalVertical %d\n", level)
+		}
+		return []byte(metadata.String()), nil
+	}
+	if name == "grib_count" {
+		return []byte(strconv.Itoa(cloudStepMessageCount())), nil
+	}
+	for _, level := range DefaultCloudModelLevels {
+		for _, field := range cloudBaseLevelFields {
+			fmt.Fprintf(&metadata, "%s generalVerticalLayer %d\n", field.shortName, level)
+		}
+	}
+	for _, level := range cloudGroundThermodynamicOnlyLevels() {
+		for _, field := range cloudGroundThermodynamicFields {
+			fmt.Fprintf(&metadata, "%s generalVerticalLayer %d\n", field.shortName, level)
+		}
+	}
+	for _, level := range DefaultCloudGroundModelLevels {
+		for _, field := range cloudGroundFullLevelFields {
+			fmt.Fprintf(&metadata, "%s generalVerticalLayer %d\n", field.shortName, level)
+		}
+	}
+	for _, level := range cloudTKEHalfLevels() {
+		fmt.Fprintf(&metadata, "tke generalVertical %d\n", level)
+	}
+	return []byte(metadata.String()), nil
+}
+
 func (runner cloudMetadataRunner) CombinedOutput(_ context.Context, name string, _ ...string) ([]byte, error) {
 	if name == "grib_count" {
 		return []byte(strconv.Itoa(runner.count)), nil
@@ -38,9 +79,18 @@ func TestExtractCloudFrameUsesModelPressureAndHHLHeight(t *testing.T) {
 	}
 	level := frame.Levels[0]
 	if level.PressureHPA != 756.87 || level.HeightM != 3000 || level.LayerThicknessM != 300 || level.TemperatureK != 265.5 ||
-		level.UMS != 12 || level.VMS != -4 || math.Abs(level.TKEJkg-0.6) > 1e-12 || level.CoverPercent != 43 ||
+		!math.IsNaN(level.UMS) || !math.IsNaN(level.VMS) || !math.IsNaN(level.TKEJkg) || level.CoverPercent != 43 ||
 		level.CloudLiquidKgKg != 0.00012 || level.CloudIceKgKg != 0.00003 {
 		t.Fatalf("unexpected cloud level: %+v", level)
+	}
+	if len(frame.TurbulenceLevels) != 1 {
+		t.Fatalf("turbulence levels = %d, want 1", len(frame.TurbulenceLevels))
+	}
+	turbulence := frame.TurbulenceLevels[0]
+	if turbulence.PressureHPA != 756.87 || turbulence.HeightM != 3000 || turbulence.LayerThicknessM != 300 ||
+		turbulence.TemperatureK != 265.5 || turbulence.UMS != 12 || turbulence.VMS != -4 ||
+		math.Abs(turbulence.TKEJkg-0.6) > 1e-12 {
+		t.Fatalf("unexpected turbulence level: %+v", turbulence)
 	}
 }
 
@@ -71,10 +121,59 @@ func TestCloudModelLevelsAreContinuousNearGround(t *testing.T) {
 	}
 }
 
+func TestNativeMHTurbulenceLevelsAreContinuousThroughProviderMaximum(t *testing.T) {
+	if len(DefaultCloudGroundModelLevels) != 31 {
+		t.Fatalf("turbulence model level count = %d, want 31", len(DefaultCloudGroundModelLevels))
+	}
+	for index, level := range DefaultCloudGroundModelLevels {
+		if want := 44 + index; level != want {
+			t.Fatalf("turbulence model level[%d] = %d, want %d", index, level, want)
+		}
+	}
+	thermodynamicOnly := cloudGroundThermodynamicOnlyLevels()
+	if len(thermodynamicOnly) != 8 {
+		t.Fatalf("additional P/T levels = %d, want 8", len(thermodynamicOnly))
+	}
+}
+
+func TestNativeMHTurbulenceChainSupportsThreeKilometresAndRejectsMissingState(t *testing.T) {
+	values := make(map[cloudValueKey]float64)
+	heights := make(map[int]float64)
+	for halfLevel := 44; halfLevel <= 75; halfLevel++ {
+		heights[halfLevel] = float64(75-halfLevel) * 100
+		values[cloudValueKey{"tke", halfLevel}] = 0.05
+	}
+	for _, level := range DefaultCloudGroundModelLevels {
+		heightM := (heights[level] + heights[level+1]) / 2
+		values[cloudValueKey{"pres", level}] = 101325 * math.Exp(-heightM/8500)
+		values[cloudValueKey{"t", level}] = 288.15 - 0.006*heightM
+		values[cloudValueKey{"u", level}] = 8
+		values[cloudValueKey{"v", level}] = 2
+	}
+	frame, err := cloudFrameFromValues(values, time.Unix(1, 0), nil, DefaultCloudGroundModelLevels, heights, "native-mh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vertical := forecast.SyntheticVerticalFixture().Frames[0].Levels
+	metrics, ok := forecast.HybridOpticalTurbulenceMetrics(vertical, frame.TurbulenceLevels, 0, 3000, 1)
+	if !ok || math.IsNaN(metrics.SeeingArcsec) || math.IsInf(metrics.SeeingArcsec, 0) || metrics.SeeingArcsec <= 0 {
+		t.Fatalf("three-kilometre native MH support failed: ok=%v metrics=%+v", ok, metrics)
+	}
+	delete(values, cloudValueKey{"pres", 55})
+	if _, err := cloudFrameFromValues(values, time.Unix(1, 0), nil, DefaultCloudGroundModelLevels, heights, "native-mh"); err == nil {
+		t.Fatal("missing native pressure in the continuous MH chain was accepted")
+	}
+	values[cloudValueKey{"pres", 55}] = 90000
+	values[cloudValueKey{"tke", 55}] = -1e-9
+	if _, err := cloudFrameFromValues(values, time.Unix(1, 0), nil, DefaultCloudGroundModelLevels, heights, "native-mh"); err == nil {
+		t.Fatal("negative native TKE was silently clamped instead of rejected")
+	}
+}
+
 func TestCloudTKEUsesUniqueAdjacentHalfLevels(t *testing.T) {
 	levels := cloudTKEHalfLevels()
-	if len(levels) != 18 {
-		t.Fatalf("TKE half-level count = %d, want 18", len(levels))
+	if len(levels) != 32 {
+		t.Fatalf("TKE half-level count = %d, want 32", len(levels))
 	}
 	seen := make(map[int]bool, len(levels))
 	for _, level := range levels {
@@ -83,12 +182,12 @@ func TestCloudTKEUsesUniqueAdjacentHalfLevels(t *testing.T) {
 		}
 		seen[level] = true
 	}
-	for level := 58; level <= 75; level++ {
+	for level := 44; level <= 75; level++ {
 		if !seen[level] {
 			t.Fatalf("near-ground TKE half-level %d is missing", level)
 		}
 	}
-	if got, want := cloudStepMessageCount(), 187; got != want {
+	if got, want := cloudStepMessageCount(), 245; got != want {
 		t.Fatalf("cloud step message count = %d, want %d", got, want)
 	}
 }
@@ -160,10 +259,67 @@ func TestManifestHourlyCloudRequiresGroundLayerThermodynamics(t *testing.T) {
 	}
 }
 
+func TestAugmentCloudRetainsSupersededBundleReferencedByAstrodome(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "state"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	baseTime := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	runID := baseTime.Format("2006010215")
+	runDirectory := filepath.Join(root, "models", "icon-eu", "runs", runID)
+	oldName := "cloud-hourly-v5-full-hhl"
+	oldDirectory := filepath.Join(runDirectory, oldName)
+	if err := os.MkdirAll(oldDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(oldDirectory, "referenced-by-old-dome")
+	if err := os.WriteFile(sentinel, []byte("immutable old base"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	publishedAt := baseTime.Add(time.Hour)
+	manifest := Manifest{
+		SchemaVersion: ManifestSchemaVersion, Provider: "icon-eu", Product: ProductName,
+		RunID: runID, BaseTime: baseTime, PublishedAt: publishedAt, Grid: Coverage(), Complete: true,
+		CloudVariables:   []string{"ccl", "pres", "qc", "qi", "t", "u", "v", "tke", "HHL"},
+		CloudModelLevels: append([]int(nil), DefaultCloudModelLevels...), CloudPublishedAt: &publishedAt,
+		CloudGeometry: &BundleFile{File: filepath.Join(oldName, "geometry.grib2"), Messages: domeHalfLevelCount},
+		CloudSteps:    make([]SurfaceStepFile, HourlySurfaceStepCount),
+	}
+	for hour := range manifest.CloudSteps {
+		manifest.CloudSteps[hour] = SurfaceStepFile{
+			ForecastHour: hour, ValidAt: baseTime.Add(time.Duration(hour) * time.Hour),
+			File: filepath.Join(oldName, fmt.Sprintf("f%03d.grib2", hour)), Messages: 187,
+		}
+	}
+	loaded := LoadedManifest{Manifest: manifest, Directory: runDirectory}
+	transport := newDomeTestTransport(t)
+	client := NewClient()
+	client.BaseURL = "https://dwd.invalid/icon-eu"
+	client.HTTPClient = &http.Client{Transport: transport}
+	client.Runner = cloudBundleTestRunner{}
+	client.Workers = 16
+	client.Progress = func(string, ...any) {}
+	updated, err := client.AugmentCloud(context.Background(), root, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.HasHourlyCloud() {
+		t.Fatal("expanded native-MH cloud bundle was not published")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("superseded cloud bundle referenced by old Astrodome was removed: %v", err)
+	}
+}
+
 func TestValidateCloudStepDistinguishesFullAndHalfLevels(t *testing.T) {
 	var metadata strings.Builder
 	for _, level := range DefaultCloudModelLevels {
 		for _, field := range cloudBaseLevelFields {
+			fmt.Fprintf(&metadata, "%s generalVerticalLayer %d\n", field.shortName, level)
+		}
+	}
+	for _, level := range cloudGroundThermodynamicOnlyLevels() {
+		for _, field := range cloudGroundThermodynamicFields {
 			fmt.Fprintf(&metadata, "%s generalVerticalLayer %d\n", field.shortName, level)
 		}
 	}

@@ -29,16 +29,29 @@ func TestGlobalURLsUseNativeProducts(t *testing.T) {
 }
 
 func TestGlobalCloudSubsetMatchesICONPhysicalHeights(t *testing.T) {
-	if len(globalCloudModelLevels) != 27 || len(globalCloudGroundModelLevels) != 17 || globalCloudStepMessageCount(48) != 187 || globalCloudStepMessageCount(49) != 169 {
+	if len(globalCloudModelLevels) != 27 || len(globalCloudGroundModelLevels) != 34 || globalCloudStepMessageCount(48) != 260 || globalCloudStepMessageCount(49) != 225 {
 		t.Fatalf("unexpected Global cloud contract: levels=%d ground=%d messages=%d/%d", len(globalCloudModelLevels), len(globalCloudGroundModelLevels), globalCloudStepMessageCount(48), globalCloudStepMessageCount(49))
 	}
 	for index, level := range globalCloudGroundModelLevels {
-		if level != 104+index {
+		if level != 87+index {
 			t.Fatalf("ground level %d = %d", index, level)
 		}
 	}
-	if levels := globalCloudGeometryLevels(); levels[len(levels)-1] != globalSurfaceHalfLevel {
-		t.Fatalf("last HHL = %d, want %d", levels[len(levels)-1], globalSurfaceHalfLevel)
+	if got := len(globalCloudGroundThermodynamicOnlyLevels()); got != 11 {
+		t.Fatalf("additional Global P/T levels = %d, want 11", got)
+	}
+	geometryLevels := globalCloudGeometryLevels()
+	if geometryLevels[len(geometryLevels)-1] != globalSurfaceHalfLevel {
+		t.Fatalf("last HHL = %d, want %d", geometryLevels[len(geometryLevels)-1], globalSurfaceHalfLevel)
+	}
+	geometrySeen := make(map[int]bool, len(geometryLevels))
+	for _, level := range geometryLevels {
+		geometrySeen[level] = true
+	}
+	for level := 87; level <= globalSurfaceHalfLevel; level++ {
+		if !geometrySeen[level] {
+			t.Fatalf("native-MH turbulence geometry is missing HHL%d", level)
+		}
 	}
 }
 

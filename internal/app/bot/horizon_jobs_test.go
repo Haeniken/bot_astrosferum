@@ -311,6 +311,13 @@ func TestHorizonCacheKeyCoversScientificAndPresentationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldBundleKey, err := horizonCacheKeyForSchema("horizon-cache-v7-glo30-informational-skyline", base, calibration, "render-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldBundleKey == baseKey {
+		t.Fatal("expanded native-MH input support reused the former Horizon cache identity")
+	}
 	checks := []struct {
 		name    string
 		request horizonRequest

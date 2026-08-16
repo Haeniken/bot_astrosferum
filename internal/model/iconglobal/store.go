@@ -18,7 +18,7 @@ import (
 	"bot_astrosferum/internal/model/iconeu"
 )
 
-const pointCacheVersion = "point-v3-explicit-heuristics"
+const pointCacheVersion = "point-v4-native-mh-support"
 
 type commandRunner struct {
 	semaphore chan struct{}
@@ -227,7 +227,7 @@ func (store *Store) extractCloud(ctx context.Context, manifest LoadedManifest, l
 	}
 	return forecast.CloudSeries{
 		Location: location, Provider: manifest.Provider,
-		Product: "ICON Global native-layer CLC/QC/QI/T + lower-atmosphere U/V/TKE",
+		Product: globalCloudProductName,
 		RunID:   manifest.RunID, BaseTime: manifest.BaseTime, GeneratedAt: time.Now().UTC(),
 		TurbulenceValidUntil: manifest.BaseTime.Add(48 * time.Hour),
 		SurfaceElevationM:    surfaceElevationM, Frames: frames,

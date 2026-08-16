@@ -1,7 +1,7 @@
 # bot_astrosferum: implementation status
 
 Date: 2026-08-14
-Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v13 with a static informational Copernicus DEM GLO-30 native-cell skyline is current; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v34/v24 current; v28/v22 full-run retained as the measured atmospheric-path baseline
+Stage: Stage 3 live ICON → Telegram and VK; fast straight-ray Horizon v14 with a static informational Copernicus DEM GLO-30 native-cell skyline is current; Astrodome controlled rollout plus anonymous read-only fixture live, production-v2/v34/v24 current; v28/v22 full-run retained as the measured atmospheric-path baseline
 Deployment target: operator-managed host
 
 ## Complete
@@ -27,7 +27,7 @@ Deployment target: operator-managed host
 - timezone lookup is offline and every PNG labels the coordinate timezone;
 - DWD discovery selects the latest complete ICON-EU `00/06/12/18` cycle available through `+72 h`;
 - coordinates outside the ICON-EU domain route to the latest complete ICON Global `00/06/12/18` cycle on its full native global grid; CDO uses the official static DWD grid geometry for nearest-native-cell point extraction, without cropping the source or creating a second world raster;
-- ICON Global now synchronizes the same 79-hour, 27-level `CLC/P/T/QC/QI + lower U/V/TKE + HHL` contract as ICON-EU, using height-equivalent model indices shifted by `+46`; DWD Global TKE ends at `+48 h`, so bundles are 187 messages/hour through that point and 169 thereafter, the cloud map remains complete, and hybrid Overall stops rather than extrapolating missing turbulence; direct `VIS` also remains unavailable in the DWD Global feed;
+- ICON Global now synchronizes the same 79-hour cloud plus native-MH turbulence contract as ICON-EU. Its independent full-grid HHL proof selects consecutive full levels `87…120` and half levels `87…121`; DWD Global TKE ends at `+48 h`, so bundles are 260 messages/hour through that point and 225 thereafter, the cloud map remains complete, and hybrid Overall stops rather than extrapolating missing turbulence; direct `VIS` also remains unavailable in the DWD Global feed;
 - atomic sync streams pressure-level `U/V/FI/T`, retains no `.bz2`, and validates every bundle with ecCodes and SHA-256;
 - legacy pressure-level runs atomically download only missing `FI/T`; the scheduler independently publishes versioned hourly surface/cloud bundles, while ecCodes 2.45 `clwmr/QI` names normalize to stable internal `qc/qi`;
 - ICON-EU and ICON Global keep the preceding complete `current` run available while every component of a newer run downloads; `current` changes through one atomic symlink operation only after complete validation;
@@ -330,7 +330,7 @@ to a single azimuth-independent zenith. Completed code includes:
   no resampling between them; Overall never extends outside pressure-profile
   support;
   Go serializes the additive Overall penalty points and the browser only draws
-  them. The payload pins `overall-astronomy-index-v3-native-mh-logp`,
+  them. The payload pins `overall-astronomy-index-v4-native-mh-logp`,
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
   website-only cache miss skips PNG rasterization. It additionally carries ten
   exact, canonical hourly topocentric tracks under
@@ -455,9 +455,10 @@ Production uses the following replacement:
 
 - `surface-hourly-v17` publishes 17 single-level fields at each of 79 hours,
   including ICON `MH`/ecCodes `mld` in metres;
-- `cloud-hourly-v4` publishes exactly 187 messages per hour:
-  `CLC/P/T/QC/QI` at all 27 retained model levels, `U/V` on consecutive
-  `58…74`, `TKE` on half levels `58…75`, plus separate `HHL` geometry;
+- `cloud-hourly-v6-native-mh` publishes exactly 245 messages per hour:
+  `CLC/P/T/QC/QI` at all 27 retained cloud levels, a deduplicated consecutive
+  `P/T/U/V` turbulence chain on `44…74`, `TKE` on half levels `44…75`, plus
+  separate `HHL` geometry;
 - Masciadri `Cn²` is integrated trapezoidally from the surface to the positive
   native hourly `h_PBL=ICON_MH m AGL`; HMNSP99 applies only above that same
   boundary, and total `J` gives model-derived seeing at 500 nm;
@@ -482,12 +483,22 @@ Production uses the following replacement:
   native level, whereas Overall uses total-column `TQC/TQI` and
   random overlap of the aggregated `CLCL/CLCM/CLCH` tiers; their numeric values are not
   claimed to be identical;
-- ICON-EU point-cache schema is `point-v7-explicit-heuristics` and ICON Global
-  uses `point-v3-explicit-heuristics`; bundles with the former exported Gob
+- ICON-EU point-cache schema is `point-v8-native-mh-support` and ICON Global
+  uses `point-v4-native-mh-support`; bundles with the former exported Gob
   field names, as well as entries without `MH`, `T`, or native layer
   thickness, cannot be reused as current data;
+- the expanded chain changes the potential-temperature-gradient stencil at
+  the former upper endpoint as well as turning some deep-MH results from
+  unavailable into available. Therefore seeing v9, Overall v4, Horizon v14,
+  and Horizon cache v8 reject prior same-run results. Astrodome science/path
+  v34/v24 remain unchanged because that product already reconstructs the
+  complete native volume independently; its base-bundle layout digest is
+  nevertheless changed so a same-run volume is rebuilt against cloud v6;
 - version markers match the new contract:
-  `seeing-hybrid-tke-native-mh-hmnsp99-logp-v8`,
+  `seeing-hybrid-tke-native-mh-hmnsp99-logp-v9`,
+  `overall-astronomy-index-v4-native-mh-logp`,
+  `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14`,
+  `horizon-cache-v8-native-mh-support`,
   `conditions-v8-precip-veto-penalty-decomposition`,
   `render-v18-celestial-distance`, and
   `shared-render-v24-explicit-heuristics`; Reference V is
@@ -542,5 +553,5 @@ The light-pollution provider is pinned to the validated Light Pollution Atlas 20
 3. Continue accumulating observational verification data for every forecast
    method and monitor both platform adapters in production.
 
-`seeing-hybrid-tke-native-mh-hmnsp99-logp-v8` is not observationally calibrated until compared
+`seeing-hybrid-tke-native-mh-hmnsp99-logp-v9` is not observationally calibrated until compared
 with DIMM/MASS/SCIDAR data or observing logs in the priority regions.

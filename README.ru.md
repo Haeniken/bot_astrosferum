@@ -299,10 +299,16 @@ DIMM/MASS/SCIDAR или качественные журналы наблюден
 - комплекты из семи PNG хранятся до 48 часов, не более 256 комплектов;
 - временные файлы и устаревшие версии кешей удаляются автоматически.
 
-Контракты ICON-EU: `surface-hourly-v17`, `cloud-hourly-v4` и
-`point-v7-explicit-heuristics`; ICON Global использует `cloud-hourly-v1` и
-`point-v3-explicit-heuristics`. Global bundle содержит те же 187 GRIB-сообщений/час
-до `+48 ч`, затем 169: DWD прекращает TKE, продолжая все cloud и wind fields.
+Отдельная минимальная последовательность исходных `P/T/U/V/TKE` на уровнях
+ICON-EU `44…74` и независимо выбранных уровнях ICON Global `87…120`
+поддерживает любой положительный ICON `MH` до текущего закодированного
+предела `3000 м` без загрузки дополнительных полей облачного конденсата;
+будущее более глубокое значение останется недоступным без экстраполяции. Контракты
+ICON-EU: `surface-hourly-v17`, `cloud-hourly-v6-native-mh` и
+`point-v8-native-mh-support`; ICON Global использует
+`cloud-hourly-v2-native-mh` и `point-v4-native-mh-support`. Global bundle
+содержит 260 GRIB-сообщений/час до `+48 ч`, затем 225: DWD прекращает TKE,
+продолжая все cloud, thermodynamic и wind fields.
 
 ## Документация
 
