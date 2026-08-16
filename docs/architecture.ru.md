@@ -1,7 +1,7 @@
 # bot-astrosferum: KISS-архитектура
 
 Статус: реализованный MVP, архитектурная ревизия 0.4; data contract
-`surface-hourly-v17`/`cloud-hourly-v4` работает в production. Опциональное
+`surface-hourly-v17`/`cloud-hourly-v6-native-mh` — текущий контракт. Опциональное
 расширение «Горизонт» для ICON-EU реализовано как функция приложения,
 управляемая конфигурацией. Расчётчик астрокупола и аутентифицированный
 внутренний API кабинета развёрнуты здесь; публичное приложение принадлежит отдельному
@@ -402,26 +402,28 @@ Fallback никогда не происходит молча: provider, сетк
 
 Текущий почасовой контракт ICON-EU разделён на два независимо валидируемых
 набора. `surface-hourly-v17` содержит 17 single-level сообщений на каждый
-`f000…f078`, включая `MH`/`mld` в метрах. `cloud-hourly-v4` содержит ровно
-187 сообщений на каждый час: `CLC/P/T/QC/QI` на всех 27 выбранных full levels,
-`U/V` на последовательных нижних levels `58…74` и `TKE` на half levels
-`58…75`; отдельный time-invariant bundle хранит нужные `HHL`. Manifest
+`f000…f078`, включая `MH`/`mld` в метрах. `cloud-hourly-v6-native-mh` содержит
+ровно 245 сообщений на каждый час: `CLC/P/T/QC/QI` на 27 выбранных облачных
+full levels, отдельную последовательность `P/T/U/V` на full levels `44…74`
+для турбулентности и `TKE` на half levels `44…75`; уже присутствующие в
+облачной выборке P/T не дублируются. Отдельный time-invariant bundle хранит
+нужные `HHL`. Manifest
 переключается только после проверки количества, shortName, level, размера и
 SHA-256 каждого файла.
 
 ICON Global публикует тот же почасовой cloud/PBL контракт на полной native
-grid. Эквивалентные по высоте индексы: `71,76,81,86,91,94,96,
-98,100,102,104…120` для `CLC/P/T/QC/QI`, `104…120` для нижних `U/V` и
-`104…121` для half-level `TKE/HHL`. Это индексы ICON-EU со сдвигом `+46`,
-проверенным по фактическим HHL в общей области. Полное 79-часовое расширение
+grid. Облачные индексы: `71,76,81,86,91,94,96,
+98,100,102,104…120` для `CLC/P/T/QC/QI`; независимое доказательство по полной
+сетке HHL выбирает `87…120` для исходной цепочки `P/T/U/V` турбулентности и
+`87…121` для half-level `TKE/HHL`. Полное 79-часовое расширение
 валидируется в staging-каталоге и открывается одной атомарной заменой manifest.
 Перед общим cloud extractor point-путь применяет официальную Global grid,
 поэтому rendering и Overall используют одинаковые типы и формулы для обоих
 providers.
 
 DWD Global публикует model-level TKE только до `+48 ч`. Bundles до этого срока
-содержат 187 сообщений; bundles `+49…+78 ч` сохраняют все
-`CLC/P/T/QC/QI/U/V` (169 сообщений) и намеренно не содержат TKE. Поэтому cloud
+содержат 260 сообщений; bundles `+49…+78 ч` сохраняют все обязательные
+`CLC/P/T/QC/QI/U/V` (225 сообщений) и намеренно не содержат TKE. Поэтому cloud
 heatmap остаётся почасовой на всём горизонте, а гибридный TKE/HMNSP99 Overall
 заканчивается на последнем native-TKE сроке без экстраполяции турбулентности.
 Pressure-level wind/seeing диагностика продолжается.
@@ -494,8 +496,8 @@ cache из раздела 29, а не в обычный point cache. Обычн�
 Provider-specific ключи point cache:
 
 ```text
-ICON-EU:     point-v7-explicit-heuristics/<run>/<grid-cell>.gob.gz
-ICON Global: point-v3-explicit-heuristics/<run>/<grid-cell>.gob.gz
+ICON-EU:     point-v8-native-mh-support/<run>/<grid-cell>.gob.gz
+ICON Global: point-v4-native-mh-support/<run>/<grid-cell>.gob.gz
 ```
 
 ## 14. Нормализация и контроль качества
@@ -566,9 +568,10 @@ shear = hypot(u₂-u₁, v₂-v₁) / abs(z₂-z₁ in km)
 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74
 ```
 
-На всех 27 уровнях есть `CLC/P/T/QC/QI`; последовательные full levels `58…74`
-дополнительно содержат `U/V`, а TKE берётся с ограничивающих half levels
-`58…75`.
+На всех 27 облачных уровнях есть `CLC/P/T/QC/QI`. Отдельная минимальная
+цепочка турбулентности содержит `P/T/U/V` на последовательных full levels
+`44…74`, а TKE берётся с ограничивающих half levels `44…75`; совпадающие P/T
+хранятся однократно.
 `HHL` задаёт фактическую геометрию и поверхность. Непрерывность нижней части
 нужна для центрального градиента `theta` и трапецеидального интегрирования PBL,
 а разреженная верхняя часть — для облачной карты. Subset versioned; manifest
@@ -689,7 +692,7 @@ PBL равна положительному исходному single-level `ICO
 `h_PBL=MH m AGL`. От поверхности до `h_PBL` native ICON
 `T/P/TKE/HHL` даёт `Cn²` по формуле Masciadri
 `3.35e−6·P^[2(1−2R/cp)]·theta^(−10/3)·|dtheta/dz|^(4/3)·TKE^(2/3)`;
-центральный градиент вычисляется на последовательных model levels `58…74`,
+центральный градиент вычисляется на последовательных model levels `44…74`,
 интегрирование выполняется трапециями от `HHL75`. Выше того же почасового
 `h_PBL` применяется HMNSP99 к pressure-level `T/U/V/FI`.
 `J_total=J_ground+J_free` переводится в
@@ -1097,7 +1100,7 @@ sync:
   min_free_space: 150GiB
 
 algorithms:
-  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v8
+  seeing_version: seeing-hybrid-tke-native-mh-hmnsp99-logp-v9
   dew_version: dew-v1
   conditions_version: conditions-v8-precip-veto-penalty-decomposition
   overall_seeing_weight: 1.0
@@ -1509,8 +1512,11 @@ SHA-256 профиля и входного manifest. Координатор пр
 публикует результат под итоговым ключом; ключ подготовки никогда не является
 финальной идентичностью кэша результата.
 
-Научный маркер — `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13`, кэш приложения
-schema — `horizon-cache-v7-glo30-informational-skyline`. Изменение формулы или serialized/rendered contract
+Научный маркер — `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14`, кэш приложения
+schema — `horizon-cache-v8-native-mh-support`. Смена cache schema отклоняет артефакты
+того же run, в которых турбулентность была отмечена `unavailable` до
+расширения native-цепочки `P/T/U/V/TKE` до закодированного потолка MH `3000 m`.
+Изменение формулы, покрытия provider inputs или serialized/rendered contract
 требует смены соответствующего marker.
 
 PNG и metadata публикуются через staging и atomic rename. Хранение ограничено
@@ -1970,7 +1976,7 @@ pressure-level профиля заканчивается раньше, а pressu
 ветра/сдвига/сиинга — нативную трёхчасовую ось; ни одна ось не
 ресемплируется из другой. Аддитивные вклады штрафов Overall сериализует
 Go, а не восстанавливает JavaScript. `forecast-interactive-v6-observing-ephemerides` также закрепляет
-`algorithms.overall` как `overall-astronomy-index-v3-native-mh-logp`,
+`algorithms.overall` как `overall-astronomy-index-v4-native-mh-logp`,
 `algorithms.cloud_obstruction` как `effective-cloud-obstruction-v1` и передаёт
 `algorithms.overall_calibration_sha256`, а также точную версию эфемерид
 `celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4`. Payload содержит десять канонических

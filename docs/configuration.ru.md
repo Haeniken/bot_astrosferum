@@ -189,7 +189,7 @@ directional gateway и credential. Web-задачи обычного прогн�
 JSON, который хранится 96 часов; они используют настроенные очереди, точно
 сохраняют подготовленные научные значения, не растеризуют PNG при website-only
 cache miss и не отправляют сообщения в платформы. Forecast JSON закрепляет
-`overall-astronomy-index-v3-native-mh-logp`, `effective-cloud-obstruction-v1` и SHA-256 полной
+`overall-astronomy-index-v4-native-mh-logp`, `effective-cloud-obstruction-v1` и SHA-256 полной
 калибровки Overall, использованной для результата. Сайт может использовать отдельную роль
 PostgreSQL с минимальными правами, но его остановка или удаление не должны
 влиять на Telegram, VK, синхронизацию моделей, обычный прогноз,

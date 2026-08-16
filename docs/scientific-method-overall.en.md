@@ -629,7 +629,7 @@ The `!` marker on chart 2 means incomplete inputs, not low confidence in an
 otherwise complete probabilistic forecast.
 
 This missing-data interpretation is versioned as
-`overall-astronomy-index-v3-native-mh-logp`: a direct `VIS`
+`overall-astronomy-index-v4-native-mh-logp`: a direct `VIS`
 field can support `FogHeuristic` even when PWV is absent and the separate
 transparency heuristic is therefore unavailable. Missing PWV never means
 clear air or zero water vapour.
@@ -964,11 +964,14 @@ observational-calibration limitation; the non-negative `|dtheta/dz|^(4/3)`
 term does not by itself distinguish these regimes.
 
 The interval from the model surface to `h_PBL` uses consecutive native
-ICON-EU full model levels `58…74`:
+ICON-EU full model levels `44…74`. This is a dedicated minimal turbulence
+chain; the cloud-condensate heatmap remains on its 27-level sparse subset:
 
 - `T`, `P`, `U`, and `V` on full levels;
 - `HHL` as the actual geometric boundaries;
-- `TKE` on half levels, mapped to a full level from its two bounding values.
+- `TKE` on half levels, mapped to a full level by the arithmetic mean of its
+  two bounding values. Both source values must be finite and non-negative;
+  a negative source value is unavailable rather than silently clamped.
 
 DWD publishes `TKE` in `J/kg`, dimensionally equal to `m²/s²`; official GRIB
 packages are available in the

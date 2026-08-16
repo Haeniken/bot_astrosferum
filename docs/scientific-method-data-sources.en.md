@@ -10,7 +10,7 @@ versions, and verification evidence are unchanged.
 ## 6. Data-source contracts and server verification
 
 Status: original Stage 0 spike updated with the current data contract;
-`surface-hourly-v17`/`cloud-hourly-v4` is published in production
+`surface-hourly-v17`/`cloud-hourly-v6-native-mh` is the current contract.
 Initial measurement date: 2026-07-19; updated 2026-07-22
 Host: the production host
 Runtime directory: `/opt/docker/bot-astrosferum/data/verification`
@@ -134,11 +134,14 @@ An anonymized control case confirms that pressure levels do
 not resolve the first few hundred metres above the model surface: HMNSP99 gave
 about `0.70…0.77″` without the PBL. The current versioned bundle therefore uses
 sparse cloud levels `25,30,35,40,45,48,50,52,54,56` plus consecutive levels
-`58…74`. All 27 full levels require `CLC/P/T/QC/QI`; the lower chain also
-requires `U/V`, while half-level `TKE/HHL` supplies turbulence and geometry.
-The two bounding TKE values map to each full layer. The `cloud-hourly-v4`
-contract contains exactly 187 messages at every `f000…f078` plus separate
-time-invariant `HHL` geometry.
+`58…74`. All 27 cloud levels require `CLC/P/T/QC/QI`. A separate minimal
+turbulence chain requires `P/T/U/V` on consecutive full levels `44…74` and
+`TKE` on bounding half levels `44…75`; P/T already present in the cloud subset
+are not duplicated. Level 44 keeps the native chain above the currently
+encoded `MH=3000 m` ceiling throughout the ICON-EU domain; a future deeper
+value fails closed rather than extrapolating missing state. The
+`cloud-hourly-v6-native-mh` contract contains exactly 245 messages at every
+`f000…f078` plus separate time-invariant `HHL` geometry.
 
 Server-side verification for only `f042/f048` confirmed availability and units
 of those DWD fields. The first fixed-2-km calculation produced `2.221″` and
@@ -194,8 +197,8 @@ are validated per time; the independent `surface_steps` manifest section
 appears only after all 79 files are complete. The new field set is published
 in a versioned directory, the manifest switches atomically, and only then is
 the previous directory removed. The enriched point caches use
-`point-v7-explicit-heuristics` for ICON-EU and
-`point-v3-explicit-heuristics` for ICON Global. The directory/schema change
+`point-v8-native-mh-support` for ICON-EU and
+`point-v4-native-mh-support` for ICON Global. The directory/schema change
 rejects Gob bundles carrying the former heuristic field names, as well as old
 entries without native thickness or `MH`, instead of silently decoding absent
 fields as zero values.
@@ -286,12 +289,14 @@ replacement.
 
 ICON Global uses the same physical input contract as ICON-EU. It retains 27
 full levels `71,76,81,86,91,94,96,98,100,102,104…120` with `CLC/P/T/QC/QI`,
-consecutive lower levels `104…120` with `U/V`, half levels `104…121` with
-`TKE`, and the bounding `HHL`. These Global indices are the physical-height
-counterparts of ICON-EU levels `25,30,35,40,45,48,50,52,54,56,58…74`; a live
-HHL comparison over the shared domain found the mapping to be the constant
-index offset `+46` (for example, both HHL 58/104 are about 2.41 km and HHL
-74/120 about 30 m at the checked node). The shared extractor and equations
+consecutive levels `87…120` with the native `P/T/U/V` turbulence chain, half
+levels `87…121` with `TKE`, and the bounding `HHL`. The turbulence indices are
+selected independently from the complete Global HHL grid rather than by
+assuming a fixed numerical offset from ICON-EU. On immutable run
+`2026081600`, the level-87 full-level midpoint remains at least `3119.33 m`
+AGL over the whole grid, while level 88 reaches `2981.83 m` and is therefore
+insufficient for the encoded `MH=3000 m` ceiling; the level-120 midpoint is
+`9.99078…10.7408 m` AGL. The shared extractor and equations
 therefore produce the same cloud-obstruction heatmap and hybrid TKE/HMNSP99
 Overall method on either provider. Official DWD publishes the required
 [CLC](https://opendata.dwd.de/weather/nwp/icon/grib/00/clc/),
@@ -300,8 +305,8 @@ Overall method on either provider. Official DWD publishes the required
 [TKE](https://opendata.dwd.de/weather/nwp/icon/grib/00/tke/), and
 [HHL](https://opendata.dwd.de/weather/nwp/icon/grib/00/hhl/) native products.
 DWD Global TKE ends at `+48 h`, although the other selected model-level fields
-remain hourly through `+78 h`. The first 49 bundles therefore contain 187
-messages and the last 30 contain 169. Cloud obstruction remains complete; the
+remain hourly through `+78 h`. The first 49 bundles therefore contain 260
+messages and the last 30 contain 225. Cloud obstruction remains complete; the
 hybrid Overall sequence stops at `+48 h` rather than extrapolating TKE or
 silently reverting to the known-optimistic free-atmosphere estimate. Global
 still has no public `VIS` in this feed, so fog is not inferred from a

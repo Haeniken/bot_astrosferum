@@ -1,7 +1,7 @@
 # bot_astrosferum: статус реализации
 
 Дата: 2026-08-14
-Этап: Stage 3, live ICON → Telegram и VK; текущий быстрый «Горизонт» v13 использует прямой луч и статическую информационную линию рельефа Copernicus DEM GLO-30 по нативным ячейкам; контролируемый rollout астрокупола и анонимная эталонная визуализация только для чтения развёрнуты, production-v2/v34/v24 является текущим, а полный v28/v22 сохранён как измеренный baseline атмосферного пути
+Этап: Stage 3, live ICON → Telegram и VK; текущий быстрый «Горизонт» v14 использует прямой луч и статическую информационную линию рельефа Copernicus DEM GLO-30 по нативным ячейкам; контролируемый rollout астрокупола и анонимная эталонная визуализация только для чтения развёрнуты, production-v2/v34/v24 является текущим, а полный v28/v22 сохранён как измеренный baseline атмосферного пути
 Среда развёртывания: управляемый оператором сервер
 
 ## Готово
@@ -27,7 +27,7 @@
 - timezone определяется offline по координатам и подписывается на каждом PNG;
 - DWD discovery выбирает последний полный ICON-EU цикл `00/06/12/18` с доступным `+72 h`;
 - координаты вне домена ICON-EU маршрутизируются на последний полный ICON Global `00/06/12/18` на полной native global grid; CDO использует официальную статическую геометрию DWD для выбора ближайшего native-узла без обрезки источника и без второй мировой raster-копии;
-- ICON Global теперь синхронизирует тот же 79-часовой 27-уровневый контракт `CLC/P/T/QC/QI + нижние U/V/TKE + HHL`, что ICON-EU, используя эквивалентные по высоте model indices со сдвигом `+46`; DWD Global TKE заканчивается на `+48 ч`, поэтому до него bundle содержит 187 сообщений/час, затем 169, cloud map остаётся полной, а гибридный Overall заканчивается без экстраполяции отсутствующей турбулентности; прямой `VIS` также остаётся недоступен в DWD Global feed;
+- ICON Global теперь синхронизирует тот же 79-часовой облачный контракт с цепочкой турбулентности для нативного MH, что ICON-EU. Независимое доказательство по полной сетке HHL выбирает последовательные full levels `87…120` и half levels `87…121`; DWD Global TKE заканчивается на `+48 ч`, поэтому до него bundle содержит 260 сообщений/час, затем 225, cloud map остаётся полной, а гибридный Overall заканчивается без экстраполяции отсутствующей турбулентности; прямой `VIS` также остаётся недоступен в DWD Global feed;
 - atomic sync скачивает pressure-level `U/V/FI/T`, не сохраняет `.bz2`, проверяет каждый бандл через ecCodes и SHA-256;
 - старый pressure-level run атомарно дополняется только отсутствующими `FI/T`; scheduler независимо публикует versioned hourly surface/cloud bundle, а ecCodes 2.45 `clwmr/QI` нормализуются во внутренние `qc/qi`;
 - ICON-EU и ICON Global оставляют предыдущий полный `current` доступным, пока загружаются все компоненты нового run; `current` переключается одной атомарной symlink-операцией только после полной проверки;
@@ -344,7 +344,7 @@ Go test/vet/build, закреплённый golangci-lint `2.12.2`, govulncheck 
   без ресемплинга между ними; Overall никогда не выходит за границы поддержки
   pressure-level профиля;
   аддитивные пункты штрафов Overall сериализует Go, браузер только рисует их.
-  Payload закрепляет `overall-astronomy-index-v3-native-mh-logp`,
+  Payload закрепляет `overall-astronomy-index-v4-native-mh-logp`,
   `effective-cloud-obstruction-v1` и `overall_calibration_sha256`; при
   website-only cache miss PNG не растеризуется. Кроме того, он содержит десять
   точных канонических почасовых топоцентрических траекторий версии
@@ -473,9 +473,10 @@ production-v2, dense-v1 и контрольной uniform-32 из 513 узлов
 
 - `surface-hourly-v17` публикует 17 single-level полей на каждый из 79 часов,
   включая ICON `MH`/ecCodes `mld` в метрах;
-- `cloud-hourly-v4` публикует ровно 187 сообщений на каждый час:
-  `CLC/P/T/QC/QI` на всех 27 выбранных model levels, `U/V` на непрерывных
-  `58…74`, `TKE` на half levels `58…75` и отдельную `HHL`-геометрию;
+- `cloud-hourly-v6-native-mh` публикует ровно 245 сообщений на каждый час:
+  `CLC/P/T/QC/QI` на 27 выбранных облачных model levels, дедуплицированную
+  последовательность `P/T/U/V` на `44…74`, `TKE` на half levels `44…75` и
+  отдельную `HHL`-геометрию;
 - Masciadri `Cn²` интегрируется трапециями от поверхности до положительной
   исходной почасовой границы `h_PBL=ICON_MH m AGL`; HMNSP99 применяется только выше той
   же границы, а полный `J` даёт model-derived seeing на 500 нм;
@@ -499,12 +500,22 @@ production-v2, dense-v1 и контрольной uniform-32 из 513 узлов
 - карта применяет общий optical-depth kernel/guard policy на каждом native
   level, а Overall использует total-column `TQC/TQI` и random overlap
   `CLCL/CLCM/CLCH`; поэтому их числа не объявляются идентичными;
-- схема point-cache ICON-EU поднята до `point-v7-explicit-heuristics`, а ICON
-  Global использует `point-v3-explicit-heuristics`; bundles с прежними
+- схема point-cache ICON-EU поднята до `point-v8-native-mh-support`, а ICON
+  Global использует `point-v4-native-mh-support`; bundles с прежними
   экспортируемыми именами полей Gob, как и записи без `MH`, `T` и нативной
   толщины слоя, не могут переиспользоваться как текущие данные;
+- расширенная цепочка меняет stencil градиента потенциальной
+  температуры на прежней верхней опоре, а также переводит часть
+  глубоких MH из `unavailable` в рассчитанные. Поэтому seeing v9,
+  Overall v4, Horizon v14 и Horizon cache v8 отклоняют прежние результаты
+  того же run. Astrodome science/path v34/v24 не меняются, поскольку
+  этот продукт уже независимо восстанавливает полный native volume;
+  но digest layout его base bundle сменён, чтобы same-run volume пересобирался на cloud v6;
 - version markers синхронизированы с новым контрактом:
-  `seeing-hybrid-tke-native-mh-hmnsp99-logp-v8`,
+  `seeing-hybrid-tke-native-mh-hmnsp99-logp-v9`,
+  `overall-astronomy-index-v4-native-mh-logp`,
+  `horizon-spherical-straight-los-native-mh-logp-glo30-informational-v14`,
+  `horizon-cache-v8-native-mh-support`,
   `conditions-v8-precip-veto-penalty-decomposition`,
   `render-v18-celestial-distance` и
   `shared-render-v24-explicit-heuristics`; Reference V
@@ -560,6 +571,6 @@ Provider засветки зафиксирован на проверенном L
 3. Продолжать накапливать наблюдательные данные для всех методик прогноза и
    наблюдать за обоими platform adapter в production.
 
-Расчёт `seeing-hybrid-tke-native-mh-hmnsp99-logp-v8` не считается
+Расчёт `seeing-hybrid-tke-native-mh-hmnsp99-logp-v9` не считается
 наблюдательно откалиброванным до
 сравнения с DIMM/MASS/SCIDAR или журналами наблюдений в приоритетных регионах.

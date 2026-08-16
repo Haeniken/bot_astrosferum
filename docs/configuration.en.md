@@ -189,7 +189,7 @@ return owner-scoped status and a versioned interactive JSON dataset retained
 for 96 hours; they reuse the configured queues, preserve the prepared
 scientific values exactly, skip PNG rasterization on a website-only cache miss,
 and do not send platform messages. Forecast JSON pins
-`overall-astronomy-index-v3-native-mh-logp`, `effective-cloud-obstruction-v1`, and the SHA-256
+`overall-astronomy-index-v4-native-mh-logp`, `effective-cloud-obstruction-v1`, and the SHA-256
 of the complete Overall calibration used for that result. The site may use a dedicated
 least-privilege PostgreSQL role, but stopping or removing it must not affect
 Telegram, VK, model synchronization, ordinary forecasts, Horizon, or
