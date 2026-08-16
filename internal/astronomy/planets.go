@@ -60,6 +60,13 @@ func planetCoordinates(at time.Time, body CelestialBody) (equatorial, error) {
 	if err != nil {
 		return equatorial{}, err
 	}
+	return planetCoordinatesFromGeometry(body, geometry)
+}
+
+func planetCoordinatesFromGeometry(body CelestialBody, geometry planetGeometry) (equatorial, error) {
+	if !body.isPlanet() {
+		return equatorial{}, fmt.Errorf("%q is not a supported planet", body)
+	}
 	x, y, z := geometry.earthToTarget.x, geometry.earthToTarget.y, geometry.earthToTarget.z
 	distance := geometry.distanceAU
 	if !finite(distance) || distance <= 0 {
@@ -78,10 +85,12 @@ func planetCoordinates(at time.Time, body CelestialBody) (equatorial, error) {
 }
 
 type planetGeometry struct {
-	earthToTarget vector3
-	distanceAU    float64
-	receptionJDE  float64
-	emissionJDE   float64
+	earthToTarget      vector3
+	earthHeliocentric  vector3
+	targetHeliocentric vector3
+	distanceAU         float64
+	receptionJDE       float64
+	emissionJDE        float64
 }
 
 func planetGeocentricGeometry(at time.Time, body CelestialBody) (planetGeometry, error) {
@@ -108,7 +117,10 @@ func planetGeocentricGeometry(at time.Time, body CelestialBody) (planetGeometry,
 	if !finite(distance) || distance <= 0 {
 		return planetGeometry{}, fmt.Errorf("%s geocentric distance is invalid", body)
 	}
-	return planetGeometry{earthToTarget: vector, distanceAU: distance, receptionJDE: jde, emissionJDE: emissionJDE}, nil
+	return planetGeometry{
+		earthToTarget: vector, earthHeliocentric: earth, targetHeliocentric: target,
+		distanceAU: distance, receptionJDE: jde, emissionJDE: emissionJDE,
+	}, nil
 }
 
 func saturnRingOpeningDegrees(at time.Time) (float64, error) {

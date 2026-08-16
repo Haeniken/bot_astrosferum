@@ -321,7 +321,7 @@ to a single azimuth-independent zenith. Completed code includes:
 - owner-scoped ordinary-forecast and Horizon web jobs that reuse the existing
   forecast queue, render/Horizon caches, calibration, shared directional FIFO,
   statistics, and prepared scientific values without duplicating calculation;
-  the bot publishes `forecast-interactive-v5-explicit-heuristics` and `horizon-interactive-v7-glo30-informational-skyline` JSON
+  the bot publishes `forecast-interactive-v6-observing-ephemerides` and `horizon-interactive-v7-glo30-informational-skyline` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
   and draws interactive charts without sending a Telegram or VK message;
 - the ordinary interactive contract preserves separate native timelines:
@@ -334,12 +334,17 @@ to a single azimuth-independent zenith. Completed code includes:
   `effective-cloud-obstruction-v1`, and `overall_calibration_sha256`; a
   website-only cache miss skips PNG rasterization. It additionally carries ten
   exact, canonical hourly topocentric tracks under
-  `celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3`; shortest-arc interpolation is confined
+  `celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4`; shortest-arc interpolation is confined
   to dashed presentation geometry and never changes a selected-hour or
   meteorological value. The same contract carries a pinned exhaustive-hourly
   model-distance scale, an integer forecast-mean closeness label, the exact-hour
-  closeness displayed to two decimals, signed range rate, and Saturn ring-opening
-  angle; none of these diagnostics changes Overall. The separate Johnson-V diagnostic exposes NASA GEOS-CF provenance when
+  closeness displayed to two decimals, signed range rate, angular diameter,
+  phase, illuminated fraction, apparent V magnitude with explicit domain status,
+  solar elongation, daily culmination, Mars season, and Saturn ring-opening
+  angle; Mars/Pluto magnitudes are explicitly labeled planning approximations
+  rather than published-domain values, and none of these diagnostics changes
+  Overall. Astrodome also carries a strict versioned Polaris overlay and fixed
+  ICRS/J2000 SynScan coordinate. The separate Johnson-V diagnostic exposes NASA GEOS-CF provenance when
   composition is available and never becomes an implicit Overall penalty;
 - the Horizon interactive payload pins its exact cache artifact, ICON HHL
   observer-surface elevation, ICON-EU provider/run/grid, Horizon science

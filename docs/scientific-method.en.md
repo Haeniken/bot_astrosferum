@@ -643,14 +643,14 @@ serialization-consistency tolerances: `2e-6` for factor/product/Shapley loss
 and `2e-5` for the reconstructed `1…10` Overall value. These project validation
 limits are neither observational uncertainties nor permission to publish a
 loss outside `[0,1]`.
-The current Astrodome dataset schema is `7`. Its penalty semantics remain the
-bounded product definition above; schema 7 carries the explicit heuristic
-contracts plus the versioned celestial distance and ring-aspect diagnostics
-from section 4.10, the static GLO-30 terrain profile from section 7.4, and the
+The current Astrodome dataset schema is `8`. Its penalty semantics remain the
+bounded product definition above; schema 8 carries the explicit heuristic
+contracts plus the versioned observing ephemerides and Polaris catalog
+contract from section 4.10, the static GLO-30 terrain profile from section 7.4, and the
 per-node informational skyline elevation/obstruction predicate. The narrow
-`astrodome-dataset-writer-v8-glo30-informational-skyline` identity participates in the
+`astrodome-dataset-writer-v9-observing-ephemerides` identity participates in the
 calculation cache key. Calculation-request schema 6 also binds the
-`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3` ephemeris
+`celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4` ephemeris
 identity, so an older or incompatible payload cannot be reused.
 An archived payload outside the declared unit interval is rejected rather than
 silently clamped or reinterpreted.
@@ -1383,7 +1383,7 @@ or a Pickering scale.
 ### 4.10. Planning ephemerides and displayed sky paths
 
 The current ephemeris identity is
-`celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3`. It is also an
+`celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4`. It is also an
 explicit Astrodome calculation-request/cache-key input; a worker or archived
 dataset carrying an earlier identity is rejected rather than reused.
 
@@ -1540,6 +1540,215 @@ An independent Horizons direction-and-pole construction gives
 `0.08 degree`. `B` controls ring opening, not the full sky-plane position
 angle of the rings.
 
+#### Observing diagnostics
+
+The server evaluates the following diagnostics at every exact hourly sample.
+They are informational planning values and do not change Overall. Equatorial
+radii are pinned to the [JPL Solar System Dynamics physical
+parameters](https://ssd.jpl.nasa.gov/planets/phys_par.html). For topocentric
+observer distance `Delta_obs` and body equatorial radius `R_eq`, angular
+diameter is
+
+```math
+\theta_{diam}=2\arcsin\!\left(\frac{R_{eq}}{\Delta_{obs}}\right).
+```
+
+For a planet, `r_p` is the heliocentric target vector and `Delta_p` the vector
+from the EMB-based observer state. Phase angle, illuminated percentage, and
+topocentric solar elongation are
+
+```math
+\alpha=\arccos\!\left(
+\frac{(-\mathbf r_p)\mathbin{\cdot}(-\boldsymbol\Delta_p)}
+{\lVert\mathbf r_p\rVert\,\lVert\boldsymbol\Delta_p\rVert}
+\right),
+\qquad
+k=50(1+\cos\alpha)\ \%,
+```
+
+```math
+\epsilon=\arccos\!\left(
+\widehat{\mathbf u}_{body}\mathbin{\cdot}
+\widehat{\mathbf u}_{Sun}
+\right).
+```
+
+For the Moon, `epsilon` is topocentric and the phase angle additionally uses
+observer-Moon range `Delta_M` and observer-Sun range `R_S`:
+
+```math
+\alpha_M=\arctan2\!\left(
+R_S\sin\epsilon,
+\Delta_M-R_S\cos\epsilon
+\right).
+```
+
+The planetary Johnson-V planning magnitude follows [Mallama and Hilton
+(2018)](https://arxiv.org/abs/1808.01973). Distances `r` (heliocentric) and
+`Delta` (EMB-reference range) are in au; define
+
+```math
+d=5\log_{10}(r\Delta).
+```
+
+With phase angle `a` in degrees, the implemented Earth-observer formulae are
+
+```math
+\begin{aligned}
+V_{Mercury}={}&-0.613+d+0.063280a-0.0016336a^2
++3.3644\times10^{-5}a^3\\
+&-3.4265\times10^{-7}a^4+1.6893\times10^{-9}a^5
+-3.0334\times10^{-12}a^6,\\
+V_{Venus}={}&-4.384+d-0.001044a+0.0003687a^2
+-2.814\times10^{-6}a^3+8.938\times10^{-9}a^4,
+\quad 0<a\le163.7,\\
+V_{Venus}={}&236.05828+d-2.81914a+0.00839034a^2,
+\quad 163.7<a<179,\\
+V_{Mars}={}&-1.601+d+0.02267a-0.0001302a^2,
+\quad 0\le a\le50,\\
+V_{Mars}={}&-0.367+d-0.02573a+0.0003445a^2,
+\quad 50<a\le180,\\
+V_{Jupiter}={}&-9.395+d-0.00037a+0.000616a^2,
+\quad 0\le a\le12.
+\end{aligned}
+```
+
+At larger Jupiter phase angle, `x=a/180` and
+
+```math
+P_J(x)=1-1.507x-0.363x^2-0.062x^3+2.809x^4-1.876x^5,
+```
+
+```math
+V_{Jupiter}=-9.428+d-2.5\log_{10}P_J(x),
+\qquad 12<a<130.
+```
+
+For Saturn, `beta_S` and `beta_E` are planetocentric sub-solar and
+sub-observer latitudes. Define
+
+```math
+\beta=
+\begin{cases}
+\sqrt{|\beta_S\beta_E|}, & \beta_S\beta_E\ge0,\\
+0, & \beta_S\beta_E<0.
+\end{cases}
+```
+
+The published formula is used only when `a < 6.5 degrees` and `beta < 27
+degrees`:
+
+```math
+V_{Saturn}=-8.914+d-1.825\sin\beta+0.026a
+-0.378\sin\beta\exp(-2.25a).
+```
+
+For Uranus, planetocentric latitude is converted to planetographic latitude
+using flattening `f_U=0.0022927`; `beta_g` is the mean of the absolute
+sub-solar and sub-observer planetographic latitudes:
+
+```math
+\beta_g=\frac{1}{2}\left(
+\left|\arctan\frac{\tan\beta_{S,c}}{(1-f_U)^2}\right|
++\left|\arctan\frac{\tan\beta_{E,c}}{(1-f_U)^2}\right|
+\right),
+```
+
+```math
+V_{Uranus}=-7.110+d-0.00084\beta_g.
+```
+
+The Earth-observer Neptune formula omits the spacecraft-only phase extension.
+For decimal year `y`,
+
+```math
+M_N(y)=\max\!\left(-7.00,
+\min\!\left(-6.89,-6.89-0.0054(y-1980)\right)\right),
+```
+
+```math
+V_{Neptune}=M_N(y)+d.
+```
+
+Pluto uses JPL's reference `V(1,0)=-1.0` as a planning approximation without
+an independently calibrated Earth-observer phase term:
+
+```math
+V_{Pluto}=-1.0+d.
+```
+
+The magnitude status is body-specific and explicit. Mercury, Uranus, and
+Neptune use `available`; Venus, Jupiter, and Saturn use `available` inside the
+published domains above and `outside_published_model_domain` with no number
+outside them. Mars and Pluto always use `planning_approximation` with a finite
+number. The UI must preserve these distinctions. For Mars the implementation
+uses the published baseline phase polynomial but deliberately omits both
+empirical longitude-dependent corrections `L(lambda_e)` and `L(L_s)`; the
+computed `L_s` below is retained as a separate seasonal diagnostic and is not
+silently substituted for the omitted brightness correction. The cited paper
+reports rotational excursions up to about `0.06 mag`; dust-storm brightening
+is also outside this planning model. Pluto has no independently calibrated
+Earth-observer phase term in this implementation, so its `V(1,0)` distance law
+is likewise labeled as a planning approximation.
+
+Mars areocentric solar longitude follows the [NASA GISS Mars24
+algorithm](https://www.giss.nasa.gov/tools/mars24/help/algorithm.html). For
+`D=JDE-2451545.0`,
+
+```math
+\begin{aligned}
+M&=19.3871+0.52402073D,\\
+\alpha_{FMS}&=270.3871+0.524038496D,\\
+L_s&=(\alpha_{FMS}+C)\bmod360\ \mathrm{degrees},
+\end{aligned}
+```
+
+where `C` is the published five-harmonic equation of centre plus the seven
+Mars24 perturbation terms. Northern seasons are the half-open quadrants
+`[0,90)`, `[90,180)`, `[180,270)`, and `[270,360)` degrees.
+
+For each body and every IANA local civil day touched by the forecast, daily
+culmination is the maximum of the same topocentric apparent-altitude function
+used by the marker:
+
+```math
+(t_{culm},h_{culm})=
+\underset{t\in[t_{local\ midnight},t_{next\ local\ midnight})}{\mathrm{arg\,max}}
+\ h_{app}(t).
+```
+
+The deterministic implementation scans every ten minutes, brackets the
+largest sample, and refines it by golden-section search until the bracket is
+at most one second wide. DST-aware civil days may contain 23, 24, or 25 hours.
+
+#### Polaris and SynScan coordinates
+
+Polaris is a separate Astrodome-only overlay with catalog identity
+`polaris-simbad-revised-hipparcos-icrs-j2000-v1`. The pinned [SIMBAD Polaris
+row](https://simbad.cds.unistra.fr/simbad/sim-id?Ident=Polaris) is
+
+```math
+\alpha_0=02^{\mathrm h}31^{\mathrm m}49.09456^{\mathrm s},
+\qquad
+\delta_0=+89^{\circ}15'50.7923'',
+```
+
+```math
+\mu_{\alpha *}=44.48\ \mathrm{mas\,yr^{-1}},
+\qquad
+\mu_\delta=-11.85\ \mathrm{mas\,yr^{-1}}.
+```
+
+The fixed SynScan display is `02h 31m 49.095s`, `+89 degrees 15 minutes 50.79
+seconds`, explicitly labeled `ICRS/J2000.0`. It is a rounded catalog coordinate,
+not a current apparent coordinate. For plotting, the implementation propagates
+the catalog unit vector linearly in its tangent plane using `mu_alpha*` and
+`mu_delta`, renormalizes it, precesses the mean direction from J2000 to the
+date, and converts it with mean sidereal time plus the same planning
+refraction. It does not model parallax, radial velocity, annual aberration,
+nutation, or the multiple-star orbit; this is a stable planning marker, not
+precision astrometry.
+
 It then rotates to J2000 equatorial coordinates and applies the Meeus
 precession, nutation, and annual-aberration transformation to the apparent
 place of date. Pluto is evaluated separately with the periodic series in
@@ -1665,7 +1874,8 @@ coordinates at zero height, `TIME_TYPE=UT`, `QUANTITIES=4`, `ICRF`, `AIRLESS`,
 time, seasonal-propagation, and azimuth-wrap errors; they are not a global
 accuracy calibration. The
 photorealistic body icons are generated presentation assets and do not encode
-angular diameter, orientation, phase, brightness, or scale.
+angular diameter, orientation, phase, brightness, or scale. Those quantities
+are reported separately from the server-computed versioned fields above.
 
 ## 5. Reproducibility, validation, and interpretation
 

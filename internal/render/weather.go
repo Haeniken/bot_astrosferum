@@ -62,7 +62,7 @@ func Weather(destination string, surface forecast.SurfaceSeries, sky astronomy.S
 	for index := range surface.Frames {
 		validTimes[index] = surface.Frames[index].ValidAt.UTC()
 	}
-	if err := astronomy.ValidateCelestialTracks(celestialTracks, validTimes); err != nil {
+	if err := astronomy.ValidateCelestialTracksForLocation(celestialTracks, validTimes, surface.Location); err != nil {
 		return fmt.Errorf("weather celestial tracks: %w", err)
 	}
 	fonts, closeFonts, err := newWeatherFonts()

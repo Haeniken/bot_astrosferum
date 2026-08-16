@@ -8,7 +8,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const CelestialEphemerisVersion = "celestial-horizontal-distance-aspect-jpl-meeus-wgs84-h0-v3"
+const CelestialEphemerisVersion = "celestial-observing-ephemerides-jpl-meeus-wgs84-h0-v4"
 
 var (
 	// The common reception-time domain starts one UTC day after the nominal
@@ -53,15 +53,24 @@ func CelestialBodies() []CelestialBody {
 }
 
 type CelestialHorizontalPosition struct {
-	ValidAt                  time.Time     `json:"valid_at"`
-	Body                     CelestialBody `json:"body"`
-	AzimuthDegrees           float64       `json:"azimuth_deg"`
-	GeometricAltitudeDegrees float64       `json:"geometric_altitude_deg"`
-	ApparentAltitudeDegrees  float64       `json:"apparent_altitude_deg"`
-	ReferenceDistanceKM      float64       `json:"reference_distance_km"`
-	DistanceClosenessPercent float64       `json:"distance_closeness_percent"`
-	RadialVelocityKMS        float64       `json:"radial_velocity_km_s"`
-	SaturnRingOpeningDegrees *float64      `json:"saturn_ring_opening_deg,omitempty"`
+	ValidAt                   time.Time               `json:"valid_at"`
+	Body                      CelestialBody           `json:"body"`
+	AzimuthDegrees            float64                 `json:"azimuth_deg"`
+	GeometricAltitudeDegrees  float64                 `json:"geometric_altitude_deg"`
+	ApparentAltitudeDegrees   float64                 `json:"apparent_altitude_deg"`
+	ReferenceDistanceKM       float64                 `json:"reference_distance_km"`
+	ObserverDistanceKM        float64                 `json:"observer_distance_km"`
+	DistanceClosenessPercent  float64                 `json:"distance_closeness_percent"`
+	RadialVelocityKMS         float64                 `json:"radial_velocity_km_s"`
+	AngularDiameterArcsec     float64                 `json:"angular_diameter_arcsec"`
+	PhaseAngleDegrees         *float64                `json:"phase_angle_deg,omitempty"`
+	IlluminatedPercent        *float64                `json:"illuminated_percent,omitempty"`
+	ApparentVMagnitude        *float64                `json:"apparent_v_magnitude,omitempty"`
+	ApparentVMagnitudeStatus  ApparentMagnitudeStatus `json:"apparent_v_magnitude_status,omitempty"`
+	SolarElongationDegrees    *float64                `json:"solar_elongation_deg,omitempty"`
+	SaturnRingOpeningDegrees  *float64                `json:"saturn_ring_opening_deg,omitempty"`
+	MarsSolarLongitudeDegrees *float64                `json:"mars_solar_longitude_deg,omitempty"`
+	MarsSeason                *MarsSeason             `json:"mars_season,omitempty"`
 }
 
 // CelestialDistanceScale is the deterministic model-wide geocentric distance
@@ -83,6 +92,7 @@ type CelestialTrack struct {
 	Body                         CelestialBody                 `json:"body"`
 	DistanceScale                CelestialDistanceScale        `json:"distance_scale"`
 	MeanDistanceClosenessPercent int                           `json:"mean_distance_closeness_percent"`
+	Culminations                 []CelestialCulmination        `json:"culminations"`
 	Samples                      []CelestialHorizontalPosition `json:"samples"`
 }
 
@@ -175,8 +185,12 @@ func ComputeCelestialTracks(location forecast.Location, validTimes []time.Time) 
 			tracks[bodyIndex].Samples[timeIndex] = position
 		}
 		tracks[bodyIndex].MeanDistanceClosenessPercent = meanDistanceClosenessPercent(tracks[bodyIndex].Samples)
+		tracks[bodyIndex].Culminations, err = celestialCulminations(location, validTimes, body)
+		if err != nil {
+			return nil, fmt.Errorf("compute %s culminations: %w", body, err)
+		}
 	}
-	if err := ValidateCelestialTracks(tracks, validTimes); err != nil {
+	if err := ValidateCelestialTracksForLocation(tracks, validTimes, location); err != nil {
 		return nil, err
 	}
 	return tracks, nil
@@ -201,6 +215,9 @@ func ValidateCelestialTracks(tracks []CelestialTrack, validTimes []time.Time) er
 		if track.DistanceScale != wantScale {
 			return fmt.Errorf("celestial track %s distance scale is invalid", body)
 		}
+		if err := validateCelestialCulminations(track.Culminations, validTimes, body); err != nil {
+			return fmt.Errorf("celestial track %s culminations: %w", body, err)
+		}
 		for sampleIndex, sample := range track.Samples {
 			if sample.Body != body || !sample.ValidAt.Equal(validTimes[sampleIndex]) {
 				return fmt.Errorf("celestial track %s sample %d identity or time is invalid", body, sampleIndex)
@@ -213,6 +230,29 @@ func ValidateCelestialTracks(tracks []CelestialTrack, validTimes []time.Time) er
 		if track.MeanDistanceClosenessPercent < 0 || track.MeanDistanceClosenessPercent > 100 ||
 			track.MeanDistanceClosenessPercent != wantMean {
 			return fmt.Errorf("celestial track %s mean distance closeness is invalid", body)
+		}
+	}
+	return nil
+}
+
+func ValidateCelestialTracksForLocation(tracks []CelestialTrack, validTimes []time.Time, location forecast.Location) error {
+	if err := ValidateCelestialTracks(tracks, validTimes); err != nil {
+		return err
+	}
+	zone, err := time.LoadLocation(location.TimeZone)
+	if err != nil {
+		return fmt.Errorf("load celestial-track timezone: %w", err)
+	}
+	for _, track := range tracks {
+		for index, culmination := range track.Culminations {
+			start := culmination.DayStart.In(zone)
+			end := culmination.DayEndExclusive.In(zone)
+			if start.Hour() != 0 || start.Minute() != 0 || start.Second() != 0 || start.Nanosecond() != 0 ||
+				end.Hour() != 0 || end.Minute() != 0 || end.Second() != 0 || end.Nanosecond() != 0 ||
+				culmination.CivilDate != start.Format(time.DateOnly) ||
+				!end.Equal(time.Date(start.Year(), start.Month(), start.Day()+1, 0, 0, 0, 0, zone)) {
+				return fmt.Errorf("celestial track %s culmination %d does not use consecutive local midnights", track.Body, index)
+			}
 		}
 	}
 	return nil
@@ -257,25 +297,43 @@ func CelestialPositionAt(location forecast.Location, at time.Time, body Celestia
 		position.GeometricAltitudeDegrees = state.TopocentricGeometricAltitudeDegrees
 		position.ApparentAltitudeDegrees = planningApparentAltitude(state.TopocentricGeometricAltitudeDegrees*degree) / degree
 		position.ReferenceDistanceKM = state.EarthMoonDistanceKM
+		coordinates := moonCoordinates(at)
+		_, _, position.ObserverDistanceKM = topocentricHorizontalDistance(at, location, coordinates)
 	} else {
 		var coordinates equatorial
+		var geometry *planetGeometry
 		var err error
 		switch body {
 		case CelestialSun:
 			coordinates = sunCoordinates(at)
 		case CelestialMercury, CelestialVenus, CelestialMars, CelestialJupiter, CelestialSaturn, CelestialUranus, CelestialNeptune, CelestialPluto:
-			coordinates, err = planetCoordinates(at, body)
+			planetState, geometryErr := planetGeocentricGeometry(at, body)
+			if geometryErr != nil {
+				err = geometryErr
+				break
+			}
+			geometry = &planetState
+			coordinates, err = planetCoordinatesFromGeometry(body, planetState)
 		default:
 			return position, fmt.Errorf("unsupported celestial body %q", body)
 		}
 		if err != nil {
 			return position, err
 		}
-		altitude, azimuth := topocentricHorizontal(at, location, coordinates)
+		altitude, azimuth, observerDistance := topocentricHorizontalDistance(at, location, coordinates)
 		position.AzimuthDegrees = normalizeRadians(azimuth) / degree
 		position.GeometricAltitudeDegrees = altitude / degree
 		position.ApparentAltitudeDegrees = planningApparentAltitude(altitude) / degree
 		position.ReferenceDistanceKM = coordinates.distance
+		position.ObserverDistanceKM = observerDistance
+		if geometry != nil {
+			if err := populatePlanetObservingDiagnostics(&position, at, location, *geometry); err != nil {
+				return position, err
+			}
+		}
+	}
+	if err := populateCommonObservingDiagnostics(&position, at, location); err != nil {
+		return position, err
 	}
 	distanceScale, err := celestialDistanceScale(body)
 	if err != nil {
@@ -312,9 +370,13 @@ func validateCelestialPosition(position CelestialHorizontalPosition) error {
 		!finite(position.GeometricAltitudeDegrees) || position.GeometricAltitudeDegrees < -90 || position.GeometricAltitudeDegrees > 90 ||
 		!finite(position.ApparentAltitudeDegrees) || position.ApparentAltitudeDegrees < -90 || position.ApparentAltitudeDegrees > 90 ||
 		!finite(position.ReferenceDistanceKM) || position.ReferenceDistanceKM <= 0 ||
+		!finite(position.ObserverDistanceKM) || position.ObserverDistanceKM <= 0 ||
 		!finite(position.DistanceClosenessPercent) || position.DistanceClosenessPercent < 0 || position.DistanceClosenessPercent > 100 ||
-		!finite(position.RadialVelocityKMS) {
+		!finite(position.RadialVelocityKMS) || !finite(position.AngularDiameterArcsec) || position.AngularDiameterArcsec <= 0 {
 		return fmt.Errorf("%s horizontal ephemeris is outside its physical range", position.Body)
+	}
+	if err := validateObservingDiagnostics(position); err != nil {
+		return err
 	}
 	if position.Body == CelestialSaturn {
 		if position.SaturnRingOpeningDegrees == nil || !finite(*position.SaturnRingOpeningDegrees) ||
@@ -405,6 +467,11 @@ func celestialRadialVelocityKMS(at time.Time, body CelestialBody) (float64, erro
 }
 
 func topocentricHorizontal(at time.Time, location forecast.Location, coordinates equatorial) (float64, float64) {
+	altitudeRadians, azimuthRadians, _ := topocentricHorizontalDistance(at, location, coordinates)
+	return altitudeRadians, azimuthRadians
+}
+
+func topocentricHorizontalDistance(at time.Time, location forecast.Location, coordinates equatorial) (float64, float64, float64) {
 	latitudeRadians := location.Latitude * degree
 	rhoCosPhiPrime, rhoSinPhiPrime := wgs84ObserverFactors(location)
 	sinHorizontalParallax := wgs84SemiMajorAxisKM / coordinates.distance
@@ -421,7 +488,7 @@ func topocentricHorizontal(at time.Time, location forecast.Location, coordinates
 	east := -math.Cos(topocentricDeclination) * math.Sin(topocentricHourAngle)
 	north := math.Sin(topocentricDeclination)*math.Cos(latitudeRadians) -
 		math.Cos(topocentricDeclination)*math.Cos(topocentricHourAngle)*math.Sin(latitudeRadians)
-	return altitudeRadians, normalizeRadians(math.Atan2(east, north))
+	return altitudeRadians, normalizeRadians(math.Atan2(east, north)), norm * coordinates.distance
 }
 
 func wgs84ObserverFactors(location forecast.Location) (rhoCosPhiPrime, rhoSinPhiPrime float64) {

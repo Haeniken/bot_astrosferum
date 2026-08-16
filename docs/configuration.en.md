@@ -209,7 +209,7 @@ The profile is calculated once per source version and coordinates rounded to
 directional queue before the isolated worker downloads and validates the public
 Cloud Optimized GeoTIFF tiles. Bot and worker then reuse the shared bounded
 profile cache. Calculation-request schema 6 binds that profile; Horizon cache
-schema 7 and Astrodome dataset schema 7 invalidate older payloads by
+schema 7 and Astrodome dataset schema 8 invalidate older payloads by
 construction.
 
 ## Shared Overall, Horizon, and Astrodome calibration

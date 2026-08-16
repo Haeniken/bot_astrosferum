@@ -12,7 +12,7 @@ import (
 	"bot_astrosferum/internal/forecast"
 )
 
-const ForecastInteractiveSchema = "forecast-interactive-v5-explicit-heuristics"
+const ForecastInteractiveSchema = "forecast-interactive-v6-observing-ephemerides"
 
 // ForecastInteractiveDataset contains the exact prepared values behind the
 // seven ordinary forecast charts. It is presentation data, not a second
@@ -157,7 +157,7 @@ func PrepareForecastInteractiveDataset(
 		surfaceTimes[frame.ValidAt.UnixNano()] = struct{}{}
 		celestialTimes[index] = frame.ValidAt.UTC()
 	}
-	if err := astronomy.ValidateCelestialTracks(celestialTracks, celestialTimes); err != nil {
+	if err := astronomy.ValidateCelestialTracksForLocation(celestialTracks, celestialTimes, surface.Location); err != nil {
 		return ForecastInteractiveDataset{}, forecast.Diagnostics{}, forecast.CloudDiagnostics{}, nil,
 			fmt.Errorf("interactive celestial tracks: %w", err)
 	}

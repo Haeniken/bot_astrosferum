@@ -61,6 +61,7 @@ func TestAstrodomeDatasetAcceptsShortNativeHourlyWindow(t *testing.T) {
 	for index := range input.CelestialTracks {
 		input.CelestialTracks[index].Samples = input.CelestialTracks[index].Samples[:70]
 	}
+	input.PolarisTrack.Samples = input.PolarisTrack.Samples[:70]
 	dataset, err := BuildAstrodomeDataset(input)
 	if err != nil {
 		t.Fatalf("BuildAstrodomeDataset: %v", err)
@@ -228,6 +229,25 @@ func TestAstrodomeDatasetRejectsMisorderedAndMisalignedCelestialTracks(t *testin
 	dataset.CelestialTracks[4].Samples[2].ValidAt = dataset.CelestialTracks[4].Samples[2].ValidAt.Add(time.Hour)
 	if err := dataset.Validate(); err == nil {
 		t.Fatal("Astrodome dataset with a time-shifted celestial sample was accepted")
+	}
+}
+
+func TestAstrodomeDatasetRejectsInvalidPolarisContract(t *testing.T) {
+	dataset, err := BuildAstrodomeDataset(completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.PolarisTrack.CatalogVersion = "wrong"
+	if err := dataset.Validate(); err == nil {
+		t.Fatal("wrong Polaris catalog version was accepted")
+	}
+	dataset, err = BuildAstrodomeDataset(completeAstrodomeDatasetInput(t, forecast.AstrodomeGridSparseStorageV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.PolarisTrack.Samples[0].AzimuthDegrees = math.NaN()
+	if err := dataset.Validate(); err == nil {
+		t.Fatal("non-finite Polaris position was accepted")
 	}
 }
 
@@ -634,6 +654,10 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 	if err != nil {
 		t.Fatal(err)
 	}
+	polarisTrack, err := astronomy.ComputePolarisTrack(location, validTimes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	elevation := 17.0
 	return AstrodomeDatasetInput{
 		SourceIdentity: identity, GeneratedAt: run.Add(30 * time.Minute), Profile: profile,
@@ -646,6 +670,7 @@ func completeAstrodomeDatasetInput(t *testing.T, profileID forecast.AstrodomeGri
 		CalibrationVersion:     forecast.DefaultAstrodomeScienceCalibration().Version,
 		CalibrationSHA256:      calibrationDigest,
 		CelestialTracks:        celestialTracks,
+		PolarisTrack:           polarisTrack,
 		Frames:                 frames,
 	}
 }

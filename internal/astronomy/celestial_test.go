@@ -72,6 +72,168 @@ func TestCelestialPositionsAgainstJPLHorizonsObserverTable(t *testing.T) {
 	}
 }
 
+func TestObservingDiagnosticsAgainstJPLHorizonsObserverTable(t *testing.T) {
+	location := forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"}
+	at := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	// Independent airless observer quantities 9, 10, 13, 23 and 24 from
+	// NASA/JPL Horizons, DE441, for this exact WGS84 site and UTC instant.
+	// The local planetary ephemerides and photometric laws are planning
+	// approximations, so tolerances represent model agreement, not DE441
+	// precision.  Sun and Moon do not publish a project V-magnitude field.
+	type reference struct {
+		magnitude, illumination, diameter, elongation, phase float64
+	}
+	references := map[CelestialBody]reference{
+		CelestialSun:     {math.NaN(), 100.00000, 1893.044, 0.0000, 0.0000},
+		CelestialMoon:    {math.NaN(), 0.66927, 1959.409, 9.3678, 170.6094},
+		CelestialMercury: {-0.954, 74.10008, 5.978644, 15.5093, 61.1784},
+		CelestialVenus:   {-4.397, 50.44175, 23.43261, 45.8553, 89.4978},
+		CelestialMars:    {1.260, 92.96942, 4.802730, 48.9018, 30.7484},
+		CelestialJupiter: {-1.784, 99.97252, 31.36412, 9.9520, 1.8941},
+		CelestialSaturn:  {0.576, 99.80547, 18.81039, 124.7609, 5.0591},
+		CelestialUranus:  {5.745, 99.93719, 3.576803, 74.0050, 2.8708},
+		CelestialNeptune: {7.700, 99.98571, 2.342573, 135.2205, 1.3739},
+		CelestialPluto:   {14.470, 99.99847, 0.094706, 164.0205, 0.4436},
+	}
+	for _, body := range celestialBodyOrder {
+		position, err := CelestialPositionAt(location, at, body)
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		want := references[body]
+		t.Logf("%s V=%v illum=%v diameter=%.6f elongation=%v phase=%v", body,
+			position.ApparentVMagnitude, position.IlluminatedPercent, position.AngularDiameterArcsec,
+			position.SolarElongationDegrees, position.PhaseAngleDegrees)
+		if math.Abs(position.AngularDiameterArcsec-want.diameter) > math.Max(0.05, want.diameter*0.005) {
+			t.Errorf("%s angular diameter %.6f, Horizons %.6f", body, position.AngularDiameterArcsec, want.diameter)
+		}
+		if body != CelestialSun {
+			t.Logf("%s illumination=%.6f elongation=%.6f phase=%.6f", body,
+				*position.IlluminatedPercent, *position.SolarElongationDegrees, *position.PhaseAngleDegrees)
+			if position.IlluminatedPercent == nil || math.Abs(*position.IlluminatedPercent-want.illumination) > 0.4 ||
+				position.SolarElongationDegrees == nil || math.Abs(*position.SolarElongationDegrees-want.elongation) > 0.2 ||
+				position.PhaseAngleDegrees == nil || math.Abs(*position.PhaseAngleDegrees-want.phase) > 0.4 {
+				t.Errorf("%s illumination/elongation/phase disagrees with Horizons", body)
+			}
+		}
+		wantMagnitudeStatus := ApparentMagnitudeAvailable
+		if body == CelestialMars || body == CelestialPluto {
+			wantMagnitudeStatus = ApparentMagnitudePlanningApproximation
+		}
+		if body.isPlanet() && (position.ApparentVMagnitudeStatus != wantMagnitudeStatus || position.ApparentVMagnitude == nil || math.Abs(*position.ApparentVMagnitude-want.magnitude) > 0.25) {
+			t.Errorf("%s V magnitude = %v, Horizons %.3f", body, position.ApparentVMagnitude, want.magnitude)
+		}
+	}
+}
+
+func TestAngularDiameterUsesExactTangentSphereGeometry(t *testing.T) {
+	distance := 10.0 * moonEquatorialRadiusKM
+	position := CelestialHorizontalPosition{Body: CelestialMoon, ObserverDistanceKM: distance}
+	if err := populateCommonObservingDiagnostics(&position, time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC), forecast.Location{}); err != nil {
+		t.Fatal(err)
+	}
+	want := 2 * math.Asin(moonEquatorialRadiusKM/distance) / degree * 3600
+	if math.Abs(position.AngularDiameterArcsec-want) > 1e-12 {
+		t.Fatalf("angular diameter = %.15g, want %.15g", position.AngularDiameterArcsec, want)
+	}
+}
+
+func TestApparentMagnitudePublishedDomainIsExplicit(t *testing.T) {
+	location := forecast.Location{Latitude: 0, Longitude: 0, TimeZone: "UTC"}
+	for _, test := range []struct {
+		body CelestialBody
+		at   time.Time
+	}{
+		{CelestialVenus, time.Date(2020, time.June, 4, 0, 0, 0, 0, time.UTC)},
+	} {
+		position, err := CelestialPositionAt(location, test.at, test.body)
+		if err != nil {
+			t.Fatalf("%s: %v", test.body, err)
+		}
+		if position.ApparentVMagnitudeStatus != ApparentMagnitudeOutsidePublishedModelDomain || position.ApparentVMagnitude != nil {
+			t.Fatalf("%s magnitude applicability = %q, value %v", test.body, position.ApparentVMagnitudeStatus, position.ApparentVMagnitude)
+		}
+	}
+}
+
+func TestApparentMagnitudePublishedBoundariesAreStrict(t *testing.T) {
+	geometry := planetGeometry{
+		targetHeliocentric: vector3{x: 1},
+		earthToTarget:      vector3{x: -1},
+		distanceAU:         1,
+	}
+	for _, test := range []struct {
+		body  CelestialBody
+		phase float64
+	}{
+		{CelestialVenus, 0},
+		{CelestialJupiter, 130},
+		{CelestialSaturn, 6.5},
+	} {
+		_, status, err := planetApparentVMagnitude(test.body, time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC), geometry, test.phase)
+		if err != nil {
+			t.Fatalf("%s boundary: %v", test.body, err)
+		}
+		if status != ApparentMagnitudeOutsidePublishedModelDomain {
+			t.Fatalf("%s boundary status = %q", test.body, status)
+		}
+	}
+}
+
+func TestApparentMagnitudeStatusIsBodySpecific(t *testing.T) {
+	location := forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"}
+	at := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		body   CelestialBody
+		status ApparentMagnitudeStatus
+		value  *float64
+	}{
+		{CelestialMars, ApparentMagnitudeAvailable, pointer(1.0)},
+		{CelestialMercury, ApparentMagnitudePlanningApproximation, pointer(1.0)},
+		{CelestialUranus, ApparentMagnitudeOutsidePublishedModelDomain, nil},
+	} {
+		position, err := CelestialPositionAt(location, at, test.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		position.ApparentVMagnitudeStatus = test.status
+		position.ApparentVMagnitude = test.value
+		if err := validateCelestialPosition(position); err == nil {
+			t.Fatalf("%s accepted incompatible magnitude status %q", test.body, test.status)
+		}
+	}
+}
+
+func pointer(value float64) *float64 {
+	return &value
+}
+
+func TestPolarisCatalogSynScanAndHourlyTrack(t *testing.T) {
+	location := forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"}
+	times := []time.Time{
+		time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.August, 12, 1, 0, 0, 0, time.UTC),
+	}
+	track, err := ComputePolarisTrack(location, times)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if track.SynScan.RightAscension != "02h 31m 49.095s" || track.SynScan.Declination != "+89° 15′ 50.79″" ||
+		track.SynScan.ReferenceFrame != "ICRS" || track.SynScan.Epoch != "J2000.0" {
+		t.Fatalf("SynScan contract = %+v", track.SynScan)
+	}
+	if len(track.Samples) != len(times) || math.Abs(track.Samples[0].GeometricAltitudeDegrees-location.Latitude) > 1.5 {
+		t.Fatalf("Polaris track = %+v", track.Samples)
+	}
+	if err := ValidatePolarisTrack(track, times); err != nil {
+		t.Fatal(err)
+	}
+	track.Samples[0].AzimuthDegrees = math.NaN()
+	if err := ValidatePolarisTrack(track, times); err == nil {
+		t.Fatal("non-finite Polaris sample was accepted")
+	}
+}
+
 func TestCelestialDistanceDiagnostics(t *testing.T) {
 	location := forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"}
 	at := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
@@ -293,5 +455,48 @@ func TestCelestialTracksRejectOrderAndTimeMismatch(t *testing.T) {
 	tracks[4].Samples[1].ValidAt = tracks[4].Samples[1].ValidAt.Add(time.Hour)
 	if err := ValidateCelestialTracks(tracks, times); err == nil {
 		t.Fatal("time-shifted celestial sample was accepted")
+	}
+}
+
+func TestCelestialCulminationsUseIANALocalMidnightsAcrossDST(t *testing.T) {
+	location := forecast.Location{Latitude: 52.52, Longitude: 13.405, TimeZone: "Europe/Berlin"}
+	times := make([]time.Time, 72)
+	start := time.Date(2026, time.October, 24, 0, 0, 0, 0, time.UTC)
+	for index := range times {
+		times[index] = start.Add(time.Duration(index) * time.Hour)
+	}
+	tracks, err := ComputeCelestialTracks(location, times)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCelestialTracksForLocation(tracks, times, location); err != nil {
+		t.Fatal(err)
+	}
+	foundTwentyFiveHourDay := false
+	for _, culmination := range tracks[0].Culminations {
+		if culmination.DayEndExclusive.Sub(culmination.DayStart) == 25*time.Hour {
+			foundTwentyFiveHourDay = true
+		}
+	}
+	if !foundTwentyFiveHourDay {
+		t.Fatal("DST transition did not produce a 25-hour local civil day")
+	}
+	shortLocation := forecast.Location{Latitude: 53.65, Longitude: 37.3462, TimeZone: "Europe/Moscow"}
+	shortTimes := []time.Time{
+		time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, time.August, 12, 13, 0, 0, 0, time.UTC),
+	}
+	shiftedTracks, err := ComputeCelestialTracks(shortLocation, shortTimes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shiftedTracks[0].Culminations[0].DayStart = shiftedTracks[0].Culminations[0].DayStart.Add(12 * time.Hour)
+	shiftedTracks[0].Culminations[0].DayEndExclusive = shiftedTracks[0].Culminations[0].DayEndExclusive.Add(12 * time.Hour)
+	shiftedTracks[0].Culminations[0].ValidAt = shiftedTracks[0].Culminations[0].ValidAt.Add(12 * time.Hour)
+	if err := ValidateCelestialTracks(shiftedTracks, shortTimes); err != nil {
+		t.Fatalf("basic structural validator unexpectedly rejected shifted daily boundaries: %v", err)
+	}
+	if err := ValidateCelestialTracksForLocation(shiftedTracks, shortTimes, shortLocation); err == nil {
+		t.Fatal("non-midnight culmination boundaries were accepted")
 	}
 }
