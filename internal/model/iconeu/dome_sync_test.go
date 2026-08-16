@@ -126,9 +126,9 @@ func (runner *domeTestRunner) inventory(path string) (domeInventory, error) {
 		return nil, err
 	}
 	switch {
-	case strings.Contains(path, "cloud-hourly-v5-full-hhl") && strings.Contains(path, "geometry.grib2"):
+	case strings.Contains(path, "cloud-hourly-v6-native-mh") && strings.Contains(path, "geometry.grib2"):
 		return domeGeometryInventory(runner.baseTime), nil
-	case strings.Contains(path, "cloud-hourly-v5-full-hhl"):
+	case strings.Contains(path, "cloud-hourly-v6-native-mh"):
 		return domeBaseCloudInventory(runner.baseTime, hour), nil
 	case strings.Contains(path, "surface-hourly-v17"):
 		return domeSurfaceInventory(runner.baseTime, hour, runner.surfaceIdentities), nil
@@ -447,12 +447,12 @@ func writeDomeTestBase(t *testing.T, root string) (LoadedManifest, *domeTestRunn
 			Bytes: bundle.Bytes, SHA256: bundle.SHA256, Messages: len(DefaultPressureLevelsHPA) * 4,
 		})
 	}
-	geometryRelative := filepath.Join("cloud-hourly-v5-full-hhl", "geometry.grib2")
+	geometryRelative := filepath.Join("cloud-hourly-v6-native-mh", "geometry.grib2")
 	geometry := writeDomeTestFile(t, directory, geometryRelative, "full-hhl")
 	geometry.Messages = domeHalfLevelCount
 	manifest.CloudGeometry = &geometry
 	for hour := range HourlySurfaceStepCount {
-		cloudRelative := filepath.Join("cloud-hourly-v5-full-hhl", fmt.Sprintf("f%03d.grib2", hour))
+		cloudRelative := filepath.Join("cloud-hourly-v6-native-mh", fmt.Sprintf("f%03d.grib2", hour))
 		cloud := writeDomeTestFile(t, directory, cloudRelative, fmt.Sprintf("cloud-%03d", hour))
 		manifest.CloudSteps[hour] = SurfaceStepFile{
 			ForecastHour: hour, ValidAt: baseTime.Add(time.Duration(hour) * time.Hour), File: cloudRelative,

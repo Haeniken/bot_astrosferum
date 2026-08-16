@@ -119,6 +119,14 @@ func TestDomeManifestAtomicRoundTripAndCurrentPointer(t *testing.T) {
 	}
 }
 
+func TestDomeInputContractRejectsFormerBaseCloudLayout(t *testing.T) {
+	former := domeInputContractDigest("base-cloud-plus-dome-extension-v1")
+	current := DomeInputContractDigest()
+	if former == current {
+		t.Fatal("expanded native-MH base cloud layout reused the former Astrodome input-contract digest")
+	}
+}
+
 func TestDomeManifestRejectsUnsafePathsAndRunMismatch(t *testing.T) {
 	manifest := validDomeManifestFixture()
 	manifest.ModelSteps[0].Parts[0].File = "../outside.grib2"

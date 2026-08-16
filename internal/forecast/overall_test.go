@@ -8,7 +8,7 @@ import (
 )
 
 func TestOverallIndexAlgorithmVersionPinsNativeMHAndLogPressure(t *testing.T) {
-	if OverallIndexAlgorithmVersion != "overall-astronomy-index-v3-native-mh-logp" {
+	if OverallIndexAlgorithmVersion != "overall-astronomy-index-v4-native-mh-logp" {
 		t.Fatalf("Overall algorithm version = %q", OverallIndexAlgorithmVersion)
 	}
 }
@@ -90,8 +90,8 @@ func TestOverallIndexStopsAtDeclaredNativeTKEHorizon(t *testing.T) {
 	cloud := SyntheticCloudFixture()
 	cloud.TurbulenceValidUntil = cloud.Frames[2].ValidAt
 	for index := 3; index < len(cloud.Frames); index++ {
-		for level := range cloud.Frames[index].Levels {
-			cloud.Frames[index].Levels[level].TKEJkg = math.NaN()
+		for level := range cloud.Frames[index].TurbulenceLevels {
+			cloud.Frames[index].TurbulenceLevels[level].TKEJkg = math.NaN()
 		}
 	}
 	frames, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), clearSyntheticSurface(), cloud, DefaultOverallIndexCalibration())

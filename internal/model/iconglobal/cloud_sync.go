@@ -15,14 +15,21 @@ import (
 	"time"
 )
 
-// ICON Global has 120 full levels versus ICON-EU's 74. These levels match
-// the physical HHL heights used by the EU subset (the index offset is +46).
+// ICON Global has 120 full levels versus ICON-EU's 74. Its native vertical
+// coordinate is selected independently from full-grid HHL geometry rather
+// than by assuming a fixed level-number offset from ICON-EU.
 var globalCloudModelLevels = []int{
 	71, 76, 81, 86, 91, 94, 96, 98, 100, 102,
 	104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
 }
 
+const globalCloudProductName = "icon-global-cloud-hourly-v2-native-mh"
+
+// Level 87 is the lowest-cost upper endpoint whose full-level midpoint stays
+// above 3000 m AGL over the complete immutable Global grid used by the
+// provider-contract check. Levels remain consecutive down to the surface.
 var globalCloudGroundModelLevels = []int{
+	87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103,
 	104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
 }
 
@@ -45,6 +52,11 @@ var globalCloudBaseFields = []cloudField{
 var globalCloudGroundFields = []cloudField{
 	{directory: "u", code: "U", shortName: "u"},
 	{directory: "v", code: "V", shortName: "v"},
+}
+
+var globalCloudGroundThermodynamicFields = []cloudField{
+	{directory: "p", code: "P", shortName: "pres"},
+	{directory: "t", code: "T", shortName: "t"},
 }
 
 // AugmentCloud atomically adds the same height-resolved cloud and PBL data
@@ -70,7 +82,7 @@ func (client *Client) AugmentCloud(ctx context.Context, dataRoot string, loaded 
 	if err := os.MkdirAll(incoming, 0o750); err != nil {
 		return LoadedManifest{}, fmt.Errorf("create ICON Global cloud incoming directory: %w", err)
 	}
-	finalName := "cloud-hourly-v1"
+	finalName := "cloud-hourly-v2-native-mh"
 	finalDirectory := filepath.Join(loaded.Directory, finalName)
 	oldDirectory := ""
 	if len(loaded.CloudSteps) > 0 {
@@ -203,6 +215,13 @@ func (client *Client) downloadGlobalCloudStep(ctx context.Context, runID string,
 				}
 			}
 		}
+		for _, level := range globalCloudGroundThermodynamicOnlyLevels() {
+			for _, field := range globalCloudGroundThermodynamicFields {
+				if err := client.appendField(ctx, file, client.globalModelLevelFieldURL(runID, hour, level, field)); err != nil {
+					return fmt.Errorf("download ICON Global turbulence f%03d level %d %s: %w", hour, level, field.code, err)
+				}
+			}
+		}
 		for _, level := range globalCloudGroundModelLevels {
 			for _, field := range globalCloudGroundFields {
 				if err := client.appendField(ctx, file, client.globalModelLevelFieldURL(runID, hour, level, field)); err != nil {
@@ -273,6 +292,11 @@ func validateGlobalCloudStep(ctx context.Context, path string) error {
 	expected := make(map[string]bool, globalCloudStepMessageCount(hour))
 	for _, level := range globalCloudModelLevels {
 		for _, field := range globalCloudBaseFields {
+			expected[fmt.Sprintf("%s:generalVerticalLayer:%d", field.shortName, level)] = false
+		}
+	}
+	for _, level := range globalCloudGroundThermodynamicOnlyLevels() {
+		for _, field := range globalCloudGroundThermodynamicFields {
 			expected[fmt.Sprintf("%s:generalVerticalLayer:%d", field.shortName, level)] = false
 		}
 	}
@@ -351,8 +375,12 @@ func canonicalGlobalCloudShortName(name string) string {
 }
 
 func globalCloudGeometryLevels() []int {
-	seen := make(map[int]bool, len(globalCloudModelLevels)*2)
+	seen := make(map[int]bool, (len(globalCloudModelLevels)+len(globalCloudGroundModelLevels))*2)
 	for _, level := range globalCloudModelLevels {
+		seen[level] = true
+		seen[level+1] = true
+	}
+	for _, level := range globalCloudGroundModelLevels {
 		seen[level] = true
 		seen[level+1] = true
 	}
@@ -378,8 +406,24 @@ func globalCloudTKEHalfLevels() []int {
 	return levels
 }
 
+func globalCloudGroundThermodynamicOnlyLevels() []int {
+	levels := make([]int, 0, len(globalCloudGroundModelLevels))
+	for _, level := range globalCloudGroundModelLevels {
+		if !containsGlobalCloudModelLevel(globalCloudModelLevels, level) {
+			levels = append(levels, level)
+		}
+	}
+	return levels
+}
+
+func containsGlobalCloudModelLevel(levels []int, wanted int) bool {
+	index := sort.SearchInts(levels, wanted)
+	return index < len(levels) && levels[index] == wanted
+}
+
 func globalCloudStepMessageCount(hour int) int {
 	count := len(globalCloudModelLevels)*len(globalCloudBaseFields) +
+		len(globalCloudGroundThermodynamicOnlyLevels())*len(globalCloudGroundThermodynamicFields) +
 		len(globalCloudGroundModelLevels)*len(globalCloudGroundFields)
 	if globalTKEAvailable(hour) {
 		count += len(globalCloudTKEHalfLevels())

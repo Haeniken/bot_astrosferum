@@ -238,7 +238,7 @@ func Defaults() Config {
 			MinFreeSpace:        ByteSize(150 << 30),
 		},
 		Algorithms: AlgorithmsConfig{
-			SeeingVersion:                      "seeing-hybrid-tke-native-mh-hmnsp99-logp-v8",
+			SeeingVersion:                      "seeing-hybrid-tke-native-mh-hmnsp99-logp-v9",
 			DewVersion:                         "dew-v1",
 			ConditionsVersion:                  "conditions-v8-precip-veto-penalty-decomposition",
 			OverallSeeingWeight:                1,

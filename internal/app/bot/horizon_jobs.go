@@ -28,7 +28,7 @@ const (
 	HorizonActionID       ActionID = "horizon.v1"
 	HorizonProviderICONEU string   = "icon-eu"
 
-	horizonCacheSchema     = "horizon-cache-v7-glo30-informational-skyline"
+	horizonCacheSchema     = "horizon-cache-v8-native-mh-support"
 	horizonActionKeyFile   = ".horizon-action-key"
 	horizonActionTagBytes  = 8
 	horizonActionCoreParts = 4
@@ -749,6 +749,10 @@ func (jobs *HorizonJobs) resolveTimeZone(location forecast.Location) string {
 }
 
 func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCalibration, renderAlgorithmVersion string) (string, error) {
+	return horizonCacheKeyForSchema(horizonCacheSchema, request, calibration, renderAlgorithmVersion)
+}
+
+func horizonCacheKeyForSchema(schema string, request horizonRequest, calibration forecast.OverallIndexCalibration, renderAlgorithmVersion string) (string, error) {
 	if err := validateHorizonRequest(request); err != nil {
 		return "", err
 	}
@@ -760,7 +764,7 @@ func horizonCacheKey(request horizonRequest, calibration forecast.OverallIndexCa
 		return "", err
 	}
 	identity := strings.Join([]string{
-		horizonCacheSchema,
+		schema,
 		"provider=" + HorizonProviderICONEU,
 		"run=" + request.RunID,
 		"window=f001-f072-hourly",

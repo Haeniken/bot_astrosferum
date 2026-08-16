@@ -995,6 +995,11 @@ func domeBaseCloudInventory(baseTime time.Time, hour int) domeInventory {
 			inventory[newDomeMessage(field.shortName, "generalVerticalLayer", level, hour, validAt)] = struct{}{}
 		}
 	}
+	for _, level := range cloudGroundThermodynamicOnlyLevels() {
+		for _, field := range cloudGroundThermodynamicFields {
+			inventory[newDomeMessage(field.shortName, "generalVerticalLayer", level, hour, validAt)] = struct{}{}
+		}
+	}
 	for _, level := range DefaultCloudGroundModelLevels {
 		for _, field := range cloudGroundFullLevelFields {
 			inventory[newDomeMessage(field.shortName, "generalVerticalLayer", level, hour, validAt)] = struct{}{}

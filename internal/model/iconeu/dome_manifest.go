@@ -24,7 +24,7 @@ const (
 	domeFullLevelCount        = 74
 	domeHalfLevelCount        = 75
 	domeModelMessagesPerStep  = domeFullLevelCount*8 + domeHalfLevelCount*2
-	domeBundleLayoutVersion   = "base-cloud-plus-dome-extension-v1"
+	domeBundleLayoutVersion   = "base-cloud-v6-plus-dome-extension-v2"
 )
 
 var domeRunIDPattern = regexp.MustCompile(`^[0-9]{10}$`)
@@ -91,6 +91,10 @@ func DomeNativeForecastHours() []int {
 // run exists. It is distinct from the per-run manifest digest, which also
 // binds concrete files and checksums.
 func DomeInputContractDigest() string {
+	return domeInputContractDigest(domeBundleLayoutVersion)
+}
+
+func domeInputContractDigest(bundleLayout string) string {
 	contract := struct {
 		SchemaVersion int             `json:"schema_version"`
 		InputVersion  string          `json:"input_version"`
@@ -104,7 +108,7 @@ func DomeInputContractDigest() string {
 		SchemaVersion: DomeManifestSchemaVersion, InputVersion: forecast.AstrodomePrimitiveInputContractVersion,
 		FullLevels: DomeFullModelLevels(), HalfLevels: DomeHalfModelLevels(), Fields: DomeModelFields(),
 		ForecastHours: DomeNativeForecastHours(), SurfaceSchema: SurfaceBundleSchemaVersion,
-		BundleLayout: domeBundleLayoutVersion,
+		BundleLayout: bundleLayout,
 	}
 	encoded, err := json.Marshal(contract)
 	if err != nil {

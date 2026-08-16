@@ -14,17 +14,27 @@ import (
 	"time"
 )
 
-// DefaultCloudModelLevels samples the free atmosphere sparsely while retaining
-// every full model layer from 58 through 74. The continuous lower-atmosphere
-// section is needed for ground-layer turbulence and still keeps the 79-hour
-// bundle substantially smaller than a complete 74-level publication.
+// DefaultCloudModelLevels samples cloud cover and condensate sparsely while
+// retaining every full model layer from 58 through 74.
 var DefaultCloudModelLevels = []int{
 	25, 30, 35, 40, 45, 48, 50, 52, 54, 56,
 	58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
 }
 
+const cloudProductName = "icon-eu-cloud-hourly-v6-native-mh"
+
+// DefaultCloudGroundModelLevels is the minimum continuous native chain whose
+// upper full-level midpoint remains above the currently encoded ICON MH
+// ceiling of 3000 m AGL throughout the EU grid. The point and Horizon calculations need
+// P/T/U/V on every listed full level and TKE on the bounding half levels.
 var DefaultCloudGroundModelLevels = []int{
+	44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
 	58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+}
+
+var cloudGroundThermodynamicFields = []cloudLevelField{
+	{directory: "p", code: "P", shortName: "pres"},
+	{directory: "t", code: "T", shortName: "t"},
 }
 
 type cloudLevelField struct {
@@ -91,12 +101,8 @@ func (client *Client) AugmentCloud(ctx context.Context, dataRoot string, loaded 
 	if err := os.MkdirAll(incoming, 0o750); err != nil {
 		return LoadedManifest{}, fmt.Errorf("create cloud incoming directory: %w", err)
 	}
-	finalName := "cloud-hourly-v5-full-hhl"
+	finalName := "cloud-hourly-v6-native-mh"
 	finalDirectory := filepath.Join(loaded.Directory, finalName)
-	oldDirectory := ""
-	if len(loaded.CloudSteps) > 0 {
-		oldDirectory = filepath.Dir(loaded.CloudSteps[0].File)
-	}
 	manifestPublished := false
 	directoryPublished := false
 	defer func() {
@@ -203,9 +209,9 @@ func (client *Client) AugmentCloud(ctx context.Context, dataRoot string, loaded 
 		return LoadedManifest{}, fmt.Errorf("publish hourly cloud manifest: %w", err)
 	}
 	manifestPublished = true
-	if oldDirectory != "" && oldDirectory != "." && oldDirectory != finalName && filepath.Dir(oldDirectory) == "." {
-		_ = os.RemoveAll(filepath.Join(loaded.Directory, oldDirectory))
-	}
+	// Keep a superseded versioned cloud directory until retention removes the
+	// complete run. An already published Astrodome manifest may still reference
+	// those immutable base files while the new base contract is being rebuilt.
 	return LoadedManifest{Manifest: manifest, Directory: loaded.Directory}, nil
 }
 
@@ -228,6 +234,13 @@ func (client *Client) downloadCloudStep(ctx context.Context, runID string, forec
 			for _, field := range cloudBaseLevelFields {
 				if err := client.appendField(ctx, file, client.modelLevelFieldURL(runID, forecastHour, level, field.directory, field.code)); err != nil {
 					return fmt.Errorf("download cloud f%03d level %d %s: %w", forecastHour, level, field.code, err)
+				}
+			}
+		}
+		for _, level := range cloudGroundThermodynamicOnlyLevels() {
+			for _, field := range cloudGroundThermodynamicFields {
+				if err := client.appendField(ctx, file, client.modelLevelFieldURL(runID, forecastHour, level, field.directory, field.code)); err != nil {
+					return fmt.Errorf("download cloud f%03d turbulence level %d %s: %w", forecastHour, level, field.code, err)
 				}
 			}
 		}
@@ -307,6 +320,11 @@ func (client *Client) validateCloudStep(ctx context.Context, path string) error 
 	expected := make(map[string]bool, cloudStepMessageCount())
 	for _, level := range DefaultCloudModelLevels {
 		for _, field := range cloudBaseLevelFields {
+			expected[fmt.Sprintf("%s:generalVerticalLayer:%d", field.shortName, level)] = false
+		}
+	}
+	for _, level := range cloudGroundThermodynamicOnlyLevels() {
+		for _, field := range cloudGroundThermodynamicFields {
 			expected[fmt.Sprintf("%s:generalVerticalLayer:%d", field.shortName, level)] = false
 		}
 	}
@@ -405,8 +423,19 @@ func cloudTKEHalfLevels() []int {
 	return levels
 }
 
+func cloudGroundThermodynamicOnlyLevels() []int {
+	levels := make([]int, 0, len(DefaultCloudGroundModelLevels))
+	for _, level := range DefaultCloudGroundModelLevels {
+		if !containsCloudModelLevel(DefaultCloudModelLevels, level) {
+			levels = append(levels, level)
+		}
+	}
+	return levels
+}
+
 func cloudStepMessageCount() int {
 	return len(DefaultCloudModelLevels)*len(cloudBaseLevelFields) +
+		len(cloudGroundThermodynamicOnlyLevels())*len(cloudGroundThermodynamicFields) +
 		len(DefaultCloudGroundModelLevels)*len(cloudGroundFullLevelFields) +
 		len(cloudTKEHalfLevels())
 }

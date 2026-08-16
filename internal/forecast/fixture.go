@@ -85,7 +85,16 @@ func SyntheticCloudFixture() CloudSeries {
 				CoverPercent: cover, CloudLiquidKgKg: liquid, CloudIceKgKg: ice,
 			}
 		}
-		frames[column] = CloudFrame{ValidAt: base.Add(time.Duration(column) * time.Hour), Levels: levels}
+		turbulenceLevels := make([]CloudLevel, 0, 17)
+		for _, level := range levels {
+			if level.ModelLevel >= 58 {
+				turbulenceLevels = append(turbulenceLevels, level)
+			}
+		}
+		frames[column] = CloudFrame{
+			ValidAt: base.Add(time.Duration(column) * time.Hour),
+			Levels:  levels, TurbulenceLevels: turbulenceLevels,
+		}
 	}
 	return CloudSeries{
 		Location: location, Provider: "fixture", Product: "ICON-EU-like model cloud",

@@ -396,10 +396,10 @@ func astrodomeManifestFixture(t *testing.T, storage model.StorageProfile) iconeu
 	manifest.Complete = true
 	manifest.Geometry = iconeu.DomeStepFile{
 		Source: iconeu.DomeFileSourceBaseRun, ForecastHour: 0, ValidAt: base,
-		File:  fmt.Sprintf("runs/%s/cloud-hourly-v5-full-hhl/geometry.grib2", runID),
+		File:  fmt.Sprintf("runs/%s/cloud-hourly-v6-native-mh/geometry.grib2", runID),
 		Bytes: 100, AllocatedBytes: 512, SHA256: strings.Repeat("b", 64), Messages: len(iconeu.DomeHalfModelLevels()),
 	}
-	const baseCloudMessages = 187
+	const baseCloudMessages = 245
 	modelMessages := len(iconeu.DomeFullModelLevels())*8 + len(iconeu.DomeHalfModelLevels())*2
 	for _, hour := range iconeu.DomeNativeForecastHours() {
 		validAt := base.Add(time.Duration(hour) * time.Hour)
@@ -407,7 +407,7 @@ func astrodomeManifestFixture(t *testing.T, storage model.StorageProfile) iconeu
 		if hour <= 78 {
 			step.Parts = append(step.Parts, iconeu.DomeStepFile{
 				Source: iconeu.DomeFileSourceBaseRun, ForecastHour: hour, ValidAt: validAt,
-				File:  fmt.Sprintf("runs/%s/cloud-hourly-v5-full-hhl/f%03d.grib2", runID, hour),
+				File:  fmt.Sprintf("runs/%s/cloud-hourly-v6-native-mh/f%03d.grib2", runID, hour),
 				Bytes: 100, AllocatedBytes: 512, SHA256: strings.Repeat("c", 64), Messages: baseCloudMessages,
 			})
 		}

@@ -30,6 +30,11 @@ type CloudLevel struct {
 type CloudFrame struct {
 	ValidAt time.Time    `json:"valid_at"`
 	Levels  []CloudLevel `json:"levels"`
+	// TurbulenceLevels is the continuous native ICON P/T/U/V/TKE chain from
+	// the surface through the provider's maximum positive mixed-layer depth.
+	// It is kept separate from the sparse cloud-condensate sampling so support
+	// for a deep boundary layer does not multiply CLC/QC/QI acquisition.
+	TurbulenceLevels []CloudLevel `json:"turbulence_levels,omitempty"`
 }
 
 type CloudSeries struct {
@@ -44,6 +49,17 @@ type CloudSeries struct {
 	TurbulenceValidUntil time.Time    `json:"turbulence_valid_until,omitempty"`
 	SurfaceElevationM    float64      `json:"surface_elevation_m"`
 	Frames               []CloudFrame `json:"frames"`
+}
+
+func (frame CloudFrame) nativeTurbulenceLevels() []CloudLevel {
+	if len(frame.TurbulenceLevels) > 0 {
+		return frame.TurbulenceLevels
+	}
+	// Synthetic/provider-neutral callers predating the split may keep the
+	// native dynamics on Levels. The physical constructor still validates a
+	// continuous finite chain and therefore fails closed for sparse cloud-only
+	// input; persisted provider point caches are versioned separately.
+	return frame.Levels
 }
 
 type CloudDiagnostics struct {

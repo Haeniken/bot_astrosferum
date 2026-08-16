@@ -18,7 +18,7 @@ const (
 	DefaultOverallPrecipitationDetectMM = 0.05
 	// OverallIndexAlgorithmVersion identifies the scientific interpretation of
 	// OverallIndexFrame independently from any renderer or transport.
-	OverallIndexAlgorithmVersion = "overall-astronomy-index-v3-native-mh-logp"
+	OverallIndexAlgorithmVersion = "overall-astronomy-index-v4-native-mh-logp"
 )
 
 const (
@@ -303,7 +303,7 @@ func ComputeHourlyOverallIndex(vertical VerticalSeries, surface SurfaceSeries, c
 		}
 		boundaryLayerDepthM := frame.MixedLayerDepthM
 		metrics, groundLayerPhysics := HybridOpticalTurbulenceMetrics(
-			profile, cloudFrame.Levels, cloud.SurfaceElevationM,
+			profile, cloudFrame.nativeTurbulenceLevels(), cloud.SurfaceElevationM,
 			boundaryLayerDepthM, calibration.GroundCn2Scale,
 		)
 		if !groundLayerPhysics {
