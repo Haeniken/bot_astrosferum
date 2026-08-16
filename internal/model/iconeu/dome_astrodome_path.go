@@ -65,12 +65,6 @@ type domeAstrodomePhysicalRootCandidate struct {
 	checks   []domeAstrodomeShortPanelResidualCheck
 }
 
-type domeAstrodomePBLDecisionRoot struct {
-	evidence domeAstrodomeRootEvidence
-	eventID  string
-	checks   []domeAstrodomeShortPanelResidualCheck
-}
-
 type domeAstrodomeHorizontalRootCandidate struct {
 	pathM   float64
 	leftM   float64
@@ -1214,151 +1208,15 @@ func (volume *DomeVolume) domeAstrodomePBLBreakpoints(
 	sampler *domeAstrodomePhysicalSampler,
 	columns [4]forecast.AstrodomePrimitiveColumn,
 	mixedLayerDepths [4]float64,
-	calibration forecast.AstrodomeScienceCalibration,
+	_ forecast.AstrodomeScienceCalibration,
 ) ([]domeAstrodomePhysicalRootCandidate, error) {
-	minimumDepthM := calibration.Overall.BoundaryLayerMinM
-	maximumDepthM := calibration.Overall.BoundaryLayerTopM
-	cellBranch, err := domeClassifyAstrodomePBLClampBranch(
-		mixedLayerDepths, minimumDepthM, maximumDepthM,
+	// Native ICON MH is the physical mixed-layer boundary. Vertical-support
+	// checks in the science kernel fail closed when the TKE chain does not reach
+	// this surface; no numerical clamp substitutes a different PBL depth.
+	return domeAstrodomeIsolateNativePBLBoundary(
+		ray, interval, probePaths, metric, sampler,
+		domeAstrodomeSurfaceCornerValues(columns), mixedLayerDepths,
 	)
-	if err != nil {
-		return nil, err
-	}
-	surfaceHeights := domeAstrodomeSurfaceCornerValues(columns)
-	if cellBranch == domeAstrodomePBLClampUpper {
-		// On the certified upper branch PBL=HSURF+maximumDepthM. The science
-		// calibration uses the same maximum as the low-cloud top, so that
-		// surface is already solved once under boundary/cloud-low-top.
-		if maximumDepthM == forecast.AstrodomeScienceCloudLowTopAGLM {
-			return nil, nil
-		}
-		return domeAstrodomeIsolatePBLBranchBoundary(
-			ray, interval, probePaths, metric, sampler, surfaceHeights, mixedLayerDepths,
-			cellBranch, minimumDepthM, maximumDepthM, 0,
-		)
-	}
-	if cellBranch == domeAstrodomePBLClampLower || cellBranch == domeAstrodomePBLClampIdentity {
-		return domeAstrodomeIsolatePBLBranchBoundary(
-			ray, interval, probePaths, metric, sampler, surfaceHeights, mixedLayerDepths,
-			cellBranch, minimumDepthM, maximumDepthM, 0,
-		)
-	}
-
-	minimumField := domeAstrodomePBLDecisionField(
-		"pbl-clamp/minimum", mixedLayerDepths, minimumDepthM,
-	)
-	maximumField := domeAstrodomePBLDecisionField(
-		"pbl-clamp/maximum", mixedLayerDepths, maximumDepthM,
-	)
-	decisionRoots := make([]domeAstrodomePBLDecisionRoot, 0, 4)
-	for _, field := range []domeAstrodomeScalarField{minimumField, maximumField} {
-		roots, rootErr := domeAstrodomePBLDecisionFieldRoots(
-			ray, interval, probePaths, metric, sampler, field,
-		)
-		if rootErr != nil {
-			return nil, rootErr
-		}
-		decisionRoots = append(decisionRoots, roots...)
-	}
-	decisionRoots, err = compactDomeAstrodomePBLDecisionRoots(decisionRoots, ray.PathLengthM)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]domeAstrodomePhysicalRootCandidate, 0, len(decisionRoots)+2)
-	partitionPaths := make([]float64, 0, len(decisionRoots)+2)
-	partitionPaths = append(partitionPaths, interval.startM)
-	for _, root := range decisionRoots {
-		partitionPaths = append(partitionPaths, root.evidence.pathM)
-		result = append(result, domeAstrodomePhysicalRootCandidate{
-			evidence: root.evidence, eventID: root.eventID, checks: root.checks,
-		})
-	}
-	partitionPaths = append(partitionPaths, interval.endM)
-
-	// The complete raw-MH root isolation above proves that no clamp threshold
-	// changes sign away from these evidence intervals. Each physical solver is
-	// therefore restricted to one certified smooth branch. The root evidence
-	// must also remain strictly outside every branch-sensitive probe.
-	globalProofFields := [][4]float64{surfaceHeights, mixedLayerDepths}
-	globalLipschitz, _, certified, err := domePhysicalBoundaryLipschitz(globalProofFields, metric)
-	if err != nil {
-		return nil, err
-	}
-	if !certified {
-		return nil, fmt.Errorf("%w: ICON-EU mixed-cell PBL has no global path bound",
-			forecast.ErrAstrodomeScienceIncompletePartition)
-	}
-	for part := 0; part+1 < len(partitionPaths); part++ {
-		partInterval := domeAstrodomeCellInterval{
-			startM: partitionPaths[part], endM: partitionPaths[part+1],
-			cellID: interval.cellID, stencil: interval.stencil,
-		}
-		if partInterval.endM-partInterval.startM <= forecast.AstrodomeScienceMinimumEventIntervalLengthM {
-			return nil, fmt.Errorf("%w: PBL decisions in cell %q do not clear the %.9g m compound-root side guard",
-				forecast.ErrAstrodomeScienceIncompletePartition, interval.cellID,
-				forecast.AstrodomeScienceMinimumEventIntervalLengthM)
-		}
-		partProbes, probeErr := domeAstrodomePhysicalProbePaths(partInterval)
-		if probeErr != nil {
-			return nil, probeErr
-		}
-		if part > 0 && decisionRoots[part-1].evidence.rightM >= partProbes[0] {
-			return nil, fmt.Errorf("%w: PBL decision evidence enters the following branch probe span",
-				forecast.ErrAstrodomeScienceIncompletePartition)
-		}
-		if part < len(decisionRoots) && decisionRoots[part].evidence.leftM <= partProbes[len(partProbes)-1] {
-			return nil, fmt.Errorf("%w: PBL decision evidence enters the preceding branch probe span",
-				forecast.ErrAstrodomeScienceIncompletePartition)
-		}
-		branch, branchErr := domeAstrodomeCertifiedPBLBranchAtProbes(
-			sampler, partProbes, minimumField, maximumField,
-		)
-		if branchErr != nil {
-			return nil, branchErr
-		}
-		switch branch {
-		case domeAstrodomePBLClampUpper:
-			if maximumDepthM == forecast.AstrodomeScienceCloudLowTopAGLM {
-				continue
-			}
-		case domeAstrodomePBLClampLower, domeAstrodomePBLClampIdentity:
-		default:
-			return nil, fmt.Errorf("%w: ICON-EU PBL branch is not certified inside a raw-MH partition",
-				forecast.ErrAstrodomeScienceIncompletePartition)
-		}
-		roots, isolateErr := domeAstrodomeIsolatePBLBranchBoundary(
-			ray, partInterval, partProbes, metric, sampler, surfaceHeights, mixedLayerDepths,
-			branch, minimumDepthM, maximumDepthM, globalLipschitz,
-		)
-		if isolateErr != nil {
-			return nil, isolateErr
-		}
-		result = append(result, roots...)
-	}
-	return result, nil
-}
-
-func domeAstrodomePBLDecisionField(
-	id string,
-	mixedLayerDepths [4]float64,
-	thresholdM float64,
-) domeAstrodomeScalarField {
-	corners := [4]float64{}
-	operandScale := math.Max(1, math.Abs(thresholdM))
-	for corner := range corners {
-		corners[corner] = forecast.CompensatedDifferenceResidual(
-			mixedLayerDepths[corner], 0, thresholdM,
-		)
-		operandScale = math.Max(operandScale, math.Abs(mixedLayerDepths[corner]))
-	}
-	return domeAstrodomeScalarField{
-		id: id, corners: corners, roundoffOperandScale: operandScale,
-		evaluate: func(weights [4]float64) float64 {
-			return forecast.CompensatedDifferenceResidual(
-				domeWeighted4(mixedLayerDepths, weights), 0, thresholdM,
-			)
-		},
-	}
 }
 
 func domeAstrodomeScalarFieldResidualAtSample(
@@ -1377,191 +1235,15 @@ func domeAstrodomeScalarFieldResidualAtSample(
 	return domeAstrodomeResidualWithEvaluationError(field.value(sample.weights), evaluationError)
 }
 
-func domeAstrodomePBLDecisionFieldRoots(
-	ray forecast.AstrodomeRefractedRay,
-	interval domeAstrodomeCellInterval,
-	probePaths [5]float64,
-	metric domeAstrodomeMetricBounds,
-	sampler *domeAstrodomePhysicalSampler,
-	field domeAstrodomeScalarField,
-) ([]domeAstrodomePBLDecisionRoot, error) {
-	minimum, maximum := domeAstrodomeCornerRange(field.corners)
-	cornerError := domeAstrodomeClearanceRoundoff(0, 0, field.roundoffOperandScale)
-	if minimum > cornerError || maximum < -cornerError {
-		return nil, nil
-	}
-	lipschitz, err := domeAstrodomeScalarFieldLipschitz(
-		metric, field.corners, field.roundoffOperandScale,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("%w: raw ICON-EU PBL predicate %s has no certified path bound: %w",
-			forecast.ErrAstrodomeScienceIncompletePartition, field.id, err)
-	}
-	valueAt := func(pathM float64) (domeAstrodomeResidualSample, error) {
-		sample, sampleErr := sampler.sample(pathM, false)
-		if sampleErr != nil {
-			return domeAstrodomeResidualSample{}, sampleErr
-		}
-		return domeAstrodomeScalarFieldResidualAtSample(sample, field)
-	}
-	slopeBounds, err := domeAstrodomeBilinearScalarSlopeBounds(
-		ray, metric, field, lipschitz, interval.startM, interval.endM,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("bound raw ICON-EU PBL predicate slope %s: %w", field.id, err)
-	}
-	probeValues := [5]domeAstrodomeResidualSample{}
-	for index, pathM := range probePaths {
-		probeValues[index], err = valueAt(pathM)
-		if err != nil {
-			return nil, err
-		}
-	}
-	secondDerivative, err := domeAstrodomeBilinearScalarSecondDerivativeBound(
-		ray, metric, field, interval.startM, interval.endM,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("bound raw ICON-EU PBL predicate endpoint slope %s: %w", field.id, err)
-	}
-	endpointSlopeBounds, err := domeAstrodomeEndpointSlopeBoundsFromInterior(
-		probePaths, probeValues, field.roundoffOperandScale, secondDerivative,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("bound raw ICON-EU PBL predicate endpoint slope %s: %w", field.id, err)
-	}
-	evidence, err := domeAstrodomeIsolateFieldAcrossProbesWithSlopeBoundsResidualEvidence(
-		interval, probePaths, lipschitz, field.roundoffOperandScale,
-		slopeBounds, endpointSlopeBounds, sampler.approximations, valueAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("isolate raw ICON-EU PBL predicate %s: %w", field.id, err)
-	}
-	result := make([]domeAstrodomePBLDecisionRoot, 0, len(evidence))
-	for _, root := range evidence {
-		if root.pathM > interval.startM+domeAstrodomePhysicalMergeToleranceM &&
-			root.pathM < interval.endM-domeAstrodomePhysicalMergeToleranceM {
-			result = append(result, domeAstrodomePBLDecisionRoot{
-				evidence: root, eventID: "pbl-decision/" + field.id,
-				checks: []domeAstrodomeShortPanelResidualCheck{{
-					eventID:       "pbl-decision/" + field.id,
-					roundoffScale: field.roundoffOperandScale,
-					valueAt:       valueAt,
-				}},
-			})
-		}
-	}
-	return result, nil
-}
-
-func compactDomeAstrodomePBLDecisionRoots(
-	values []domeAstrodomePBLDecisionRoot,
-	pathEndM float64,
-) ([]domeAstrodomePBLDecisionRoot, error) {
-	sort.Slice(values, func(left, right int) bool {
-		if values[left].evidence.pathM == values[right].evidence.pathM {
-			return values[left].eventID < values[right].eventID
-		}
-		return values[left].evidence.pathM < values[right].evidence.pathM
-	})
-	result := values[:0]
-	for _, root := range values {
-		evidence := root.evidence
-		if strings.TrimSpace(root.eventID) == "" || !finiteDomeVolume(evidence.pathM) ||
-			!finiteDomeVolume(evidence.leftM) || !finiteDomeVolume(evidence.rightM) ||
-			evidence.leftM < 0 || evidence.rightM > pathEndM || evidence.leftM > evidence.pathM ||
-			evidence.pathM > evidence.rightM ||
-			math.Max(evidence.pathM-evidence.leftM, evidence.rightM-evidence.pathM) >
-				domeAstrodomePhysicalRootToleranceM {
-			return nil, fmt.Errorf("%w: invalid ICON-EU PBL decision-root evidence",
-				forecast.ErrAstrodomeScienceIncompletePartition)
-		}
-		if len(result) == 0 || evidence.pathM-result[len(result)-1].evidence.pathM > domeAstrodomePhysicalMergeToleranceM {
-			result = append(result, root)
-			continue
-		}
-		previous := result[len(result)-1]
-		if root.eventID == previous.eventID && evidence.pathM == previous.evidence.pathM &&
-			evidence.leftM == previous.evidence.leftM && evidence.rightM == previous.evidence.rightM &&
-			evidence.exact == previous.evidence.exact {
-			continue
-		}
-		return nil, fmt.Errorf("%w: distinct ICON-EU PBL decisions %q and %q are %.9g m apart inside the %.9g m root cluster",
-			forecast.ErrAstrodomeScienceIncompletePartition, previous.eventID, root.eventID,
-			evidence.pathM-previous.evidence.pathM, domeAstrodomePhysicalMergeToleranceM)
-	}
-	return result, nil
-}
-
-func domeAstrodomeCertifiedPBLBranchAtProbes(
-	sampler *domeAstrodomePhysicalSampler,
-	probePaths [5]float64,
-	minimumField, maximumField domeAstrodomeScalarField,
-) (domeAstrodomePBLClampBranch, error) {
-	branch := domeAstrodomePBLClampCrossing
-	for _, pathM := range probePaths {
-		sample, err := sampler.sample(pathM, false)
-		if err != nil {
-			return domeAstrodomePBLClampCrossing, err
-		}
-		minimumResidual, err := domeAstrodomeScalarFieldResidualAtSample(sample, minimumField)
-		if err != nil {
-			return domeAstrodomePBLClampCrossing, err
-		}
-		maximumResidual, err := domeAstrodomeScalarFieldResidualAtSample(sample, maximumField)
-		if err != nil {
-			return domeAstrodomePBLClampCrossing, err
-		}
-		minimumSign, _, _ := domeAstrodomeResidualSignInterval(
-			minimumResidual, minimumField.roundoffOperandScale,
-		)
-		maximumSign, _, _ := domeAstrodomeResidualSignInterval(
-			maximumResidual, maximumField.roundoffOperandScale,
-		)
-		var probeBranch domeAstrodomePBLClampBranch
-		switch {
-		case minimumSign < 0 && maximumSign < 0:
-			probeBranch = domeAstrodomePBLClampLower
-		case minimumSign > 0 && maximumSign < 0:
-			probeBranch = domeAstrodomePBLClampIdentity
-		case minimumSign > 0 && maximumSign > 0:
-			probeBranch = domeAstrodomePBLClampUpper
-		default:
-			return domeAstrodomePBLClampCrossing, fmt.Errorf("%w: raw ICON-EU PBL branch is numerically indeterminate at %.12g m",
-				forecast.ErrAstrodomeScienceIncompletePartition, pathM)
-		}
-		if branch == domeAstrodomePBLClampCrossing {
-			branch = probeBranch
-		} else if branch != probeBranch {
-			return domeAstrodomePBLClampCrossing, fmt.Errorf("%w: raw ICON-EU PBL branch changes inside a certified partition",
-				forecast.ErrAstrodomeScienceIncompletePartition)
-		}
-	}
-	return branch, nil
-}
-
-func domeAstrodomeIsolatePBLBranchBoundary(
+func domeAstrodomeIsolateNativePBLBoundary(
 	ray forecast.AstrodomeRefractedRay,
 	interval domeAstrodomeCellInterval,
 	probePaths [5]float64,
 	metric domeAstrodomeMetricBounds,
 	sampler *domeAstrodomePhysicalSampler,
 	surfaceHeights, mixedLayerDepths [4]float64,
-	branch domeAstrodomePBLClampBranch,
-	minimumDepthM, maximumDepthM, proofLipschitz float64,
 ) ([]domeAstrodomePhysicalRootCandidate, error) {
-	fields := [][4]float64{surfaceHeights}
-	offsetM := minimumDepthM
-	switch branch {
-	case domeAstrodomePBLClampLower:
-	case domeAstrodomePBLClampIdentity:
-		fields = append(fields, mixedLayerDepths)
-		offsetM = 0
-	case domeAstrodomePBLClampUpper:
-		offsetM = maximumDepthM
-	default:
-		return nil, fmt.Errorf("%w: cannot solve an uncertified ICON-EU PBL branch",
-			forecast.ErrAstrodomeScienceIncompletePartition)
-	}
+	fields := [][4]float64{surfaceHeights, mixedLayerDepths}
 	branchLipschitz, boundarySlope, certified, err := domePhysicalBoundaryLipschitz(fields, metric)
 	if err != nil {
 		return nil, err
@@ -1570,20 +1252,14 @@ func domeAstrodomeIsolatePBLBranchBoundary(
 		return nil, fmt.Errorf("%w: ICON-EU PBL branch has no certified path bound",
 			forecast.ErrAstrodomeScienceIncompletePartition)
 	}
-	if proofLipschitz <= 0 {
-		proofLipschitz = branchLipschitz
-	} else if !finiteDomeVolume(proofLipschitz) || proofLipschitz < branchLipschitz {
-		return nil, errors.New("invalid ICON-EU PBL proof Lipschitz bound")
-	}
+	proofLipschitz := branchLipschitz
 	valueAt := func(pathM float64) (domeAstrodomeResidualSample, error) {
 		sample, sampleErr := sampler.sample(pathM, false)
 		if sampleErr != nil {
 			return domeAstrodomeResidualSample{}, sampleErr
 		}
-		value := sample.point.HeightM - domeWeighted4(surfaceHeights, sample.weights) - offsetM
-		if branch == domeAstrodomePBLClampIdentity {
-			value -= domeWeighted4(mixedLayerDepths, sample.weights)
-		}
+		value := sample.point.HeightM - domeWeighted4(surfaceHeights, sample.weights) -
+			domeWeighted4(mixedLayerDepths, sample.weights)
 		evaluationError := sample.positionEvaluationErrorM
 		for _, field := range fields {
 			fieldError, fieldErr := domeAstrodomeBilinearCoordinateUncertaintyFromBounds(
@@ -1633,7 +1309,7 @@ func domeAstrodomeIsolatePBLBranchBoundary(
 		sampler.approximations, valueAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("isolate ICON-EU Astrodome PBL %v branch: %w", branch, err)
+		return nil, fmt.Errorf("isolate native ICON-EU Astrodome PBL boundary: %w", err)
 	}
 	result := make([]domeAstrodomePhysicalRootCandidate, 0, len(roots))
 	for _, root := range domeAstrodomeInteriorRootEvidence(interval, roots) {
@@ -3373,7 +3049,7 @@ func (volume *DomeVolume) domePhysicalBoundaryFields(
 	validAt time.Time,
 	columns [4]forecast.AstrodomePrimitiveColumn,
 	boundary domeAstrodomeBoundary,
-	calibration forecast.AstrodomeScienceCalibration,
+	_ forecast.AstrodomeScienceCalibration,
 ) ([][4]float64, bool, error) {
 	fields := make([][4]float64, 0, 2)
 	smooth := true
@@ -3405,135 +3081,13 @@ func (volume *DomeVolume) domePhysicalBoundaryFields(
 		if err != nil {
 			return nil, false, err
 		}
-		return domeAstrodomePBLFieldsForCornerRange(
+		return [][4]float64{
 			domeAstrodomeSurfaceCornerValues(columns), mixedLayerDepths,
-			calibration.Overall.BoundaryLayerMinM,
-			calibration.Overall.BoundaryLayerTopM,
-		)
+		}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unsupported Astrodome physical boundary %q", boundary.id)
 	}
 	return fields, smooth, nil
-}
-
-func domeAstrodomePBLFieldsForCornerRange(
-	surfaceHeights, mixedLayerDepths [4]float64,
-	minimumDepthM, maximumDepthM float64,
-) ([][4]float64, bool, error) {
-	branch, err := domeClassifyAstrodomePBLClampBranch(mixedLayerDepths, minimumDepthM, maximumDepthM)
-	if err != nil {
-		return nil, false, err
-	}
-	switch branch {
-	case domeAstrodomePBLClampLower, domeAstrodomePBLClampUpper:
-		return [][4]float64{surfaceHeights}, true, nil
-	case domeAstrodomePBLClampIdentity:
-		return [][4]float64{surfaceHeights, mixedLayerDepths}, true, nil
-	}
-
-	minimumValue, maximumValue := domeAstrodomeCornerRange(mixedLayerDepths)
-	operandScale := domeAstrodomeCornerOperandScale(mixedLayerDepths)
-	roundoff := domeAstrodomeClearanceRoundoff(0, 0, operandScale)
-	minimumValue = math.Nextafter(minimumValue-roundoff, math.Inf(-1))
-	maximumValue = math.Nextafter(maximumValue+roundoff, math.Inf(1))
-	return domeAstrodomePBLFieldsForEnclosedRange(
-		surfaceHeights, mixedLayerDepths, minimumValue, maximumValue,
-		minimumDepthM, maximumDepthM,
-	)
-}
-
-type domeAstrodomePBLClampBranch uint8
-
-const (
-	domeAstrodomePBLClampCrossing domeAstrodomePBLClampBranch = iota
-	domeAstrodomePBLClampLower
-	domeAstrodomePBLClampIdentity
-	domeAstrodomePBLClampUpper
-)
-
-// domeAstrodomePBLClampBranch classifies the complete bilinear MH field using
-// an outward binary64 enclosure. A non-crossing result therefore proves the
-// same clamp branch at every point in the native horizontal cell.
-func domeClassifyAstrodomePBLClampBranch(
-	mixedLayerDepths [4]float64,
-	minimumDepthM, maximumDepthM float64,
-) (domeAstrodomePBLClampBranch, error) {
-	if !finiteDomeVolume(minimumDepthM) || !finiteDomeVolume(maximumDepthM) ||
-		minimumDepthM >= maximumDepthM {
-		return domeAstrodomePBLClampCrossing, errors.New("invalid ICON-EU Astrodome PBL clamp limits")
-	}
-	minimumValue, maximumValue := domeAstrodomeCornerRange(mixedLayerDepths)
-	operandScale := domeAstrodomeCornerOperandScale(mixedLayerDepths)
-	roundoff := domeAstrodomeClearanceRoundoff(0, 0, operandScale)
-	minimumValue = math.Nextafter(minimumValue-roundoff, math.Inf(-1))
-	maximumValue = math.Nextafter(maximumValue+roundoff, math.Inf(1))
-	switch {
-	case maximumValue <= minimumDepthM:
-		return domeAstrodomePBLClampLower, nil
-	case minimumValue >= maximumDepthM:
-		return domeAstrodomePBLClampUpper, nil
-	case minimumValue >= minimumDepthM && maximumValue <= maximumDepthM:
-		return domeAstrodomePBLClampIdentity, nil
-	default:
-		return domeAstrodomePBLClampCrossing, nil
-	}
-}
-
-func domeAstrodomePBLIntervalFields(
-	sampler *domeAstrodomePhysicalSampler,
-	surfaceHeights, mixedLayerDepths [4]float64,
-	mixedLayerLipschitz, mixedLayerOperandScale,
-	leftM, rightM, minimumDepthM, maximumDepthM float64,
-) ([][4]float64, bool, error) {
-	if !finiteDomeVolume(mixedLayerLipschitz) || mixedLayerLipschitz <= 0 ||
-		!finiteDomeVolume(mixedLayerOperandScale) || mixedLayerOperandScale <= 0 ||
-		!finiteDomeVolume(leftM) || !finiteDomeVolume(rightM) || rightM <= leftM {
-		return nil, false, errors.New("invalid ICON-EU Astrodome PBL interval certificate")
-	}
-	middleM := leftM + (rightM-leftM)/2
-	middleSample, err := sampler.sample(middleM, false)
-	if err != nil {
-		return nil, false, err
-	}
-	middleDepthM := domeWeighted4(mixedLayerDepths, middleSample.weights)
-	coordinateUncertaintyM, err := domeAstrodomeBilinearCoordinateUncertainty(
-		middleSample.point, middleSample.positionEvaluationErrorM,
-		sampler.volume.manifest.Grid, mixedLayerDepths, mixedLayerOperandScale,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	halfWidthM := math.Max(middleM-leftM, rightM-middleM)
-	return domeAstrodomePBLFieldsAroundSample(
-		surfaceHeights, mixedLayerDepths, middleDepthM, mixedLayerLipschitz,
-		mixedLayerOperandScale, coordinateUncertaintyM,
-		halfWidthM, minimumDepthM, maximumDepthM,
-	)
-}
-
-func domeAstrodomePBLFieldsAroundSample(
-	surfaceHeights, mixedLayerDepths [4]float64,
-	middleDepthM, mixedLayerLipschitz, mixedLayerOperandScale,
-	middleEvaluationUncertaintyM, halfWidthM, minimumDepthM, maximumDepthM float64,
-) ([][4]float64, bool, error) {
-	if !finiteDomeVolume(middleDepthM) || !finiteDomeVolume(mixedLayerLipschitz) ||
-		mixedLayerLipschitz < 0 || !finiteDomeVolume(mixedLayerOperandScale) ||
-		mixedLayerOperandScale <= 0 || !finiteDomeVolume(middleEvaluationUncertaintyM) ||
-		middleEvaluationUncertaintyM < 0 || !finiteDomeVolume(halfWidthM) || halfWidthM < 0 {
-		return nil, false, errors.New("invalid ICON-EU Astrodome local PBL enclosure")
-	}
-	variationM := domeAstrodomePositiveMulUpper(mixedLayerLipschitz, halfWidthM)
-	variationM = domeAstrodomePositiveAddUpper(variationM, middleEvaluationUncertaintyM)
-	variationM = domeAstrodomePositiveAddUpper(
-		variationM,
-		domeAstrodomeClearanceRoundoff(middleDepthM, variationM, mixedLayerOperandScale),
-	)
-	minimumValue := math.Nextafter(middleDepthM-variationM, math.Inf(-1))
-	maximumValue := math.Nextafter(middleDepthM+variationM, math.Inf(1))
-	return domeAstrodomePBLFieldsForEnclosedRange(
-		surfaceHeights, mixedLayerDepths, minimumValue, maximumValue,
-		minimumDepthM, maximumDepthM,
-	)
 }
 
 // domeAstrodomeBilinearCoordinateUncertainty encloses the value error caused
@@ -3554,7 +3108,7 @@ func domeAstrodomePBLFieldsAroundSample(
 // sensitivities are bounded by the greatest north-south and east-west edge
 // differences. Every positive arithmetic stage is rounded outward. Ordinary
 // weight/product/summation roundoff remains covered separately by the scalar
-// clearance added by domeAstrodomePBLFieldsAroundSample.
+// residual enclosure.
 func domeAstrodomeCoordinateEvaluationErrorBounds(
 	point forecast.AstrodomeRefractedRayPoint,
 	positionEvaluationErrorM float64,
@@ -3826,29 +3380,6 @@ func domeAstrodomeFallbackBoundaryCoordinateError(
 		return 0, errors.New("ICON-EU 200-hPa coordinate-error enclosure is invalid")
 	}
 	return errorM, nil
-}
-
-func domeAstrodomePBLFieldsForEnclosedRange(
-	surfaceHeights, mixedLayerDepths [4]float64,
-	minimumValue, maximumValue, minimumDepthM, maximumDepthM float64,
-) ([][4]float64, bool, error) {
-	if !finiteDomeVolume(minimumValue) || !finiteDomeVolume(maximumValue) ||
-		minimumValue > maximumValue || !finiteDomeVolume(minimumDepthM) ||
-		!finiteDomeVolume(maximumDepthM) || minimumDepthM >= maximumDepthM {
-		return nil, false, errors.New("invalid ICON-EU Astrodome PBL clamp enclosure")
-	}
-	if maximumValue <= minimumDepthM || minimumValue >= maximumDepthM {
-		// On either saturated branch the clamped mixed-layer contribution is
-		// constant, so only the bilinear surface height contributes curvature.
-		return [][4]float64{surfaceHeights}, true, nil
-	}
-	if minimumValue >= minimumDepthM && maximumValue <= maximumDepthM {
-		// In the identity branch the physical boundary is exactly HSURF+MH.
-		return [][4]float64{surfaceHeights, mixedLayerDepths}, true, nil
-	}
-	// The interval enclosure intersects a clamp kink. Keep the complete
-	// Lipschitz bound, but do not claim a smooth derivative certificate.
-	return [][4]float64{surfaceHeights, mixedLayerDepths}, false, nil
 }
 
 type domeAstrodomeAngularDerivativeBounds struct {

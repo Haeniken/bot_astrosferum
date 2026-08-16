@@ -183,7 +183,6 @@ func TestComputeHorizonHomogeneousSlantSeeingHasExpectedGeometricScale(t *testin
 	validAt := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	snapshot := homogeneousHorizonSnapshot(plan, validAt, 0, 0)
 	calibration := DefaultOverallIndexCalibration()
-	calibration.BoundaryLayerMinM = 100
 	results, err := computeHorizonForConvergenceTest(snapshot, plan, calibration)
 	if err != nil {
 		t.Fatal(err)
@@ -300,6 +299,22 @@ func TestComputeHorizonCloudClosureIsStepSizeStable(t *testing.T) {
 	wantGuardTransmission := (1 - low) * (1 - middle) * (1 - high)
 	if math.Abs(production[0].CloudTransmission-wantGuardTransmission) > 1e-12 || !production[0].CloudUnresolvedGuard {
 		t.Fatalf("cloud transmission = %v, want tier guard %v", production[0].CloudTransmission, wantGuardTransmission)
+	}
+}
+
+func TestLocalHorizonCloudInterpolatesPressureInLogSpace(t *testing.T) {
+	t.Parallel()
+
+	levels := []CloudLevel{
+		{PressureHPA: 1000, HeightM: 0, LayerThicknessM: 10, TemperatureK: 280, CoverPercent: 20},
+		{PressureHPA: 640, HeightM: 1000, LayerThicknessM: 10, TemperatureK: 260, CoverPercent: 40},
+	}
+	sample, quality, ok := localHorizonCloud(levels, 500, 0)
+	if !ok || quality <= 0 {
+		t.Fatalf("interpolated cloud sample unavailable: ok=%t quality=%v sample=%+v", ok, quality, sample)
+	}
+	if want := math.Sqrt(1000.0 * 640.0); math.Abs(sample.pressureHPA-want) > 1e-12*want {
+		t.Fatalf("interpolated pressure = %.17g, want geometric mean %.17g", sample.pressureHPA, want)
 	}
 }
 
@@ -620,7 +635,6 @@ func computeHorizonForConvergenceTest(snapshot HorizonSnapshot, plan HorizonPlan
 
 func testHorizonCalibration() OverallIndexCalibration {
 	calibration := DefaultOverallIndexCalibration()
-	calibration.BoundaryLayerMinM = 100
 	return calibration
 }
 
@@ -659,7 +673,7 @@ func homogeneousHorizonSnapshot(plan HorizonPlan, validAt time.Time, liquidKgKg,
 					{PressureHPA: 700, HeightM: height - 1000, TemperatureK: 260, UMS: 8, VMS: 3},
 					{PressureHPA: 600, HeightM: height + 1000, TemperatureK: 250, UMS: 8, VMS: 3},
 				}},
-				Surface:           SurfaceFrame{ValidAt: validAt, MixedLayerDepthM: 0},
+				Surface:           SurfaceFrame{ValidAt: validAt, MixedLayerDepthM: 100},
 				Cloud:             CloudFrame{ValidAt: validAt, Levels: cloudLevels},
 				SurfaceElevationM: 0,
 			}

@@ -69,13 +69,13 @@ func TestRenderCacheKeyIncludesEveryOverallCalibrationField(t *testing.T) {
 	calibration := forecast.DefaultOverallIndexCalibration()
 	baseline := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, sky, options, calibration)
 
-	// BoundaryLayerMinM was added with dynamic ICON MH. Changing it
-	// proves that the full calibration struct, rather than a stale field list,
-	// participates in the cache identity.
-	calibration.BoundaryLayerMinM++
+	// Native ICON MH is a provider input, not a configurable clamp. Changing a
+	// real calibration term proves that the full calibration struct, rather
+	// than a stale field list, participates in the cache identity.
+	calibration.GroundCn2Scale *= 1.01
 	changed := forecastRenderCacheKey(vertical, surface, cloud, forecast.AtmosphericCompositionSeries{}, sky, options, calibration)
 	if baseline == changed {
-		t.Fatal("render cache key ignored BoundaryLayerMinM calibration")
+		t.Fatal("render cache key ignored GroundCn2Scale calibration")
 	}
 }
 

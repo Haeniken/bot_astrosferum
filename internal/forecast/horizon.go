@@ -13,7 +13,7 @@ const (
 	// straight-line-of-sight product. It is intentionally distinct from the
 	// full-refraction Astrodome kernel and from the retired Horizon v7 cache
 	// identity, even though it retains the validated v7 equations.
-	HorizonAlgorithmVersion = "horizon-spherical-straight-los-tke-hmnsp99-glo30-informational-v12"
+	HorizonAlgorithmVersion = "horizon-spherical-straight-los-native-mh-logp-glo30-informational-v13"
 	HorizonGridProfile      = "horizon-8x10deg-straight-glo30-informational-v5"
 
 	HorizonEarthRadiusM              = 6371008.8
@@ -796,10 +796,10 @@ func horizonSampleTimesMatch(sample HorizonSampleSnapshot, validAt time.Time) bo
 }
 
 func localHorizonTurbulence(vertical []VerticalLevel, model []CloudLevel, surface SurfaceFrame, surfaceElevationM, rayHeightM float64, calibration OverallIndexCalibration) (cn2, uMS, vMS, quality float64, ok bool) {
-	if !finite(surface.MixedLayerDepthM) || surface.MixedLayerDepthM < 0 || !finite(rayHeightM) || rayHeightM < surfaceElevationM {
+	if !finite(surface.MixedLayerDepthM) || surface.MixedLayerDepthM <= 0 || !finite(rayHeightM) || rayHeightM < surfaceElevationM {
 		return 0, 0, 0, 0, false
 	}
-	boundaryDepthM := clampSurfaceValue(surface.MixedLayerDepthM, calibration.BoundaryLayerMinM, calibration.BoundaryLayerTopM)
+	boundaryDepthM := surface.MixedLayerDepthM
 	if rayHeightM <= surfaceElevationM+boundaryDepthM {
 		nodes, valid := masciadriTurbulenceNodes(model, surfaceElevationM, boundaryDepthM, calibration.GroundCn2Scale)
 		if !valid {
@@ -961,7 +961,7 @@ func localHorizonCloud(levels []CloudLevel, heightM, surfaceElevationM float64) 
 	represented := (math.Max(0, sortedLevels[lower].LayerThicknessM) + math.Max(0, sortedLevels[upper].LayerThicknessM)) / (2 * span)
 	quality := clamp(represented, 0.35, 0.85)
 	return horizonCloudSample{
-		pressureHPA:  lowerValue.pressureHPA + fraction*(upperValue.pressureHPA-lowerValue.pressureHPA),
+		pressureHPA:  interpolatePositiveLog(lowerValue.pressureHPA, upperValue.pressureHPA, fraction),
 		temperatureK: lowerValue.temperatureK + fraction*(upperValue.temperatureK-lowerValue.temperatureK),
 		liquidKgKg:   lowerValue.liquidKgKg + fraction*(upperValue.liquidKgKg-lowerValue.liquidKgKg),
 		iceKgKg:      lowerValue.iceKgKg + fraction*(upperValue.iceKgKg-lowerValue.iceKgKg),

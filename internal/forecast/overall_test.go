@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+func TestOverallIndexAlgorithmVersionPinsNativeMHAndLogPressure(t *testing.T) {
+	if OverallIndexAlgorithmVersion != "overall-astronomy-index-v3-native-mh-logp" {
+		t.Fatalf("Overall algorithm version = %q", OverallIndexAlgorithmVersion)
+	}
+}
+
 func TestOverallCalibrationFingerprintIsStableAndSensitive(t *testing.T) {
 	calibration := DefaultOverallIndexCalibration()
 	first, err := OverallCalibrationSHA256(calibration)
@@ -474,31 +480,20 @@ func TestModelSurfacePressureRejectsDistantOrInvalidProfile(t *testing.T) {
 	}
 }
 
-func TestOverallIndexUsesHourlyICONMixedLayerDepthWithinBounds(t *testing.T) {
+func TestOverallIndexUsesNativeHourlyICONMixedLayerDepth(t *testing.T) {
 	vertical := SyntheticVerticalFixture()
 	surface := clearSyntheticSurface()
 	surface.Frames[0].MixedLayerDepthM = 100
 	surface.Frames[1].MixedLayerDepthM = 1200
-	surface.Frames[2].MixedLayerDepthM = 3000
+	surface.Frames[2].MixedLayerDepthM = 2500
 	frames, err := ComputeHourlyOverallIndex(vertical, surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []float64{500, 1200, 2000}
+	want := []float64{100, 1200, 2500}
 	for index, expected := range want {
 		if frames[index].BoundaryLayerDepthM != expected {
 			t.Fatalf("frame %d boundary-layer depth = %v, want %v", index, frames[index].BoundaryLayerDepthM, expected)
-		}
-	}
-}
-
-func TestOverallCalibrationRejectsInvalidBoundaryLayerBounds(t *testing.T) {
-	for _, bounds := range [][2]float64{{99, 2000}, {2100, 2000}, {500, 4001}} {
-		calibration := DefaultOverallIndexCalibration()
-		calibration.BoundaryLayerMinM = bounds[0]
-		calibration.BoundaryLayerTopM = bounds[1]
-		if err := calibration.Validate(); err == nil {
-			t.Fatalf("bounds [%v, %v] unexpectedly passed validation", bounds[0], bounds[1])
 		}
 	}
 }
@@ -514,10 +509,12 @@ func TestOverallCalibrationRejectsInvalidPrecipitationThreshold(t *testing.T) {
 }
 
 func TestOverallIndexRejectsInvalidICONMixedLayerDepth(t *testing.T) {
-	surface := clearSyntheticSurface()
-	surface.Frames[0].MixedLayerDepthM = math.NaN()
-	if _, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration()); err == nil {
-		t.Fatal("NaN ICON mixed-layer depth unexpectedly passed validation")
+	for _, value := range []float64{math.NaN(), 0, -1} {
+		surface := clearSyntheticSurface()
+		surface.Frames[0].MixedLayerDepthM = value
+		if _, err := ComputeHourlyOverallIndex(SyntheticVerticalFixture(), surface, SyntheticCloudFixture(), DefaultOverallIndexCalibration()); err == nil {
+			t.Fatalf("invalid ICON mixed-layer depth %v unexpectedly passed validation", value)
+		}
 	}
 }
 

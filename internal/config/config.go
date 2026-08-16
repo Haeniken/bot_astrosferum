@@ -157,17 +157,20 @@ type AlgorithmsConfig struct {
 	OverallBadSeeingArcsec             float64 `yaml:"overall_bad_seeing_arcsec"`
 	OverallBestCoherenceTimeMS         float64 `yaml:"overall_best_coherence_time_ms"`
 	OverallBadCoherenceTimeMS          float64 `yaml:"overall_bad_coherence_time_ms"`
-	OverallBoundaryLayerMinM           float64 `yaml:"overall_boundary_layer_min_m"`
-	OverallBoundaryLayerTopM           float64 `yaml:"overall_boundary_layer_top_m"`
-	OverallGroundCn2Scale              float64 `yaml:"overall_ground_cn2_scale"`
-	OverallUnresolvedCloudObstruction  float64 `yaml:"overall_unresolved_cloud_obstruction"`
-	OverallSurfaceWindMaxPenalty       float64 `yaml:"overall_surface_wind_max_penalty"`
-	OverallSurfaceWindStartMS          float64 `yaml:"overall_surface_wind_start_ms"`
-	OverallSurfaceWindFullMS           float64 `yaml:"overall_surface_wind_full_ms"`
-	OverallSurfaceGustStartMS          float64 `yaml:"overall_surface_gust_start_ms"`
-	OverallSurfaceGustFullMS           float64 `yaml:"overall_surface_gust_full_ms"`
-	CloudLiquidRadiusMicrometers       float64 `yaml:"cloud_liquid_radius_micrometers"`
-	CloudIceRadiusMicrometers          float64 `yaml:"cloud_ice_radius_micrometers"`
+	// LegacyOverallBoundaryLayerMinM and LegacyOverallBoundaryLayerTopM retain
+	// strict-YAML compatibility with pre-v8 configurations. Native ICON MH is
+	// now used directly; these decoded values are deliberately ignored.
+	LegacyOverallBoundaryLayerMinM    float64 `yaml:"overall_boundary_layer_min_m"`
+	LegacyOverallBoundaryLayerTopM    float64 `yaml:"overall_boundary_layer_top_m"`
+	OverallGroundCn2Scale             float64 `yaml:"overall_ground_cn2_scale"`
+	OverallUnresolvedCloudObstruction float64 `yaml:"overall_unresolved_cloud_obstruction"`
+	OverallSurfaceWindMaxPenalty      float64 `yaml:"overall_surface_wind_max_penalty"`
+	OverallSurfaceWindStartMS         float64 `yaml:"overall_surface_wind_start_ms"`
+	OverallSurfaceWindFullMS          float64 `yaml:"overall_surface_wind_full_ms"`
+	OverallSurfaceGustStartMS         float64 `yaml:"overall_surface_gust_start_ms"`
+	OverallSurfaceGustFullMS          float64 `yaml:"overall_surface_gust_full_ms"`
+	CloudLiquidRadiusMicrometers      float64 `yaml:"cloud_liquid_radius_micrometers"`
+	CloudIceRadiusMicrometers         float64 `yaml:"cloud_ice_radius_micrometers"`
 }
 
 type RenderConfig struct {
@@ -235,7 +238,7 @@ func Defaults() Config {
 			MinFreeSpace:        ByteSize(150 << 30),
 		},
 		Algorithms: AlgorithmsConfig{
-			SeeingVersion:                      "seeing-hybrid-tke-mh-hmnsp99-v7",
+			SeeingVersion:                      "seeing-hybrid-tke-native-mh-hmnsp99-logp-v8",
 			DewVersion:                         "dew-v1",
 			ConditionsVersion:                  "conditions-v8-precip-veto-penalty-decomposition",
 			OverallSeeingWeight:                1,
@@ -249,8 +252,6 @@ func Defaults() Config {
 			OverallBadSeeingArcsec:             2.0,
 			OverallBestCoherenceTimeMS:         5.2,
 			OverallBadCoherenceTimeMS:          1.6,
-			OverallBoundaryLayerMinM:           500,
-			OverallBoundaryLayerTopM:           2000,
 			OverallGroundCn2Scale:              1,
 			OverallUnresolvedCloudObstruction:  0.45,
 			OverallSurfaceWindMaxPenalty:       0.20,
@@ -401,8 +402,6 @@ func (c *Config) applyEnvironment() error {
 		{name: "ASTRO_OVERALL_BAD_SEEING_ARCSEC", target: &c.Algorithms.OverallBadSeeingArcsec},
 		{name: "ASTRO_OVERALL_BEST_COHERENCE_TIME_MS", target: &c.Algorithms.OverallBestCoherenceTimeMS},
 		{name: "ASTRO_OVERALL_BAD_COHERENCE_TIME_MS", target: &c.Algorithms.OverallBadCoherenceTimeMS},
-		{name: "ASTRO_OVERALL_BOUNDARY_LAYER_MIN_M", target: &c.Algorithms.OverallBoundaryLayerMinM},
-		{name: "ASTRO_OVERALL_BOUNDARY_LAYER_TOP_M", target: &c.Algorithms.OverallBoundaryLayerTopM},
 		{name: "ASTRO_OVERALL_GROUND_CN2_SCALE", target: &c.Algorithms.OverallGroundCn2Scale},
 		{name: "ASTRO_OVERALL_UNRESOLVED_CLOUD_OBSTRUCTION", target: &c.Algorithms.OverallUnresolvedCloudObstruction},
 		{name: "ASTRO_OVERALL_SURFACE_WIND_MAX_PENALTY", target: &c.Algorithms.OverallSurfaceWindMaxPenalty},
@@ -668,13 +667,6 @@ func (c Config) Validate() error {
 	}
 	if c.Algorithms.OverallBadCoherenceTimeMS <= 0 || c.Algorithms.OverallBestCoherenceTimeMS <= c.Algorithms.OverallBadCoherenceTimeMS {
 		problems = append(problems, "algorithms overall coherence-time thresholds must be positive and ordered bad < best")
-	}
-	if math.IsNaN(c.Algorithms.OverallBoundaryLayerMinM) || math.IsInf(c.Algorithms.OverallBoundaryLayerMinM, 0) ||
-		math.IsNaN(c.Algorithms.OverallBoundaryLayerTopM) || math.IsInf(c.Algorithms.OverallBoundaryLayerTopM, 0) ||
-		c.Algorithms.OverallBoundaryLayerMinM < 100 ||
-		c.Algorithms.OverallBoundaryLayerTopM < c.Algorithms.OverallBoundaryLayerMinM ||
-		c.Algorithms.OverallBoundaryLayerTopM > 4000 {
-		problems = append(problems, "algorithms boundary-layer bounds must satisfy 100 <= overall_boundary_layer_min_m <= overall_boundary_layer_top_m <= 4000")
 	}
 	if c.Algorithms.OverallGroundCn2Scale < 0.05 || c.Algorithms.OverallGroundCn2Scale > 20 {
 		problems = append(problems, "algorithms.overall_ground_cn2_scale must be between 0.05 and 20")

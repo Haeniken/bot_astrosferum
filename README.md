@@ -89,7 +89,7 @@ direction is computed from interpolated native ICON-EU primitives followed by a
 complete physical recalculation; finished seeing, `tau0`, cloud transmission,
 Overall, and data quality are never interpolated. GLO-30 is rendered as an
 independent informational skyline: it never suppresses a completed atmospheric
-cell. The current production writer is production-v2/v33/v23 with dataset
+cell. The current production writer is production-v2/v34/v24 with dataset
 schema 8. See [Architecture](docs/architecture.en.md), the
 [scientific method](docs/scientific-method.en.md), and the separate
 [site repository](https://github.com/Haeniken/site-astrosferum).
@@ -98,6 +98,10 @@ schema 8. See [Architecture](docs/architecture.en.md), the
 - [Architecture in English](docs/architecture.en.md)
 - [Научная методика, формулы и воспроизводимость](docs/scientific-method.ru.md)
 - [Scientific method, formulas, and reproducibility](docs/scientific-method.en.md)
+- [Optical turbulence, clouds, and Overall](docs/scientific-method-overall.en.md)
+- [Planning ephemerides](docs/scientific-method-ephemerides.en.md)
+- [Data-source contracts](docs/scientific-method-data-sources.en.md)
+- [Directional Horizon method](docs/scientific-method-horizon.en.md)
 - [Текущий статус реализации](docs/implementation-status.ru.md)
 - [Current implementation status](docs/implementation-status.en.md)
 - [Scientific TODO](docs/TODO.en.md)
@@ -193,7 +197,7 @@ Horizon or Astrodome job.
 
 Forecast coverage is worldwide. ICON-EU covers the configured regular-grid bounding box `29.5…70.5° N, 23.5° W…62.5° E`, approximately `27.4 million km²` on a spherical Earth (land and sea, not a land-area figure). ICON Global covers the complete globe, approximately `510.1 million km²`, including both poles and the date line; it is not cropped to Russia.
 
-The audited Overall design combines native ICON `T/P/TKE/HHL` turbulence from the surface to the hourly ICON `MH` mixed-layer depth (clamped to `500…2000 m AGL`), HMNSP99 above it, and wind-weighted coherence time `tau0`. It also uses phase-resolved `TQC/TQI` cloud optics with conservative tier-aware diagnostic-`CLC` guards, possible/high fog-heuristic signals, a deliberately mild surface-wind factor, and a binary precipitation veto at the configurable deterministic detection threshold. Dew and light pollution are not penalties. Vector shear already contains wind-direction changes, so Overall does not apply a duplicate direction penalty. Physical seeing and `tau0` remain fully reported, while their combined target-agnostic utility penalty is capped at 25%: turbulence blurs fine detail, whereas cloud obstruction, a high fog-heuristic signal, or precipitation can prevent useful operation. The stacked colors allocate the exact multiplicative loss with an order-independent Shapley decomposition; they are explanations of the existing score rather than new penalties.
+The audited Overall design combines native ICON `T/P/TKE/HHL` turbulence from the surface to the positive hourly native ICON `MH` mixed-layer depth, HMNSP99 above it, and wind-weighted coherence time `tau0`. Missing/non-positive `MH` or native TKE support that does not reach that boundary is unavailable rather than replaced by a project clamp. It also uses phase-resolved `TQC/TQI` cloud optics with conservative tier-aware diagnostic-`CLC` guards, possible/high fog-heuristic signals, a deliberately mild surface-wind factor, and a binary precipitation veto at the configurable deterministic detection threshold. Dew and light pollution are not penalties. Vector shear already contains wind-direction changes, so Overall does not apply a duplicate direction penalty. Physical seeing and `tau0` remain fully reported, while their combined target-agnostic utility penalty is capped at 25%: turbulence blurs fine detail, whereas cloud obstruction, a high fog-heuristic signal, or precipitation can prevent useful operation. The stacked colors allocate the exact multiplicative loss with an order-independent Shapley decomposition; they are explanations of the existing score rather than new penalties.
 
 Alongside that generic score, an explicitly separate Johnson-V zenith reference evaluates background-limited point-source efficiency during astronomical night. ICON supplies PWV and actual model-surface pressure reconstructed from the co-located lowest native `P/T` level and `HHL` geometry; mean-sea-level `PMSL` remains a weather field and is never used by SPECTRL2. NASA GEOS-CF supplies independently initialized AOD at 550 nm and total ozone, SPECTRL2 supplies the pinned clear-air spectral approximation, and the lunar term uses hourly topocentric geometry with a declared Krisciunas-Schaefer fallback. Missing pressure inputs or missing/stale composition are fail-open: the ring is omitted, input completeness is reported, and the ICON forecast remains available. The code also exposes target-conditioned airmass/wavelength seeing and Gaussian-equivalent delivered-IQ helpers, but does not insert a target-specific quantity into an anonymous location-only Overall score. This `1…10` result remains an auditable engineering mapping, not measured seeing or a universal scientific scale; see the scientific-method and implementation-status documents for the exact formulas and validation limits.
 

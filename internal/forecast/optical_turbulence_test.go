@@ -170,12 +170,12 @@ func TestHybridOpticalTurbulenceAddsResolvedGroundLayer(t *testing.T) {
 	// Height-weighted diagnostics preserve J and seeing. JV and tau0 use the
 	// trapezoidal endpoint integral of the nonlinear |V|^(5/3) moment instead
 	// of exponentiating an already averaged speed.
-	assertRelativeClose(t, "hybrid J regression", metrics.IntegratedCn2, 6.086198914674668e-12, 1e-12)
-	assertRelativeClose(t, "hybrid JV regression", metrics.WindWeightedCn2, 1.7590583810709743e-10, 1e-12)
-	assertRelativeClose(t, "hybrid seeing regression", metrics.SeeingArcsec, 3.7160791518027287, 1e-12)
-	assertRelativeClose(t, "hybrid tau0 regression", metrics.CoherenceTimeMS, 1.1361723544313702, 1e-12)
+	assertRelativeClose(t, "hybrid J regression", metrics.IntegratedCn2, 6.08601440227847e-12, 1e-12)
+	assertRelativeClose(t, "hybrid JV regression", metrics.WindWeightedCn2, 1.7589808458672605e-10, 1e-12)
+	assertRelativeClose(t, "hybrid seeing regression", metrics.SeeingArcsec, 3.7160115562309302, 1e-12)
+	assertRelativeClose(t, "hybrid tau0 regression", metrics.CoherenceTimeMS, 1.1362024033924671, 1e-12)
 	assertRelativeClose(t, "hybrid dynamic PBL J regression", metrics.GroundLayerCn2, 5.677780786938006e-12, 1e-12)
-	if metrics.ProfileQuality != OpticalTurbulenceProfileComplete {
+	if metrics.ProfileQuality != OpticalTurbulenceProfileModelDomainComplete {
 		t.Fatalf("complete hybrid profile quality = %q", metrics.ProfileQuality)
 	}
 	if !(metrics.FracGL250 <= metrics.FracGL500 && metrics.FracGL500 <= metrics.FracGL1000) {
@@ -184,6 +184,45 @@ func TestHybridOpticalTurbulenceAddsResolvedGroundLayer(t *testing.T) {
 	free := hmnsp99MetricsAbove(pressure, 2000)
 	if !(metrics.IntegratedCn2 > free.IntegratedCn2) {
 		t.Fatalf("ground layer was not added: hybrid=%v free=%v", metrics.IntegratedCn2, free.IntegratedCn2)
+	}
+}
+
+func TestInterpolatePositiveLogPreservesHydrostaticEndpointsAndMidpoint(t *testing.T) {
+	t.Parallel()
+
+	const lower = 1000.0
+	const upper = 640.0
+	if got := interpolatePositiveLog(lower, upper, 0); got != lower {
+		t.Fatalf("lower endpoint = %.17g, want %.17g", got, lower)
+	}
+	if got := interpolatePositiveLog(lower, upper, 1); got != upper {
+		t.Fatalf("upper endpoint = %.17g, want %.17g", got, upper)
+	}
+	if got, want := interpolatePositiveLog(lower, upper, 0.5), math.Sqrt(lower*upper); math.Abs(got-want) > 1e-12*want {
+		t.Fatalf("log-pressure midpoint = %.17g, want geometric mean %.17g", got, want)
+	}
+	previous := lower
+	for step := 1; step <= 20; step++ {
+		got := interpolatePositiveLog(lower, upper, float64(step)/20)
+		if !finite(got) || got >= previous || got < upper {
+			t.Fatalf("log-pressure interpolation is not positive and monotone at step %d: %.17g after %.17g", step, got, previous)
+		}
+		previous = got
+	}
+}
+
+func TestInterpolatePositiveLogRejectsInvalidDomain(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		lower, upper, fraction float64
+	}{
+		{0, 900, 0.5}, {1000, -1, 0.5}, {1000, 900, -0.1}, {1000, 900, 1.1},
+		{math.NaN(), 900, 0.5},
+	} {
+		if got := interpolatePositiveLog(test.lower, test.upper, test.fraction); !math.IsNaN(got) {
+			t.Fatalf("invalid log interpolation (%v, %v, %v) = %v, want NaN", test.lower, test.upper, test.fraction, got)
+		}
 	}
 }
 

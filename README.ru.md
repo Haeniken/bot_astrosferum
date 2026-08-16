@@ -120,7 +120,7 @@ PostgreSQL, синхронизация моделей, «Горизонт» и �
 интерполируются только исходные поля ICON-EU, затем полностью пересчитывается физическая
 модель. GLO-30 отображается как отдельная информационная линия рельефа и не
 скрывает завершённую атмосферную ячейку. Текущий записывающий контракт —
-production-v2/v33/v23, схема 8. Подробности:
+production-v2/v34/v24, схема 8. Подробности:
 [архитектура](docs/architecture.ru.md),
 [научная методика](docs/scientific-method.ru.md) и
 [отдельный репозиторий сайта](https://github.com/Haeniken/site-astrosferum).
@@ -239,8 +239,10 @@ Docker Compose автоматически использует `docker-compose.y
 
 Оптическая турбулентность объединяется в один интеграл:
 
-- от поверхности до почасовой высоты перемешанного слоя ICON `MH`
-  (`500…2000 м AGL`) используется native `T/P/TKE/HHL`;
+- от поверхности до положительной исходной почасовой высоты перемешанного
+  слоя ICON `MH` используется native `T/P/TKE/HHL`; отсутствующий или
+  неположительный `MH` и нехватка TKE до этой границы дают недоступный
+  результат, а не заменяются проектным ограничением;
 - выше применяется HMNSP99;
 - ветер учитывается в `tau0` через `Cn²·|V|^(5/3)`, а в свободной атмосфере
   также через вертикальный векторный сдвиг;
@@ -306,6 +308,10 @@ DIMM/MASS/SCIDAR или качественные журналы наблюден
 - [KISS-архитектура](docs/architecture.ru.md)
 - [Научная методика, формулы и воспроизводимость](docs/scientific-method.ru.md)
 - [Scientific method, formulas, and reproducibility](docs/scientific-method.en.md)
+- [Оптическая турбулентность, облака и Overall](docs/scientific-method-overall.ru.md)
+- [Планировочные эфемериды](docs/scientific-method-ephemerides.ru.md)
+- [Контракты источников данных](docs/scientific-method-data-sources.ru.md)
+- [Методика направленного «Горизонта»](docs/scientific-method-horizon.ru.md)
 - [Текущий статус реализации](docs/implementation-status.ru.md)
 - [Научный TODO](docs/TODO.ru.md)
 - [Справочник конфигурации](docs/configuration.ru.md)

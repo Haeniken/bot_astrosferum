@@ -605,92 +605,6 @@ func TestDomeAstrodomePhysicalEndpointSliverUsesInteriorDerivativeCertificate(t 
 	}
 }
 
-func TestDomeAstrodomeRawPBLDecisionUsesInteriorDerivativeForEndpointSlivers(t *testing.T) {
-	t.Parallel()
-
-	grid := Coverage()
-	observer := forecast.Location{
-		Latitude: grid.MinLat + 10.5*grid.Increment, Longitude: grid.MinLon + 10.5*grid.Increment,
-		TimeZone: "UTC",
-	}
-	ray := traceDomeAstrodomePBLTestRay(t, observer, 10, 90)
-	volume := newDomeAstrodomeGridTestVolume(grid)
-	interval := domeAstrodomePBLTestInterval(t, volume, ray, 400, 1400)
-	probes, err := domeAstrodomePhysicalProbePaths(interval)
-	if err != nil {
-		t.Fatal(err)
-	}
-	metric, err := volume.domeAstrodomeMetricBoundsForInterval(ray, interval)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sampler := domeAstrodomePhysicalSampler{
-		ctx: context.Background(), volume: volume, ray: ray,
-		cellID: interval.cellID, cache: make(map[uint64]*domeAstrodomePhysicalSample),
-	}
-
-	for _, test := range []struct {
-		name  string
-		rootM float64
-	}{
-		{name: "start", rootM: probes[0] + (probes[0]-interval.startM)/2},
-		{name: "end", rootM: probes[4] - (interval.endM-probes[4])/2},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			rootPoint, pointErr := ray.PointAtPathLength(test.rootM)
-			if pointErr != nil {
-				t.Fatal(pointErr)
-			}
-			rootStencil, stencilErr := volume.HorizontalStencil(context.Background(), rootPoint.Location)
-			if stencilErr != nil {
-				t.Fatal(stencilErr)
-			}
-			rootEastFraction := rootStencil.Supports[1].Weight + rootStencil.Supports[3].Weight
-			const (
-				thresholdM = 1000.0
-				spanM      = 1000.0
-			)
-			westM := thresholdM - spanM*rootEastFraction
-			mixedLayerDepths := [4]float64{westM, westM + spanM, westM, westM + spanM}
-			field := domeAstrodomePBLDecisionField(
-				"pbl-clamp/minimum", mixedLayerDepths, thresholdM,
-			)
-			lipschitz, lipschitzErr := domeAstrodomeScalarFieldLipschitz(
-				metric, field.corners, field.roundoffOperandScale,
-			)
-			if lipschitzErr != nil {
-				t.Fatal(lipschitzErr)
-			}
-			probeValues := [5]domeAstrodomeResidualSample{}
-			for index, pathM := range probes {
-				sample, sampleErr := sampler.sample(pathM, false)
-				if sampleErr != nil {
-					t.Fatal(sampleErr)
-				}
-				probeValues[index], sampleErr = domeAstrodomeScalarFieldResidualAtSample(sample, field)
-				if sampleErr != nil {
-					t.Fatal(sampleErr)
-				}
-			}
-			if err := domeAstrodomeCertifyProbeEndpointSliversResiduals(
-				interval, probes, probeValues, lipschitz, field.roundoffOperandScale, nil,
-			); !errors.Is(err, forecast.ErrAstrodomeScienceIncompletePartition) {
-				t.Fatalf("fixture without raw-PBL endpoint derivative error = %v", err)
-			}
-
-			roots, rootsErr := domeAstrodomePBLDecisionFieldRoots(
-				ray, interval, probes, metric, &sampler, field,
-			)
-			if rootsErr != nil || len(roots) != 1 ||
-				math.Abs(roots[0].evidence.pathM-test.rootM) > domeAstrodomePhysicalRootToleranceM {
-				t.Fatalf("raw PBL %s endpoint roots = %+v, %v; want %.12g",
-					test.name, roots, rootsErr, test.rootM)
-			}
-		})
-	}
-}
-
 func TestDomeAstrodomeIsolatePathRootsFailsClosedAroundUnprovedPairedCrossing(t *testing.T) {
 	t.Parallel()
 
@@ -1515,73 +1429,6 @@ func TestDomeAstrodomePhysicalBoundarySecondDerivativeBoundCoversSampledRay(t *t
 	}
 }
 
-func TestDomeAstrodomePBLClampBranchClassification(t *testing.T) {
-	t.Parallel()
-
-	surface := [4]float64{180, 181, 179, 182}
-	tests := []struct {
-		name       string
-		mixed      [4]float64
-		wantSmooth bool
-		wantFields int
-	}{
-		{name: "lower saturated", mixed: [4]float64{300, 420, 499, 450}, wantSmooth: true, wantFields: 1},
-		{name: "production interior", mixed: [4]float64{856, 1731, 975, 1126}, wantSmooth: true, wantFields: 2},
-		{name: "upper saturated", mixed: [4]float64{2100, 2400, 2200, 2300}, wantSmooth: true, wantFields: 1},
-		{name: "lower kink", mixed: [4]float64{499, 501, 520, 530}, wantSmooth: false, wantFields: 2},
-		{name: "upper kink", mixed: [4]float64{1900, 1999, 2001, 2100}, wantSmooth: false, wantFields: 2},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			fields, smooth, err := domeAstrodomePBLFieldsForCornerRange(surface, test.mixed, 500, 2000)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if smooth != test.wantSmooth || len(fields) != test.wantFields {
-				t.Fatalf("PBL fields = %d, smooth=%t; want %d, %t", len(fields), smooth, test.wantFields, test.wantSmooth)
-			}
-		})
-	}
-}
-
-func TestDomeAstrodomePBLLocalClampBranchCertificate(t *testing.T) {
-	t.Parallel()
-
-	surface := [4]float64{180, 181, 179, 182}
-	mixed := [4]float64{400, 800, 450, 850}
-	tests := []struct {
-		name        string
-		middleDepth float64
-		halfWidth   float64
-		wantSmooth  bool
-		wantFields  int
-	}{
-		{name: "locally lower saturated", middleDepth: 450, halfWidth: 100, wantSmooth: true, wantFields: 1},
-		{name: "locally interior", middleDepth: 700, halfWidth: 100, wantSmooth: true, wantFields: 2},
-		{name: "contains lower kink", middleDepth: 500, halfWidth: 100, wantSmooth: false, wantFields: 2},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			fields, smooth, err := domeAstrodomePBLFieldsAroundSample(
-				surface, mixed, test.middleDepth, 0.02, 1000,
-				0, test.halfWidth, 500, 2000,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if smooth != test.wantSmooth || len(fields) != test.wantFields {
-				t.Fatalf("local PBL fields = %d, smooth=%t; want %d, %t", len(fields), smooth, test.wantFields, test.wantSmooth)
-			}
-		})
-	}
-}
-
 func TestDomeAstrodomeBilinearCoordinateUncertaintyCoversOneULPPerturbation(t *testing.T) {
 	t.Parallel()
 
@@ -1732,26 +1579,6 @@ func TestDomeAstrodomeBilinearCoordinateUncertaintyFailsClosedAcrossCellBoundary
 	)
 	if !errors.Is(err, forecast.ErrAstrodomeScienceIncompletePartition) {
 		t.Fatalf("cell-crossing coordinate uncertainty error = %v; want fail-closed incomplete partition", err)
-	}
-}
-
-func TestDomeAstrodomePBLLocalCoordinateUncertaintyFailsClosedAtClamp(t *testing.T) {
-	t.Parallel()
-
-	surface := [4]float64{180, 181, 179, 182}
-	mixed := [4]float64{856, 1731, 975, 1126}
-	operandScale := domeAstrodomeCornerOperandScale(mixed)
-	const coordinateUncertaintyM = 1e-5
-	fields, smooth, err := domeAstrodomePBLFieldsAroundSample(
-		surface, mixed, 500-coordinateUncertaintyM/2, 0, operandScale,
-		coordinateUncertaintyM, 0, 500, 2000,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if smooth || len(fields) != 2 {
-		t.Fatalf("coordinate-uncertain PBL clamp returned %d fields, smooth=%t; want fail-closed kink enclosure",
-			len(fields), smooth)
 	}
 }
 
