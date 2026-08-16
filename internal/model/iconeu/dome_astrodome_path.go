@@ -133,8 +133,9 @@ type domeAstrodomeShortPanelProof struct {
 }
 
 type domeAstrodomePhysicalBreakpoints struct {
-	candidates   []domeAstrodomePhysicalRootCandidate
-	certificates []forecast.AstrodomeScienceCertifiedShortInterval
+	candidates        []domeAstrodomePhysicalRootCandidate
+	certificates      []forecast.AstrodomeScienceCertifiedShortInterval
+	tropopauseRegions []forecast.AstrodomeScienceTropopauseRegion
 }
 
 // domeAstrodomeShortPanelVerifier is bound to one immutable volume/ray/hour.
@@ -420,6 +421,7 @@ func (volume *DomeVolume) BuildAstrodomeSciencePath(
 			BreakpointEvidence: breakpointEvidence, CertifiedShortIntervals: physical.certificates,
 			NativeVerticalPredicatesIsolated: true,
 			TropopausePredicatesIsolated:     true,
+			TropopauseRegions:                physical.tropopauseRegions,
 			TerrainState:                     forecast.AstrodomeScienceTerrainClear,
 		})
 	}
@@ -1065,6 +1067,7 @@ func (volume *DomeVolume) domePhysicalBreakpointsWithEvidence(
 	// 200-hPa fallback needs an additional nonlinear isobaric surface.
 	decisionBreakpoints := append([]float64{interval.startM}, decisionRoots...)
 	decisionBreakpoints = append(decisionBreakpoints, interval.endM)
+	tropopauseRegions := make([]forecast.AstrodomeScienceTropopauseRegion, 0, len(decisionBreakpoints)-1)
 	for part := 0; part+1 < len(decisionBreakpoints); part++ {
 		partStartM, partEndM := decisionBreakpoints[part], decisionBreakpoints[part+1]
 		if partEndM-partStartM <= forecast.AstrodomeScienceMinimumEventIntervalLengthM {
@@ -1083,6 +1086,16 @@ func (volume *DomeVolume) domePhysicalBreakpointsWithEvidence(
 			return nil, sampleErr
 		}
 		selection := middle.heights
+		tropopauseRegions = append(tropopauseRegions, forecast.AstrodomeScienceTropopauseRegion{
+			StartPathM: partStartM,
+			EndPathM:   partEndM,
+			Selection: forecast.AstrodomeScienceTropopauseSelection{
+				Method:          selection.TropopauseMethod,
+				BoundaryKind:    selection.TropopauseBoundaryKind,
+				LowerLevelIndex: selection.TropopauseLowerLevelIndex,
+				UpperLevelIndex: selection.TropopauseUpperLevelIndex,
+			},
+		})
 		switch selection.TropopauseBoundaryKind {
 		case forecast.AstrodomeScienceTropopauseBoundaryWMOLevel,
 			forecast.AstrodomeScienceTropopauseBoundaryNone:
@@ -1175,8 +1188,9 @@ func (volume *DomeVolume) domePhysicalBreakpointsWithEvidence(
 		return nil, err
 	}
 	return &domeAstrodomePhysicalBreakpoints{
-		candidates:   resultCandidates,
-		certificates: certificates,
+		candidates:        resultCandidates,
+		certificates:      certificates,
+		tropopauseRegions: tropopauseRegions,
 	}, nil
 }
 

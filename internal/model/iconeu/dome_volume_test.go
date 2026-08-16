@@ -299,6 +299,81 @@ func TestDomeVolumeNativeContextReconstructsPrimitivesAtF079(t *testing.T) {
 	}
 }
 
+func TestDomePreparedNativeFrameReconstructsSelectedTropopauseExactly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	loaded := writeDomeVolumePublication(t, root)
+	volume, err := newDomeVolume(root, filepath.Join(root, "tmp"), loaded, &domeVolumeTestRunner{}, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grid := Coverage()
+	location := forecast.Location{
+		Latitude: grid.MinLat + 4.25*grid.Increment, Longitude: grid.MinLon + 5.75*grid.Increment,
+	}
+	stencil, err := volume.HorizontalStencil(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	columnIDs := make(map[string]struct{}, len(stencil.Supports))
+	for _, support := range stencil.Supports {
+		columnIDs[support.ColumnID] = struct{}{}
+	}
+	footprint := &DomeAstrodomeFootprint{volume: volume, columnIDs: columnIDs}
+	validAt := loaded.BaseTime.Add(79 * time.Hour)
+	frame, err := footprint.NewAstrodomeScienceNativeFrame(validAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point := forecast.AstrodomeRayPoint{Location: location, HeightM: 5000}
+	full, err := footprint.ResolveAstrodomeScienceNativeContext(
+		context.Background(), validAt, point, stencil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heights, err := forecast.ResolveAstrodomeScienceBoundaryHeights(
+		full, forecast.DefaultAstrodomeScienceCalibration(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := forecast.AstrodomeScienceTropopauseSelection{
+		Method:          heights.TropopauseMethod,
+		BoundaryKind:    heights.TropopauseBoundaryKind,
+		LowerLevelIndex: heights.TropopauseLowerLevelIndex,
+		UpperLevelIndex: heights.TropopauseUpperLevelIndex,
+	}
+	selected, selectedHeight, method, err := frame.ResolveAstrodomeScienceSelectedNativeContext(
+		context.Background(), validAt, point, stencil, selection,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.HorizontalCellID != full.HorizontalCellID ||
+		math.Float64bits(selected.SurfaceHeightM) != math.Float64bits(full.SurfaceHeightM) ||
+		math.Float64bits(selected.MixedLayerDepthM) != math.Float64bits(full.MixedLayerDepthM) ||
+		len(selected.ThermalProfile) != 0 || method != heights.TropopauseMethod {
+		t.Fatalf("selected native context differs: selected=%+v full=%+v method=%q", selected, full, method)
+	}
+	if math.IsNaN(heights.TropopauseHeightM) {
+		if !math.IsNaN(selectedHeight) {
+			t.Fatalf("selected tropopause height = %g, want NaN", selectedHeight)
+		}
+	} else if math.Float64bits(selectedHeight) != math.Float64bits(heights.TropopauseHeightM) {
+		t.Fatalf("selected tropopause height = %.17g, want %.17g", selectedHeight, heights.TropopauseHeightM)
+	}
+
+	selection.LowerLevelIndex = domeFullLevelCount
+	selection.UpperLevelIndex = domeFullLevelCount
+	if _, _, _, err := frame.ResolveAstrodomeScienceSelectedNativeContext(
+		context.Background(), validAt, point, stencil, selection,
+	); err == nil {
+		t.Fatal("prepared native frame accepted an out-of-range selected level")
+	}
+}
+
 func TestDomeVolumeCoalescesConcurrentFourColumnExtraction(t *testing.T) {
 	root := t.TempDir()
 	runner := &domeVolumeTestRunner{delay: time.Millisecond}

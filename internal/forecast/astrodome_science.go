@@ -227,6 +227,24 @@ type AstrodomeScienceBoundaryHeights struct {
 	TropopauseUpperLevelIndex int                                    `json:"tropopause_upper_level_index"`
 }
 
+// AstrodomeScienceTropopauseSelection is the branch proved by the provider
+// path planner between consecutive roots of every raw WMO decision predicate.
+// The selected height remains location-dependent and is reconstructed from the
+// named native level(s) at each quadrature point; this is not a cached derived
+// tropopause height.
+type AstrodomeScienceTropopauseSelection struct {
+	Method          string                                 `json:"method"`
+	BoundaryKind    AstrodomeScienceTropopauseBoundaryKind `json:"boundary_kind"`
+	LowerLevelIndex int                                    `json:"lower_level_index"`
+	UpperLevelIndex int                                    `json:"upper_level_index"`
+}
+
+type AstrodomeScienceTropopauseRegion struct {
+	StartPathM float64                             `json:"start_path_m"`
+	EndPathM   float64                             `json:"end_path_m"`
+	Selection  AstrodomeScienceTropopauseSelection `json:"selection"`
+}
+
 type AstrodomeScienceTropopauseBoundaryKind string
 
 const (
@@ -266,6 +284,21 @@ type AstrodomeScienceNativeContextResolver interface {
 		point AstrodomeRayPoint,
 		stencil AstrodomeHorizontalStencil,
 	) (AstrodomeScienceNativeContext, error)
+}
+
+// AstrodomeScienceSelectedNativeContextResolver is an optional exact fast
+// path. A provider may reconstruct only HSURF/MH and the already-proved native
+// tropopause level(s), instead of rebuilding the complete thermal profile.
+// It must fail closed if the supplied selection is not valid for this immutable
+// cell/hour.
+type AstrodomeScienceSelectedNativeContextResolver interface {
+	ResolveAstrodomeScienceSelectedNativeContext(
+		ctx context.Context,
+		validAt time.Time,
+		point AstrodomeRayPoint,
+		stencil AstrodomeHorizontalStencil,
+		selection AstrodomeScienceTropopauseSelection,
+	) (AstrodomeScienceNativeContext, float64, string, error)
 }
 
 // AstrodomeScienceRootEvidence is the retained enclosure of one path event.
@@ -327,6 +360,7 @@ type AstrodomeSciencePathCell struct {
 	NativeVerticalPredicatesIsolated bool                                     `json:"native_vertical_predicates_isolated"`
 	TropopausePredicatesIsolated     bool                                     `json:"tropopause_predicates_isolated"`
 	TerrainState                     AstrodomeScienceTerrainState             `json:"terrain_state"`
+	TropopauseRegions                []AstrodomeScienceTropopauseRegion       `json:"-"`
 }
 
 // AstrodomeSciencePathAvailability is the binary D31 gate. A high weighted
@@ -702,6 +736,7 @@ type astrodomeScienceAtomicInterval struct {
 	startNumericalBoundary bool
 	endNumericalBoundary   bool
 	certifiedShort         *AstrodomeScienceCertifiedShortInterval
+	tropopauseSelection    *AstrodomeScienceTropopauseSelection
 }
 
 func astrodomeScienceMinimumIntervalLength(interval astrodomeScienceAtomicInterval) float64 {
@@ -770,8 +805,12 @@ func ComputeAstrodomeScienceNode(
 	if ray.GeometryVersion != AstrodomeGeometryVersion {
 		return AstrodomeScienceNode{}, fmt.Errorf("astrodome straight compatibility ray has an unsupported geometry version")
 	}
+	prepared, err := NewAstrodomePreparedScienceFrame(reconstructor, validAt)
+	if err != nil {
+		return AstrodomeScienceNode{}, err
+	}
 	return computeAstrodomeScienceNode(
-		ctx, reconstructor, astrodomeScienceStraightTrajectory{ray: ray}, ray.ElevationDegrees,
+		ctx, prepared, astrodomeScienceStraightTrajectory{ray: ray}, ray.ElevationDegrees,
 		ray.AzimuthDegrees, AstrodomeScienceGeometryStraight, ray.GeometryVersion, "", "", nil,
 		validAt, path, site, calibration,
 	)
@@ -790,15 +829,38 @@ func ComputeAstrodomeScienceNodeRefracted(
 	site AstrodomeScienceSiteInputs,
 	calibration AstrodomeScienceCalibration,
 ) (AstrodomeScienceNode, error) {
+	prepared, err := NewAstrodomePreparedScienceFrame(reconstructor, validAt)
+	if err != nil {
+		return AstrodomeScienceNode{}, err
+	}
+	return ComputeAstrodomeScienceNodeRefractedPrepared(ctx, prepared, ray, validAt, path, site, calibration)
+}
+
+// ComputeAstrodomeScienceNodeRefractedPrepared evaluates one node against a
+// frame shared by every direction at the same valid time. The prepared frame
+// contains source primitives only; the complete nonlinear science kernel is
+// still executed independently for this node.
+func ComputeAstrodomeScienceNodeRefractedPrepared(
+	ctx context.Context,
+	prepared *AstrodomePreparedScienceFrame,
+	ray AstrodomeRefractedRay,
+	validAt time.Time,
+	path AstrodomeSciencePath,
+	site AstrodomeScienceSiteInputs,
+	calibration AstrodomeScienceCalibration,
+) (AstrodomeScienceNode, error) {
 	if err := ray.validate(); err != nil {
 		return AstrodomeScienceNode{}, err
+	}
+	if prepared == nil || prepared.reconstructor == nil || !prepared.validAt.Equal(validAt) {
+		return AstrodomeScienceNode{}, fmt.Errorf("prepared astrodome science frame does not match the refracted node")
 	}
 	if len(path.Cells) == 0 || math.Abs(path.Cells[len(path.Cells)-1].EndPathM-ray.PathLengthM) > 1e-3 {
 		return AstrodomeScienceNode{}, fmt.Errorf("refracted science path does not close at the traced ICON-top event")
 	}
 	topDirection := ray.DirectionAtICONTopECEF
 	return computeAstrodomeScienceNode(
-		ctx, reconstructor, astrodomeScienceRefractedTrajectory{ray: ray}, ray.VisibleElevationDegrees,
+		ctx, prepared, astrodomeScienceRefractedTrajectory{ray: ray}, ray.VisibleElevationDegrees,
 		ray.VisibleAzimuthDegrees, AstrodomeScienceGeometryRefractionFull, ray.GeometryVersion,
 		ray.IntegratorVersion, ray.RefractivityVersion, &topDirection,
 		validAt, path, site, calibration,
@@ -807,7 +869,7 @@ func ComputeAstrodomeScienceNodeRefracted(
 
 func computeAstrodomeScienceNode(
 	ctx context.Context,
-	reconstructor *AstrodomePrimitiveReconstructor,
+	prepared *AstrodomePreparedScienceFrame,
 	trajectory astrodomeScienceTrajectory,
 	elevationDegrees float64,
 	azimuthDegrees *float64,
@@ -836,9 +898,10 @@ func computeAstrodomeScienceNode(
 		Tau0State:                "unavailable",
 		Attribution:              astrodomeScienceAttribution(geometryMode),
 	}
-	if reconstructor == nil {
-		return node, fmt.Errorf("astrodome primitive reconstructor is required")
+	if prepared == nil || prepared.reconstructor == nil {
+		return node, fmt.Errorf("prepared astrodome science frame is required")
 	}
+	reconstructor := prepared.reconstructor
 	node.SourceIdentity = reconstructor.identity
 	if err := ctx.Err(); err != nil {
 		return node, err
@@ -881,7 +944,7 @@ func computeAstrodomeScienceNode(
 	node.Quality = astrodomeScienceQuality(path, site.ForecastLeadHours, false, false, path.ApproximationLengthM)
 
 	evaluator := newAstrodomeScienceEvaluator(
-		reconstructor, trajectory, validAt, path.NativeContext, path.ShortIntervalVerifier, calibration,
+		prepared, trajectory, validAt, path.NativeContext, path.ShortIntervalVerifier, calibration,
 	)
 	primary, err := integrateAstrodomeSciencePath(ctx, evaluator.evaluate, intervals, calibration, 1)
 	if err != nil {
@@ -1123,11 +1186,18 @@ func prepareAstrodomeSciencePath(path AstrodomeSciencePath) ([]astrodomeScienceA
 			if certificate != nil {
 				usedCertificates[certificate.CertificateID] = struct{}{}
 			}
+			selection, selectionErr := astrodomeScienceTropopauseSelectionForInterval(
+				cell, startEvent.RepresentativePathM, endEvent.RepresentativePathM,
+			)
+			if selectionErr != nil {
+				return nil, selectionErr
+			}
 			atomic = append(atomic, astrodomeScienceAtomicInterval{
-				startM:         startEvent.RepresentativePathM,
-				endM:           endEvent.RepresentativePathM,
-				cellID:         cell.HorizontalCellID,
-				certifiedShort: certificate,
+				startM:              startEvent.RepresentativePathM,
+				endM:                endEvent.RepresentativePathM,
+				cellID:              cell.HorizontalCellID,
+				certifiedShort:      certificate,
+				tropopauseSelection: selection,
 			})
 		}
 		if len(usedCertificates) != len(cell.CertifiedShortIntervals) {
@@ -1137,6 +1207,67 @@ func prepareAstrodomeSciencePath(path AstrodomeSciencePath) ([]astrodomeScienceA
 		previousEnd = cell.EndPathM
 	}
 	return atomic, nil
+}
+
+func astrodomeScienceTropopauseSelectionForInterval(
+	cell AstrodomeSciencePathCell,
+	startM, endM float64,
+) (*AstrodomeScienceTropopauseSelection, error) {
+	if len(cell.TropopauseRegions) == 0 {
+		return nil, nil
+	}
+	if math.Float64bits(cell.TropopauseRegions[0].StartPathM) != math.Float64bits(cell.StartPathM) ||
+		math.Float64bits(cell.TropopauseRegions[len(cell.TropopauseRegions)-1].EndPathM) != math.Float64bits(cell.EndPathM) {
+		return nil, fmt.Errorf("%w: cell %q tropopause regions do not cover the complete cell",
+			ErrAstrodomeScienceIncompletePartition, cell.HorizontalCellID)
+	}
+	middleM := startM + (endM-startM)/2
+	for index, region := range cell.TropopauseRegions {
+		if !finite(region.StartPathM) || !finite(region.EndPathM) || region.EndPathM <= region.StartPathM ||
+			(index > 0 && math.Float64bits(region.StartPathM) !=
+				math.Float64bits(cell.TropopauseRegions[index-1].EndPathM)) {
+			return nil, fmt.Errorf("%w: cell %q tropopause regions are not finite and contiguous",
+				ErrAstrodomeScienceIncompletePartition, cell.HorizontalCellID)
+		}
+		if err := validateAstrodomeScienceTropopauseSelection(region.Selection); err != nil {
+			return nil, fmt.Errorf("cell %q tropopause region %d: %w", cell.HorizontalCellID, index, err)
+		}
+		if middleM <= region.StartPathM || middleM >= region.EndPathM {
+			continue
+		}
+		if startM < region.StartPathM || endM > region.EndPathM {
+			return nil, fmt.Errorf("%w: atomic interval crosses a proved tropopause decision root in cell %q",
+				ErrAstrodomeScienceIncompletePartition, cell.HorizontalCellID)
+		}
+		selection := region.Selection
+		return &selection, nil
+	}
+	return nil, fmt.Errorf("%w: atomic interval has no proved tropopause branch in cell %q",
+		ErrAstrodomeScienceIncompletePartition, cell.HorizontalCellID)
+}
+
+func validateAstrodomeScienceTropopauseSelection(selection AstrodomeScienceTropopauseSelection) error {
+	if strings.TrimSpace(selection.Method) == "" {
+		return fmt.Errorf("%w: tropopause selection has no method", ErrAstrodomeScienceIncompletePartition)
+	}
+	switch selection.BoundaryKind {
+	case AstrodomeScienceTropopauseBoundaryWMOLevel:
+		if selection.LowerLevelIndex < 0 || selection.UpperLevelIndex != selection.LowerLevelIndex {
+			return fmt.Errorf("%w: WMO tropopause selection has invalid native levels", ErrAstrodomeScienceIncompletePartition)
+		}
+	case AstrodomeScienceTropopauseBoundaryPressureFallback:
+		if selection.LowerLevelIndex < 0 || selection.UpperLevelIndex != selection.LowerLevelIndex+1 {
+			return fmt.Errorf("%w: pressure-fallback tropopause selection has invalid native levels", ErrAstrodomeScienceIncompletePartition)
+		}
+	case AstrodomeScienceTropopauseBoundaryNone:
+		if selection.LowerLevelIndex != -1 || selection.UpperLevelIndex != -1 {
+			return fmt.Errorf("%w: empty tropopause selection unexpectedly names native levels", ErrAstrodomeScienceIncompletePartition)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported selected tropopause branch %q",
+			ErrAstrodomeScienceIncompletePartition, selection.BoundaryKind)
+	}
+	return nil
 }
 
 type astrodomeScienceEvidencePairKey struct {
@@ -1378,6 +1509,82 @@ func astrodomeScienceTropopauseBoundary(
 		AstrodomeScienceTropopauseBoundaryNone, -1, -1, nil
 }
 
+// AstrodomeScienceTropopauseFromSelection reconstructs only the native
+// level(s) already proved by the path planner. It deliberately reuses the
+// same height and log-pressure interpolation operations as the full scan;
+// the optimization removes the repeated branch search, not any scientific
+// predicate or boundary calculation.
+func AstrodomeScienceTropopauseFromSelection(
+	profile []AstrodomeScienceThermalPrimitive,
+	selection AstrodomeScienceTropopauseSelection,
+) (float64, string, error) {
+	if err := validateAstrodomeScienceTropopauseSelection(selection); err != nil {
+		return 0, "", err
+	}
+	switch selection.BoundaryKind {
+	case AstrodomeScienceTropopauseBoundaryWMOLevel:
+		if selection.LowerLevelIndex >= len(profile) {
+			return 0, "", fmt.Errorf("%w: selected WMO level is unavailable",
+				ErrAstrodomeScienceIncompletePartition)
+		}
+		return AstrodomeScienceTropopauseFromSelectedLevels(
+			profile[selection.LowerLevelIndex], AstrodomeScienceThermalPrimitive{}, selection,
+		)
+	case AstrodomeScienceTropopauseBoundaryPressureFallback:
+		if selection.UpperLevelIndex >= len(profile) {
+			return 0, "", fmt.Errorf("%w: selected pressure-fallback levels are unavailable",
+				ErrAstrodomeScienceIncompletePartition)
+		}
+		return AstrodomeScienceTropopauseFromSelectedLevels(
+			profile[selection.LowerLevelIndex], profile[selection.UpperLevelIndex], selection,
+		)
+	case AstrodomeScienceTropopauseBoundaryNone:
+		return AstrodomeScienceTropopauseFromSelectedLevels(
+			AstrodomeScienceThermalPrimitive{}, AstrodomeScienceThermalPrimitive{}, selection,
+		)
+	default:
+		return 0, "", fmt.Errorf("%w: unsupported selected tropopause branch %q",
+			ErrAstrodomeScienceIncompletePartition, selection.BoundaryKind)
+	}
+}
+
+// AstrodomeScienceTropopauseFromSelectedLevels applies the canonical selected
+// branch to the one or two already reconstructed native levels. It avoids an
+// artificial sparse profile allocation in the per-hour native cache while
+// retaining the exact height/log-pressure operations used by the full-profile
+// compatibility path.
+func AstrodomeScienceTropopauseFromSelectedLevels(
+	lower, upper AstrodomeScienceThermalPrimitive,
+	selection AstrodomeScienceTropopauseSelection,
+) (float64, string, error) {
+	if err := validateAstrodomeScienceTropopauseSelection(selection); err != nil {
+		return 0, "", err
+	}
+	switch selection.BoundaryKind {
+	case AstrodomeScienceTropopauseBoundaryWMOLevel:
+		if !finite(lower.HeightM) || !finite(lower.PressurePa) || lower.PressurePa <= 0 ||
+			!validProfileTemperature(lower.TemperatureK) {
+			return 0, "", fmt.Errorf("%w: selected WMO level is invalid",
+				ErrAstrodomeScienceIncompletePartition)
+		}
+		return lower.HeightM, selection.Method, nil
+	case AstrodomeScienceTropopauseBoundaryPressureFallback:
+		height, lowerLevel := astrodomeSciencePressureBoundary(
+			[]AstrodomeScienceThermalPrimitive{lower, upper}, 20000,
+		)
+		if !finite(height) || lowerLevel != 0 {
+			return 0, "", fmt.Errorf("%w: selected pressure-fallback levels no longer bracket 200 hPa",
+				ErrAstrodomeScienceIncompletePartition)
+		}
+		return height, selection.Method, nil
+	case AstrodomeScienceTropopauseBoundaryNone:
+		return math.NaN(), selection.Method, nil
+	default:
+		return 0, "", fmt.Errorf("%w: unsupported selected tropopause branch %q",
+			ErrAstrodomeScienceIncompletePartition, selection.BoundaryKind)
+	}
+}
+
 func astrodomeSciencePressureBoundary(
 	profile []AstrodomeScienceThermalPrimitive,
 	targetPressurePa float64,
@@ -1432,14 +1639,14 @@ func astrodomeScienceTier(heightAGLM float64) AstrodomeScienceCloudTier {
 }
 
 type astrodomeScienceEvaluator struct {
-	reconstructor     *AstrodomePrimitiveReconstructor
+	prepared          *AstrodomePreparedScienceFrame
 	trajectory        astrodomeScienceTrajectory
 	validAt           time.Time
 	nativeContext     AstrodomeScienceNativeContextResolver
 	shortVerifier     AstrodomeScienceShortIntervalVerifier
 	calibration       AstrodomeScienceCalibration
 	cache             map[uint64]AstrodomeReconstructedAtmosphere
-	nativeCache       map[uint64]AstrodomeScienceNativeContext
+	nativeCache       map[astrodomeScienceNativeCacheKey]astrodomeScienceNativeEvaluation
 	cloudEnvelopes    map[astrodomeScienceCloudEnvelopeKey]astrodomeScienceCloudFractionEnvelope
 	tropopauseMethods map[string]struct{}
 	evaluations       int
@@ -1454,13 +1661,43 @@ type astrodomeScienceEvaluation struct {
 	regime                         string
 }
 
+type astrodomeScienceNativeEvaluation struct {
+	context           AstrodomeScienceNativeContext
+	tropopauseHeightM float64
+	tropopauseMethod  string
+}
+
+type astrodomeScienceNativeCacheKey struct {
+	pathBits        uint64
+	selectionMethod string
+	selectionKind   AstrodomeScienceTropopauseBoundaryKind
+	lowerLevelIndex int
+	upperLevelIndex int
+}
+
+func astrodomeScienceNativeKey(
+	pathBits uint64,
+	selection *AstrodomeScienceTropopauseSelection,
+) astrodomeScienceNativeCacheKey {
+	key := astrodomeScienceNativeCacheKey{
+		pathBits: pathBits, lowerLevelIndex: -1, upperLevelIndex: -1,
+	}
+	if selection != nil {
+		key.selectionMethod = selection.Method
+		key.selectionKind = selection.BoundaryKind
+		key.lowerLevelIndex = selection.LowerLevelIndex
+		key.upperLevelIndex = selection.UpperLevelIndex
+	}
+	return key
+}
+
 type astrodomeScienceCloudEnvelopeKey struct {
 	blockKey        astrodomeScienceCloudBlockKey
 	verticalSupport astrodomeCloudFractionVerticalSupport
 }
 
 func newAstrodomeScienceEvaluator(
-	reconstructor *AstrodomePrimitiveReconstructor,
+	prepared *AstrodomePreparedScienceFrame,
 	trajectory astrodomeScienceTrajectory,
 	validAt time.Time,
 	nativeContext AstrodomeScienceNativeContextResolver,
@@ -1468,10 +1705,10 @@ func newAstrodomeScienceEvaluator(
 	calibration AstrodomeScienceCalibration,
 ) *astrodomeScienceEvaluator {
 	return &astrodomeScienceEvaluator{
-		reconstructor: reconstructor, trajectory: trajectory, validAt: validAt, nativeContext: nativeContext,
+		prepared: prepared, trajectory: trajectory, validAt: validAt, nativeContext: nativeContext,
 		shortVerifier: shortVerifier,
 		calibration:   calibration, cache: make(map[uint64]AstrodomeReconstructedAtmosphere),
-		nativeCache:       make(map[uint64]AstrodomeScienceNativeContext),
+		nativeCache:       make(map[astrodomeScienceNativeCacheKey]astrodomeScienceNativeEvaluation),
 		cloudEnvelopes:    make(map[astrodomeScienceCloudEnvelopeKey]astrodomeScienceCloudFractionEnvelope),
 		tropopauseMethods: make(map[string]struct{}),
 	}
@@ -1501,28 +1738,53 @@ func (evaluator *astrodomeScienceEvaluator) evaluate(ctx context.Context, pathM 
 	}
 	state, ok := evaluator.cache[key]
 	if !ok {
-		state, err = evaluator.reconstructor.Reconstruct(ctx, AstrodomeReconstructionQuery{ValidAt: evaluator.validAt, Location: point.Location, HeightM: point.HeightM})
+		state, err = evaluator.prepared.Reconstruct(ctx, AstrodomeReconstructionQuery{ValidAt: evaluator.validAt, Location: point.Location, HeightM: point.HeightM})
 		if err != nil {
 			return astrodomeScienceEvaluation{}, fmt.Errorf("reconstruct astrodome primitive at %.3f m LOS: %w", pathM, err)
 		}
 		evaluator.cache[key] = state
 		evaluator.evaluations++
 	}
-	native, ok := evaluator.nativeCache[key]
-	if !ok {
-		native, err = evaluator.nativeContext.ResolveAstrodomeScienceNativeContext(ctx, evaluator.validAt, point, state.HorizontalStencil)
-		if err != nil {
-			return astrodomeScienceEvaluation{}, fmt.Errorf("resolve astrodome native context at %.3f m LOS: %w", pathM, err)
+	nativeKey := astrodomeScienceNativeKey(key, interval.tropopauseSelection)
+	nativeEvaluation, ok := evaluator.nativeCache[nativeKey]
+	native := nativeEvaluation.context
+	var tropopauseHeightM float64
+	var tropopauseMethod string
+	if ok {
+		tropopauseHeightM = nativeEvaluation.tropopauseHeightM
+		tropopauseMethod = nativeEvaluation.tropopauseMethod
+	} else {
+		selectedResolver, hasSelectedResolver := evaluator.nativeContext.(AstrodomeScienceSelectedNativeContextResolver)
+		if interval.tropopauseSelection != nil && hasSelectedResolver {
+			native, tropopauseHeightM, tropopauseMethod, err = selectedResolver.ResolveAstrodomeScienceSelectedNativeContext(
+				ctx, evaluator.validAt, point, state.HorizontalStencil, *interval.tropopauseSelection,
+			)
+			if err != nil {
+				return astrodomeScienceEvaluation{}, fmt.Errorf("resolve selected astrodome native context at %.3f m LOS: %w", pathM, err)
+			}
+		} else {
+			native, err = evaluator.nativeContext.ResolveAstrodomeScienceNativeContext(ctx, evaluator.validAt, point, state.HorizontalStencil)
+			if err != nil {
+				return astrodomeScienceEvaluation{}, fmt.Errorf("resolve astrodome native context at %.3f m LOS: %w", pathM, err)
+			}
+			if interval.tropopauseSelection != nil {
+				tropopauseHeightM, tropopauseMethod, err = AstrodomeScienceTropopauseFromSelection(
+					native.ThermalProfile, *interval.tropopauseSelection,
+				)
+			} else {
+				tropopauseHeightM, tropopauseMethod, err = astrodomeScienceTropopause(native.ThermalProfile)
+			}
+			if err != nil {
+				return astrodomeScienceEvaluation{}, fmt.Errorf("diagnose astrodome thermal tropopause at %.3f m LOS: %w", pathM, err)
+			}
 		}
-		evaluator.nativeCache[key] = native
+		evaluator.nativeCache[nativeKey] = astrodomeScienceNativeEvaluation{
+			context: native, tropopauseHeightM: tropopauseHeightM, tropopauseMethod: tropopauseMethod,
+		}
 	}
 	if native.HorizontalCellID != interval.cellID || !finite(native.SurfaceHeightM) ||
 		!finite(native.MixedLayerDepthM) || native.MixedLayerDepthM <= 0 {
 		return astrodomeScienceEvaluation{}, fmt.Errorf("%w: native context changed outside declared cell %q", ErrAstrodomeScienceIncompletePartition, interval.cellID)
-	}
-	tropopauseHeightM, tropopauseMethod, err := astrodomeScienceTropopause(native.ThermalProfile)
-	if err != nil {
-		return astrodomeScienceEvaluation{}, fmt.Errorf("diagnose astrodome thermal tropopause at %.3f m LOS: %w", pathM, err)
 	}
 	evaluator.tropopauseMethods[tropopauseMethod] = struct{}{}
 	values, regime, err := astrodomeScienceIntegrand(state, tangent, native, tropopauseHeightM, evaluator.calibration)
@@ -1547,8 +1809,8 @@ func (evaluator *astrodomeScienceEvaluator) evaluate(ctx context.Context, pathM 
 		)
 	}
 	if !ok {
-		envelope, err = evaluator.reconstructor.certifiedCloudFractionUpperEnvelope(
-			ctx, evaluator.validAt, state.HorizontalStencil, verticalSupport,
+		envelope, err = evaluator.prepared.certifiedCloudFractionUpperEnvelope(
+			ctx, state.HorizontalStencil, verticalSupport,
 		)
 		if err != nil {
 			return astrodomeScienceEvaluation{}, fmt.Errorf(

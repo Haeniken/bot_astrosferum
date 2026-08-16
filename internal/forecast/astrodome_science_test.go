@@ -1648,6 +1648,65 @@ func TestAstrodomeScienceTropopauseIdentifiesSelectedNativeLevel(t *testing.T) {
 	}
 }
 
+func TestAstrodomeScienceNativeCacheKeyIncludesProvedTropopauseBranch(t *testing.T) {
+	t.Parallel()
+	left := AstrodomeScienceTropopauseSelection{
+		Method: "wmo-lapse-rate", BoundaryKind: AstrodomeScienceTropopauseBoundaryWMOLevel,
+		LowerLevelIndex: 17, UpperLevelIndex: 17,
+	}
+	right := AstrodomeScienceTropopauseSelection{
+		Method: "pressure-fallback-200hpa", BoundaryKind: AstrodomeScienceTropopauseBoundaryPressureFallback,
+		LowerLevelIndex: 21, UpperLevelIndex: 22,
+	}
+	pathBits := math.Float64bits(1234.5)
+	if astrodomeScienceNativeKey(pathBits, &left) == astrodomeScienceNativeKey(pathBits, &right) {
+		t.Fatal("the same path coordinate reused native context across different proved tropopause branches")
+	}
+	if astrodomeScienceNativeKey(pathBits, nil) == astrodomeScienceNativeKey(pathBits, &left) {
+		t.Fatal("legacy full-profile context collided with a selected tropopause branch")
+	}
+}
+
+func TestAstrodomeScienceSelectedTropopauseMatchesFullDiagnosisExactly(t *testing.T) {
+	t.Parallel()
+	profiles := [][]AstrodomeScienceThermalPrimitive{
+		{
+			{HeightM: 5000, PressurePa: 55_000, TemperatureK: 270},
+			{HeightM: 6000, PressurePa: 45_000, TemperatureK: 269},
+			{HeightM: 7500, PressurePa: 35_000, TemperatureK: 268},
+		},
+		{
+			{HeightM: 10_000, PressurePa: 30_000, TemperatureK: 300},
+			{HeightM: 14_000, PressurePa: 10_000, TemperatureK: 260},
+		},
+		nil,
+	}
+	for index, profile := range profiles {
+		wantHeight, wantMethod, kind, lower, upper, err := astrodomeScienceTropopauseBoundary(profile)
+		if err != nil {
+			t.Fatalf("full diagnosis %d: %v", index, err)
+		}
+		selection := AstrodomeScienceTropopauseSelection{
+			Method: wantMethod, BoundaryKind: kind, LowerLevelIndex: lower, UpperLevelIndex: upper,
+		}
+		gotHeight, gotMethod, err := AstrodomeScienceTropopauseFromSelection(profile, selection)
+		if err != nil {
+			t.Fatalf("selected diagnosis %d: %v", index, err)
+		}
+		if gotMethod != wantMethod {
+			t.Fatalf("selected diagnosis %d method = %q; want %q", index, gotMethod, wantMethod)
+		}
+		if math.IsNaN(wantHeight) {
+			if !math.IsNaN(gotHeight) {
+				t.Fatalf("selected diagnosis %d height = %g; want NaN", index, gotHeight)
+			}
+		} else if math.Float64bits(gotHeight) != math.Float64bits(wantHeight) {
+			t.Fatalf("selected diagnosis %d height bits = %x; want %x",
+				index, math.Float64bits(gotHeight), math.Float64bits(wantHeight))
+		}
+	}
+}
+
 func TestThermalTropopauseRequiresEveryMeanLapseWithinTwoKilometres(t *testing.T) {
 	t.Parallel()
 
