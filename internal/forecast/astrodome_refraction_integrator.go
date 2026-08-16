@@ -17,7 +17,6 @@ var astrodomeDOPRIA = [7][7]float64{
 	{35.0 / 384.0, 0, 500.0 / 1113.0, 125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0},
 }
 
-var astrodomeDOPRIB5 = [7]float64{35.0 / 384.0, 0, 500.0 / 1113.0, 125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0, 0}
 var astrodomeDOPRIB4 = [7]float64{5179.0 / 57600.0, 0, 7571.0 / 16695.0, 393.0 / 640.0, -92097.0 / 339200.0, 187.0 / 2100.0, 1.0 / 40.0}
 
 var astrodomeDOPRIC = [7]float64{0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1, 1}
@@ -43,6 +42,12 @@ type astrodomeRefractionStep struct {
 	errorRatio       float64
 	tangentNormError float64
 	partitionCrossed bool
+}
+
+type astrodomeRefractionPreparedStart struct {
+	state      astrodomeRefractionState
+	derivative astrodomeRefractionState
+	sample     AstrodomeRefractionFieldSample
 }
 
 func astrodomeIntegrateRefractionToTop(
@@ -90,6 +95,13 @@ func astrodomeIntegrateRefraction(
 	if err != nil {
 		return pass, err
 	}
+	startDerivative, err := astrodomeRefractionRHSFromSample(state, startSample)
+	if err != nil {
+		return pass, err
+	}
+	preparedStart := astrodomeRefractionPreparedStart{
+		state: state, derivative: startDerivative, sample: startSample,
+	}
 	pass.refractivityVersion = startSample.RefractivityVersion
 	if stopAtTop {
 		if startSample.SignedSurfaceDistanceM < -eventPathToleranceM {
@@ -120,7 +132,9 @@ func astrodomeIntegrateRefraction(
 			return pass, fmt.Errorf("%w: ray exceeded maximum path length", ErrAstrodomeRefractionNonConvergence)
 		}
 		stepM = math.Min(stepM, remaining)
-		step, stepErr := astrodomeDOPRIStep(ctx, field, state, pathLengthM, stepM, calibration, toleranceScale, &pass)
+		step, stepErr := astrodomeDOPRIStep(
+			ctx, field, state, pathLengthM, stepM, calibration, toleranceScale, &pass, preparedStart,
+		)
 		if stepErr != nil {
 			return pass, stepErr
 		}
@@ -204,6 +218,13 @@ func astrodomeIntegrateRefraction(
 		pathLengthM += stepM
 		state = step.candidate
 		startSample = step.endSample
+		startDerivative, err = astrodomeRefractionRHSFromSample(state, startSample)
+		if err != nil {
+			return pass, err
+		}
+		preparedStart = astrodomeRefractionPreparedStart{
+			state: state, derivative: startDerivative, sample: startSample,
+		}
 		stepM = math.Min(calibration.MaximumStepM, math.Max(calibration.MinimumStepM,
 			stepM*astrodomeRefractionStepFactor(step.errorRatio, true)))
 	}
@@ -251,8 +272,13 @@ func astrodomeDOPRIStep(
 	calibration AstrodomeRefractionCalibration,
 	toleranceScale float64,
 	pass *astrodomeRefractionPass,
+	preparedStarts ...astrodomeRefractionPreparedStart,
 ) (astrodomeRefractionStep, error) {
 	result := astrodomeRefractionStep{}
+	var fifth astrodomeRefractionState
+	if len(preparedStarts) > 1 {
+		return result, fmt.Errorf("Dormand--Prince step accepts at most one prepared start sample")
+	}
 	for stage := range result.segment.stages {
 		stageState := initial
 		if stage > 0 {
@@ -264,21 +290,45 @@ func astrodomeDOPRIStep(
 				stageState[component] += stepM * increment
 			}
 		}
-		derivative, sample, err := astrodomeRefractionRHS(ctx, field, stageState, pass)
+		var derivative astrodomeRefractionState
+		var sample AstrodomeRefractionFieldSample
+		var err error
+		if stage == 0 && len(preparedStarts) == 1 {
+			// Dormand--Prince is FSAL. The preceding accepted step's seventh
+			// stage and the next step's first stage address the same position. The
+			// accepted state is normalized by the project contract, so its RHS is
+			// evaluated once after acceptance and retained together with that exact
+			// bit pattern. A rejected step keeps the identical initial state.
+			prepared := preparedStarts[0]
+			if !astrodomeRefractionStateEqualBits(stageState, prepared.state) {
+				return result, fmt.Errorf("prepared Dormand--Prince start state changed")
+			}
+			derivative = prepared.derivative
+			sample = prepared.sample
+		} else {
+			derivative, sample, err = astrodomeRefractionRHS(ctx, field, stageState, pass)
+		}
 		if err != nil {
 			return result, err
 		}
 		result.segment.stages[stage] = derivative
 		result.stageSamples[stage] = sample
+		if stage == len(result.segment.stages)-1 {
+			// The seventh DOPRI stage uses the fifth-order weights. Retaining
+			// this exact state is the canonical FSAL construction: the accepted
+			// endpoint and the next step's field sample have identical position
+			// bits instead of two algebraically equal expressions evaluated in
+			// different floating-point orders.
+			fifth = stageState
+		}
 		if stage > 0 && sample.PartitionID != result.stageSamples[0].PartitionID {
 			result.partitionCrossed = true
 		}
 	}
 
-	fifth, fourth := initial, initial
-	for component := range fifth {
+	fourth := initial
+	for component := range fourth {
 		for stage := range result.segment.stages {
-			fifth[component] += stepM * astrodomeDOPRIB5[stage] * result.segment.stages[stage][component]
 			fourth[component] += stepM * astrodomeDOPRIB4[stage] * result.segment.stages[stage][component]
 		}
 	}
@@ -304,6 +354,15 @@ func astrodomeDOPRIStep(
 	return result, nil
 }
 
+func astrodomeRefractionStateEqualBits(left, right astrodomeRefractionState) bool {
+	for index := range left {
+		if math.Float64bits(left[index]) != math.Float64bits(right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
 func astrodomeRefractionRHS(
 	ctx context.Context,
 	field AstrodomeRefractionField,
@@ -311,23 +370,31 @@ func astrodomeRefractionRHS(
 	pass *astrodomeRefractionPass,
 ) (astrodomeRefractionState, AstrodomeRefractionFieldSample, error) {
 	position := astrodomeStatePosition(state)
-	tangent := astrodomeStateTangent(state)
-	tangentNorm := tangent.Norm()
-	if !finite(tangentNorm) || tangentNorm <= 0 {
-		return astrodomeRefractionState{}, AstrodomeRefractionFieldSample{}, fmt.Errorf("refraction tangent is invalid")
-	}
-	tangent = tangent.scale(1 / tangentNorm)
 	sample, err := astrodomeEvaluateRefractionField(ctx, field, position, pass)
 	if err != nil {
 		return astrodomeRefractionState{}, AstrodomeRefractionFieldSample{}, err
 	}
+	derivative, err := astrodomeRefractionRHSFromSample(state, sample)
+	return derivative, sample, err
+}
+
+func astrodomeRefractionRHSFromSample(
+	state astrodomeRefractionState,
+	sample AstrodomeRefractionFieldSample,
+) (astrodomeRefractionState, error) {
+	tangent := astrodomeStateTangent(state)
+	tangentNorm := tangent.Norm()
+	if !finite(tangentNorm) || tangentNorm <= 0 {
+		return astrodomeRefractionState{}, fmt.Errorf("refraction tangent is invalid")
+	}
+	tangent = tangent.scale(1 / tangentNorm)
 	parallel := sample.GradientECEF.dot(tangent)
 	acceleration := sample.GradientECEF.subtract(tangent.scale(parallel)).scale(1 / sample.RefractiveIndex)
 	return astrodomeRefractionState{
 		tangent.X, tangent.Y, tangent.Z,
 		acceleration.X, acceleration.Y, acceleration.Z,
 		sample.RefractiveIndex,
-	}, sample, nil
+	}, nil
 }
 
 func astrodomeEvaluateRefractionField(
