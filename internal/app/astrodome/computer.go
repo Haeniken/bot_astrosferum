@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bot_astrosferum/internal/app/directional"
@@ -206,42 +207,18 @@ func (computer *Computer) ComputeAstrodomeDataset(
 	}
 	scienceCalibration := computer.scienceCalibration
 	refractivityCalibration := forecast.DefaultAstrodomeRefractivityCalibration()
-	frames := make([]directional.AstrodomeDatasetFrameInput, len(request.ValidTimes))
 	scienceStartedAt := time.Now()
-	for frameIndex, validAt := range request.ValidTimes {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		site, siteErr := footprint.AstrodomeScienceSiteAt(ctx, validAt, request.RequestedLocation)
-		if siteErr != nil {
-			return result, siteErr
-		}
-		field, fieldErr := forecast.NewAstrodomeReconstructedRefractivityField(
-			reconstructor, validAt, refractivityCalibration,
-		)
-		if fieldErr != nil {
-			return result, fieldErr
-		}
-		nodes := make([]forecast.AstrodomeScienceNode, len(nodeDefinitions))
-		if nodeErr := computer.computeFrameNodes(ctx, footprint, reconstructor, field, request.RequestedLocation,
-			observerHeightM, validAt, request.SourceIdentity, nodeDefinitions, nodes, site,
-			refractionCalibration, scienceCalibration); nodeErr != nil {
-			return result, nodeErr
-		}
-		frames[frameIndex] = directional.AstrodomeDatasetFrameInput{
-			ValidAt: validAt, Surface: site, SolarAltitudeDeg: series.SunAltitudeDegrees(validAt), Nodes: nodes,
-		}
-		completedFrames := frameIndex + 1
-		if completedFrames == 1 || completedFrames%6 == 0 || completedFrames == len(request.ValidTimes) {
-			totalElapsed := time.Since(calculationStartedAt)
-			scienceElapsed := time.Since(scienceStartedAt)
-			remaining := scienceElapsed * time.Duration(len(request.ValidTimes)-completedFrames) / time.Duration(completedFrames)
-			computer.logf(
-				"Astrodome calculation progress: run=%s completed_frames=%d total_frames=%d total_elapsed=%s science_elapsed=%s estimated_remaining=%s",
-				request.SourceIdentity.RunID, completedFrames, len(request.ValidTimes),
-				totalElapsed.Round(time.Second), scienceElapsed.Round(time.Second), remaining.Round(time.Second),
-			)
-		}
+	frames, err := computer.computeFrames(ctx, astrodomeFrameCalculation{
+		footprint: footprint, reconstructor: reconstructor,
+		observer: request.RequestedLocation, observerHeightM: observerHeightM,
+		identity: request.SourceIdentity, validTimes: request.ValidTimes,
+		definitions: nodeDefinitions, series: series,
+		refractionCalibration: refractionCalibration, refractivityCalibration: refractivityCalibration,
+		scienceCalibration: scienceCalibration, calculationStartedAt: calculationStartedAt,
+		scienceStartedAt: scienceStartedAt,
+	})
+	if err != nil {
+		return result, err
 	}
 	height := surfaceHeightM
 	generatedAt := computer.now().UTC()
@@ -279,94 +256,210 @@ func astrodomeDatasetLocations(
 	return requested, model
 }
 
-func (computer *Computer) computeFrameNodes(
+const astrodomePreparedFrameWindow = 2
+
+type astrodomeFrameCalculation struct {
+	footprint               *iconeu.DomeAstrodomeFootprint
+	reconstructor           *forecast.AstrodomePrimitiveReconstructor
+	observer                forecast.Location
+	observerHeightM         float64
+	identity                forecast.AstrodomePrimitiveVolumeIdentity
+	validTimes              []time.Time
+	definitions             []forecast.AstrodomeGridNode
+	series                  astronomy.Series
+	refractionCalibration   forecast.AstrodomeRefractionCalibration
+	refractivityCalibration forecast.AstrodomeRefractivityCalibration
+	scienceCalibration      forecast.AstrodomeScienceCalibration
+	calculationStartedAt    time.Time
+	scienceStartedAt        time.Time
+}
+
+type astrodomeFrameWork struct {
+	validAt      time.Time
+	site         forecast.AstrodomeScienceSiteInputs
+	field        forecast.AstrodomeRefractionField
+	scienceFrame *forecast.AstrodomePreparedScienceFrame
+	nativeFrame  *iconeu.DomeAstrodomeScienceNativeFrame
+	nodes        []forecast.AstrodomeScienceNode
+	remaining    atomic.Int32
+	done         chan struct{}
+	failureMu    sync.Mutex
+	failedNodes  int
+	firstErr     error
+}
+
+type astrodomeNodeTask struct {
+	frame *astrodomeFrameWork
+	index int
+}
+
+func (computer *Computer) computeFrames(
 	ctx context.Context,
-	footprint *iconeu.DomeAstrodomeFootprint,
-	reconstructor *forecast.AstrodomePrimitiveReconstructor,
-	field forecast.AstrodomeRefractionField,
-	observer forecast.Location,
-	observerHeightM float64,
-	validAt time.Time,
-	identity forecast.AstrodomePrimitiveVolumeIdentity,
-	definitions []forecast.AstrodomeGridNode,
-	destination []forecast.AstrodomeScienceNode,
-	site forecast.AstrodomeScienceSiteInputs,
-	refractionCalibration forecast.AstrodomeRefractionCalibration,
-	scienceCalibration forecast.AstrodomeScienceCalibration,
-) error {
-	type task struct{ index int }
-	work := make(chan task)
+	calculation astrodomeFrameCalculation,
+) ([]directional.AstrodomeDatasetFrameInput, error) {
+	if len(calculation.validTimes) == 0 || len(calculation.definitions) == 0 {
+		return nil, errors.New("astrodome frame calculation is empty")
+	}
 	workerContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var wait sync.WaitGroup
-	var firstErr error
-	var failedNodes int
-	var failureMu sync.Mutex
-	workerCount := min(computer.nodeWorkers, len(definitions))
+	tasks := make(chan astrodomeNodeTask, astrodomePreparedFrameWindow*len(calculation.definitions))
+	workerCount := min(computer.nodeWorkers, len(calculation.definitions))
+	var workers sync.WaitGroup
 	for range workerCount {
-		wait.Add(1)
+		workers.Add(1)
 		go func() {
-			defer wait.Done()
-			for item := range work {
-				definition := definitions[item.index]
-				initial, err := forecast.NewAstrodomeRay(observer, observerHeightM,
-					definition.ElevationDegrees, definition.AzimuthDegrees)
-				if err == nil {
-					var traced forecast.AstrodomeRefractedRay
-					traced, err = forecast.TraceAstrodomeRefractedRay(workerContext, field, initial, refractionCalibration)
-					if errors.Is(err, forecast.ErrAstrodomeRefractionTerrain) {
-						destination[item.index] = astrodomeModelTerrainBlockedNode(definition, validAt,
-							identity, site)
-						err = nil
-					} else if err == nil {
-						var path forecast.AstrodomeSciencePath
-						path, err = footprint.BuildAstrodomeSciencePath(workerContext, traced, validAt, scienceCalibration)
-						if err == nil {
-							destination[item.index], err = forecast.ComputeAstrodomeScienceNodeRefracted(
-								workerContext, reconstructor, traced, validAt, path, site, scienceCalibration,
-							)
-						}
-					}
-				}
-				if err != nil {
-					if workerContext.Err() != nil {
-						return
-					}
-					destination[item.index] = astrodomeUnavailableNode(definition, validAt, identity, site, err)
-					failureMu.Lock()
-					failedNodes++
-					if firstErr == nil {
-						firstErr = fmt.Errorf("astrodome node %d at %s: %w",
-							item.index, validAt.Format(time.RFC3339), err)
-					}
-					failureMu.Unlock()
+			defer workers.Done()
+			for task := range tasks {
+				computer.computeNodeTask(workerContext, calculation, task)
+				if task.frame.remaining.Add(-1) == 0 {
+					close(task.frame.done)
 				}
 			}
 		}()
 	}
-enqueue:
-	for index := range definitions {
+	closed := false
+	cleanup := func() {
+		cancel()
+		if !closed {
+			close(tasks)
+			closed = true
+		}
+		workers.Wait()
+	}
+	defer cleanup()
+
+	result := make([]directional.AstrodomeDatasetFrameInput, len(calculation.validTimes))
+	resident := make([]*astrodomeFrameWork, len(calculation.validTimes))
+	nextPrepare := 0
+	for completed := 0; completed < len(calculation.validTimes); completed++ {
+		for nextPrepare < len(calculation.validTimes) && nextPrepare-completed < astrodomePreparedFrameWindow {
+			frame, err := computer.prepareFrame(workerContext, calculation, nextPrepare)
+			if err != nil {
+				return nil, err
+			}
+			resident[nextPrepare] = frame
+			for nodeIndex := range calculation.definitions {
+				tasks <- astrodomeNodeTask{frame: frame, index: nodeIndex}
+			}
+			nextPrepare++
+		}
+		frame := resident[completed]
 		select {
-		case <-workerContext.Done():
-			break enqueue
-		case work <- task{index: index}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-frame.done:
+		}
+		frame.failureMu.Lock()
+		failedNodes, firstErr := frame.failedNodes, frame.firstErr
+		frame.failureMu.Unlock()
+		if failedNodes == len(calculation.definitions) {
+			return nil, fmt.Errorf("all astrodome nodes failed at %s: %w", frame.validAt.Format(time.RFC3339), firstErr)
+		}
+		if failedNodes > 0 {
+			computer.logf(
+				"Astrodome retained partial frame: valid_at=%s unavailable_nodes=%d total_nodes=%d first_error=%v",
+				frame.validAt.Format(time.RFC3339), failedNodes, len(calculation.definitions), firstErr,
+			)
+		}
+		result[completed] = directional.AstrodomeDatasetFrameInput{
+			ValidAt: frame.validAt, Surface: frame.site,
+			SolarAltitudeDeg: calculation.series.SunAltitudeDegrees(frame.validAt), Nodes: frame.nodes,
+		}
+		resident[completed] = nil
+		completedFrames := completed + 1
+		if completedFrames == 1 || completedFrames%6 == 0 || completedFrames == len(calculation.validTimes) {
+			totalElapsed := time.Since(calculation.calculationStartedAt)
+			scienceElapsed := time.Since(calculation.scienceStartedAt)
+			remaining := scienceElapsed * time.Duration(len(calculation.validTimes)-completedFrames) /
+				time.Duration(completedFrames)
+			computer.logf(
+				"Astrodome calculation progress: run=%s completed_frames=%d total_frames=%d total_elapsed=%s science_elapsed=%s estimated_remaining=%s",
+				calculation.identity.RunID, completedFrames, len(calculation.validTimes),
+				totalElapsed.Round(time.Second), scienceElapsed.Round(time.Second), remaining.Round(time.Second),
+			)
 		}
 	}
-	close(work)
-	wait.Wait()
-	if err := ctx.Err(); err != nil {
-		return err
+	close(tasks)
+	closed = true
+	workers.Wait()
+	return result, nil
+}
+
+func (computer *Computer) prepareFrame(
+	ctx context.Context,
+	calculation astrodomeFrameCalculation,
+	index int,
+) (*astrodomeFrameWork, error) {
+	validAt := calculation.validTimes[index]
+	site, err := calculation.footprint.AstrodomeScienceSiteAt(ctx, validAt, calculation.observer)
+	if err != nil {
+		return nil, err
 	}
-	if failedNodes == len(definitions) {
-		return fmt.Errorf("all astrodome nodes failed at %s: %w", validAt.Format(time.RFC3339), firstErr)
+	field, err := forecast.NewAstrodomeReconstructedRefractivityField(
+		calculation.reconstructor, validAt, calculation.refractivityCalibration,
+	)
+	if err != nil {
+		return nil, err
 	}
-	if failedNodes > 0 {
-		computer.logf(
-			"Astrodome retained partial frame: valid_at=%s unavailable_nodes=%d total_nodes=%d first_error=%v",
-			validAt.Format(time.RFC3339), failedNodes, len(definitions), firstErr,
-		)
+	scienceFrame, err := forecast.NewAstrodomePreparedScienceFrame(calculation.reconstructor, validAt)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	nativeFrame, err := calculation.footprint.NewAstrodomeScienceNativeFrame(validAt)
+	if err != nil {
+		return nil, err
+	}
+	frame := &astrodomeFrameWork{
+		validAt: validAt, site: site, field: field,
+		scienceFrame: scienceFrame, nativeFrame: nativeFrame,
+		nodes: make([]forecast.AstrodomeScienceNode, len(calculation.definitions)), done: make(chan struct{}),
+	}
+	frame.remaining.Store(int32(len(calculation.definitions)))
+	return frame, nil
+}
+
+func (computer *Computer) computeNodeTask(
+	ctx context.Context,
+	calculation astrodomeFrameCalculation,
+	task astrodomeNodeTask,
+) {
+	frame := task.frame
+	definition := calculation.definitions[task.index]
+	initial, err := forecast.NewAstrodomeRay(calculation.observer, calculation.observerHeightM,
+		definition.ElevationDegrees, definition.AzimuthDegrees)
+	if err == nil {
+		var traced forecast.AstrodomeRefractedRay
+		traced, err = forecast.TraceAstrodomeRefractedRay(ctx, frame.field, initial, calculation.refractionCalibration)
+		if errors.Is(err, forecast.ErrAstrodomeRefractionTerrain) {
+			frame.nodes[task.index] = astrodomeModelTerrainBlockedNode(
+				definition, frame.validAt, calculation.identity, frame.site,
+			)
+			err = nil
+		} else if err == nil {
+			var path forecast.AstrodomeSciencePath
+			path, err = calculation.footprint.BuildAstrodomeSciencePath(
+				ctx, traced, frame.validAt, calculation.scienceCalibration,
+			)
+			if err == nil {
+				path.NativeContext = frame.nativeFrame
+				frame.nodes[task.index], err = forecast.ComputeAstrodomeScienceNodeRefractedPrepared(
+					ctx, frame.scienceFrame, traced, frame.validAt, path, frame.site, calculation.scienceCalibration,
+				)
+			}
+		}
+	}
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	frame.nodes[task.index] = astrodomeUnavailableNode(
+		definition, frame.validAt, calculation.identity, frame.site, err,
+	)
+	frame.failureMu.Lock()
+	frame.failedNodes++
+	if frame.firstErr == nil {
+		frame.firstErr = fmt.Errorf("astrodome node %d at %s: %w",
+			task.index, frame.validAt.Format(time.RFC3339), err)
+	}
+	frame.failureMu.Unlock()
 }
 
 func astrodomeModelTerrainBlockedNode(

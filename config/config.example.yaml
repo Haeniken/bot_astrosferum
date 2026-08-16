@@ -19,7 +19,7 @@ horizon_analysis:
   queue_size: 4
   concurrency: 1
   # Shared by Horizon extraction and Astrodome native-column preload inside
-  # the isolated directional worker. Match the default eight-CPU worker quota.
+  # the isolated directional worker. The current production quota is ten CPUs.
   cdo_workers: 8
   job_timeout: 10m
   cache_ttl: 48h

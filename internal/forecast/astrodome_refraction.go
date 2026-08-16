@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	AstrodomeRefractionIntegratorVersion       = "dormand-prince-5-4-event-v3"
+	AstrodomeRefractionIntegratorVersion       = "dormand-prince-5-4-fsal-event-v4"
 	astrodomeRefractionMaximumRefinementLevels = 7
 )
 

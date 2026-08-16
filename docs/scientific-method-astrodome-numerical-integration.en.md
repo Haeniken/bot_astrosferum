@@ -635,7 +635,7 @@ Implemented identities:
 - full refraction:
   `astrodome-icon-sphere-refraction-full-ciddor-dopri54-v3`;
 - refractivity: `ciddor-1996-phase-index-v1`;
-- ODE: `dormand-prince-5-4-event-v3`;
+- ODE: `dormand-prince-5-4-fsal-event-v4`;
 - science path: `astrodome-science-path-v24-native-mh`;
 - science kernel: `astrodome-science-kernel-v34-native-mh-glo30-informational-skyline`.
 

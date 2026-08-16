@@ -117,9 +117,9 @@ memory, CPU and ordinary-forecast latency benchmarks justify more.
 | `ASTRO_ASTRODOME_RESIDENT_LIMIT` | No | `10GiB` | Maximum projected resident footprint of preloaded native ICON-EU columns for one Astrodome job. Validation accepts `1GiB..20GiB`; keep it below the worker cgroup hard limit with headroom for Go, CDO/ecCodes, and charged file cache. |
 | `ASTRO_ASTRODOME_JOB_TIMEOUT` | No | `0s` | Astrodome wall-clock deadline. `0s` disables it so a live calculation is not cancelled by an estimate; positive values must be `1m..1h`. Explicit user cancellation and process shutdown remain effective. |
 | `ASTRO_DIRECTIONAL_INTERNAL_REQUEST_TIMEOUT` | No | `0s` | Bot-to-worker HTTP deadline. `0s` disables the transport cutoff; positive values must be `1s..8h`. It must be `0s` when the Astrodome job timeout is disabled, or exceed a finite Astrodome job timeout. |
-| `ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` | No | `24g` until benchmarked | Compose hard cgroup limit for Go, CDO/ecCodes children, and charged file cache. It is an initial conservative candidate, not a measured minimum. |
-| `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` | No | `12GiB` until benchmarked | Go heap target inside the worker hard limit. It is not a total-process or cgroup limit. |
-| `ASTRO_DIRECTIONAL_WORKER_CPU_LIMIT` | No | `8.00` on the 12-thread production host | Compose CPU quota for the isolated worker. The retained single directional slot leaves four logical CPUs for model sync and ordinary forecasts. Rebenchmark before applying this host-specific value elsewhere. |
+| `ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` | No | `32g` on the measured production host | Compose hard cgroup limit for Go, CDO/ecCodes children, and charged file cache. It preserves headroom above the measured 18.53 GB peak; it is not a measured minimum. |
+| `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` | No | `12GiB` on the measured production host | Go heap target inside the worker hard limit. It is not a total-process or cgroup limit. |
+| `ASTRO_DIRECTIONAL_WORKER_CPU_LIMIT` | No | `10.00` on the 12-thread production host | Compose CPU quota for the isolated worker. The retained single directional slot leaves two logical CPUs for model sync and ordinary forecasts. Rebenchmark before applying this host-specific value elsewhere. |
 
 Relevant YAML defaults are:
 
@@ -143,13 +143,21 @@ astrodome:
   min_free_inodes: 10000
 ```
 
-The current bounded profile measured a 300-column preload at `244.151 s` with
-four CDO workers and five production-v2 node calculations at
-`0.969..1.423 s` each. For the production-v2 geometry (129 nodes over 72
-frames) on the configured eight-CPU worker, including the existing per-frame
-scheduling bound, these samples project `22.8..33.1 min`. Production preload
-is configured for eight CDO workers, but the documentation does not infer an
-unmeasured speed-up from the worker-count change. The `30m` value is therefore
+Two complete current-writer measurements at 129 nodes over 72 frames used ten
+node workers, eight CDO workers, `GOMEMLIMIT=12GiB`, and the bounded two-frame
+prepared-state window. Run `2026081606` completed all 9,288 node-hours in
+`26m07.679s`, including a `4m41.816s` preload. The later immutable run
+`2026081612`, with a warmer model/file cache, completed in `23m33.700s`,
+including a `3m52.033s` preload; its science phase was `19m41.667s`. This is
+not a same-run cold/warm pair. One node on the later run retained a pre-existing
+fail-closed 1.842-cm quadrature-floor result; a focused replay on the
+unmodified `main` failed in the same cell, interval, and component with ratio
+1.58747 versus 1.58745, so it is not a
+prepared-state, persistent-pool, or FSAL regression. Under a 32-GiB cgroup the
+later run peaked at 18,532,704,256 bytes with no `memory.events`; the earlier
+24-GiB trial reached its hard boundary and accumulated pressure events. The
+32-GiB value is operational headroom, not a minimum requirement. The `30m`
+value is therefore
 queue/UI scheduling guidance only, not a completion guarantee or an execution
 deadline. Production uses `0s` for both the Astrodome job timeout and the
 bot-to-worker transport timeout, so a healthy calculation is not truncated by
@@ -159,8 +167,9 @@ finite guards within the validation ranges above; the transport guard must then
 exceed the job guard, and it cannot remain finite while the job guard is
 disabled. The historical v28/path-v22 baseline covered all 9,288
 node-hours in 33 min 14 s: 9,284 were available and four sub-GL2 physical
-spans failed closed. This single run does not replace repeated cold/warm,
-simultaneous-sync, payload, or observational gates.
+spans failed closed. The current measurements do not replace a same-run
+cold/warm pair, simultaneous-sync, payload, ordinary-Forecast/Horizon latency,
+or observational gates.
 Completed results are
 bounded by TTL and entry count. Admission also accounts for staging, leases,
 temporary data, the complete project disk ceiling, free bytes, and free

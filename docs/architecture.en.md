@@ -1460,7 +1460,8 @@ workers. The current composition implements this boundary:
 Each extracted CDO table is normalized as its bounded subprocess finishes and the
 raw table is released; only the normalized 72-frame result remains for the
 calculation. The directional worker's Compose hard limit is configured with
-`ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` (`24g` by default), and its lower Go
+`ASTRO_DIRECTIONAL_WORKER_MEMORY_LIMIT` (`32g` on the measured production
+host), and its lower Go
 heap target with `ASTRO_DIRECTIONAL_WORKER_GOMEMLIMIT` (`12GiB` by default).
 Neither is a scientific constant. Any change must follow measured peak RSS
 during a full-run smoke test and leave headroom for CDO, PostgreSQL, and the
@@ -1598,7 +1599,10 @@ terrain-blocked refracted ray keeps `direction_at_model_top_ecef=null`: the
 worker does not fabricate a tangent at a model boundary that the ray never
 reached. The tangent remains mandatory for every available refracted node.
 
-Refraction v3 performs two forward production passes and accepts a ray only
+Refraction v4 (`dormand-prince-5-4-fsal-event-v4`) retains the seventh DOPRI
+stage as the canonical accepted endpoint and reuses its normalized-start
+derivative only when the next state has the identical binary64 representation.
+It performs two forward production passes and accepts a ray only
 when their endpoint, direction, and optical-path diagnostics converge within
 the versioned limits. The reverse pass is not repeated for ordinary work; it
 is enabled by the reference/strict mode used for regression and release

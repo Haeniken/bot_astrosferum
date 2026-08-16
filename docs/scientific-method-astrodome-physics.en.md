@@ -230,6 +230,11 @@ partition events. The calibration declares relative tolerance `10^{-9}`;
 `10^{-4} m` absolute position/optical-path tolerances; `10^{-11} rad`
 direction tolerance; `10^{-2} m` event tolerance; an initial `25 m` step
 within `10^{-4}…1000 m`; `500 km` maximum path; and at most `10^6` steps. A
+Refraction integrator `dormand-prince-5-4-fsal-event-v4` retains the seventh
+stage as the canonical accepted step solution. Its position is therefore
+bit-identical to the next step's start; after the mandatory tangent
+normalisation, that start derivative is evaluated once and reused through the
+FSAL property. A rejected step retains the same starting state. The
 convergence controller starts with tolerance scales `1` and `1/2`. Adjacent forward
 endpoints must agree within $0.02\ \mathrm{m}$,
 $10^{-8}\ \mathrm{rad}$, and $0.02\ \mathrm{m}$ of optical path. If the
@@ -241,7 +246,7 @@ reaches $7.8125\times10^{-5}\ \mathrm{m}$ at the finest pass. Event roots are
 located on the accepted Shampine dense extension independently of the RK
 minimum step; the latter is instead required to clear the finest internal
 partition-transition scale $25/128=0.1953125\ \mathrm{m}$. Production
-refraction v3 publishes
+refraction v4 publishes
 only after two neighbouring forward passes converge. Reference/strict
 verification additionally launches a reverse pass from the finer endpoint and
 requires return within $0.05\ \mathrm{m}$ and
@@ -630,7 +635,7 @@ even though the refracted trajectory is nonlinear in path length. The bound
 is deliberately conservative across the four columns and temporal bracket,
 but it uses only the active adjacent pair or extension level, not an entire
 tier or column. The vertical-support identity is part of the partition
-signature and envelope-cache key. Path v22 must certify every native
+signature and envelope-cache key. The current path v24 must certify every native
 full-level support transition and every reachable raw WMO predicate before
 quadrature; a missing certificate or sampled change fails closed rather than
 triggering a heuristic kernel split.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,102 @@ type astrodomeAnalyticRefractionField struct {
 	surfaceDistance func(AstrodomeECEFVector) float64
 	topDistance     func(AstrodomeECEFVector) float64
 	partition       func(AstrodomeECEFVector) string
+}
+
+func TestAstrodomeDOPRIFSALKeepsExactStepAndSkipsOneFieldEvaluation(t *testing.T) {
+	t.Parallel()
+
+	azimuth := 67.5
+	initialRay, err := NewAstrodomeRay(
+		Location{Latitude: 50, Longitude: 30, TimeZone: "UTC"}, 500, 45, &azimuth,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := astrodomeAnalyticRefractionField{
+		refractiveIndex: func(position AstrodomeECEFVector) float64 {
+			return 1.00028 - 1e-8*(position.Norm()-AstrodomeICONSphereRadiusM)
+		},
+		gradient: func(position AstrodomeECEFVector) AstrodomeECEFVector {
+			return position.scale(-1e-8 / position.Norm())
+		},
+		surfaceDistance: func(position AstrodomeECEFVector) float64 {
+			return position.Norm() - AstrodomeICONSphereRadiusM
+		},
+		topDistance: func(position AstrodomeECEFVector) float64 {
+			return position.Norm() - (AstrodomeICONSphereRadiusM + 30_000)
+		},
+	}
+	calibration := DefaultAstrodomeRefractionCalibration()
+	state := astrodomeNormaliseRefractionState(astrodomeInitialRefractionState(initialRay))
+	preparedPass := astrodomeRefractionPass{}
+	sample, err := astrodomeEvaluateRefractionField(
+		context.Background(), field, astrodomeStatePosition(state), &preparedPass,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedPass.refractivityVersion = sample.RefractivityVersion
+	derivative, err := astrodomeRefractionRHSFromSample(state, sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := astrodomeDOPRIStep(
+		context.Background(), field, state, 0, calibration.InitialStepM,
+		calibration, 1, &preparedPass,
+		astrodomeRefractionPreparedStart{state: state, derivative: derivative, sample: sample},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directPass := astrodomeRefractionPass{refractivityVersion: sample.RefractivityVersion}
+	direct, err := astrodomeDOPRIStep(
+		context.Background(), field, state, 0, calibration.InitialStepM,
+		calibration, 1, &directPass,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prepared, direct) {
+		t.Fatalf("FSAL prepared step differs from direct step:\n prepared: %#v\n direct: %#v", prepared, direct)
+	}
+	if preparedPass.diagnostics.FieldEvaluations != 1+6 || directPass.diagnostics.FieldEvaluations != 7 {
+		t.Fatalf("field evaluations prepared/direct = %d/%d, want 7/7 including the separately prepared sample",
+			preparedPass.diagnostics.FieldEvaluations, directPass.diagnostics.FieldEvaluations)
+	}
+
+	acceptedState := prepared.candidate
+	acceptedDerivative, err := astrodomeRefractionRHSFromSample(acceptedState, prepared.endSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextPreparedPass := astrodomeRefractionPass{refractivityVersion: sample.RefractivityVersion}
+	nextPrepared, err := astrodomeDOPRIStep(
+		context.Background(), field, acceptedState, calibration.InitialStepM, calibration.InitialStepM,
+		calibration, 1, &nextPreparedPass,
+		astrodomeRefractionPreparedStart{
+			state: acceptedState, derivative: acceptedDerivative, sample: prepared.endSample,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextDirectPass := astrodomeRefractionPass{refractivityVersion: sample.RefractivityVersion}
+	nextDirect, err := astrodomeDOPRIStep(
+		context.Background(), field, acceptedState, calibration.InitialStepM, calibration.InitialStepM,
+		calibration, 1, &nextDirectPass,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(nextPrepared, nextDirect) {
+		t.Fatalf("accepted-step FSAL derivative changed the next Dormand--Prince step:\n prepared: %#v\n direct: %#v",
+			nextPrepared, nextDirect)
+	}
+	if nextPreparedPass.diagnostics.FieldEvaluations != 6 || nextDirectPass.diagnostics.FieldEvaluations != 7 {
+		t.Fatalf("next-step field evaluations prepared/direct = %d/%d, want 6/7",
+			nextPreparedPass.diagnostics.FieldEvaluations, nextDirectPass.diagnostics.FieldEvaluations)
+	}
 }
 
 func (field astrodomeAnalyticRefractionField) EvaluateAstrodomeRefraction(
