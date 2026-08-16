@@ -131,8 +131,9 @@ the unused `pebble` helper inherited from the GDAL base image. Allow at least
 `15 GiB` of additional temporary Docker space while rebuilding and scanning.
 
 Source development and the required pre-push checks use Go `1.26.6`,
-`golangci-lint 2.12.2`, and `govulncheck 1.6.0`. CI additionally builds the
-production image and rejects `CRITICAL` or `HIGH` Trivy findings; it does not
+`golangci-lint 2.12.2`, and `govulncheck 1.7.0`. CI additionally builds the
+production image and rejects `CRITICAL` or `HIGH` findings with digest-pinned
+Trivy `0.74.0`; it does not
 produce a separate `MEDIUM`/`LOW` report.
 
 The default in-memory point-cache budget is `20 GiB` and the container uses
