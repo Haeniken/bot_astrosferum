@@ -481,10 +481,10 @@ func domeSyncProjections(tasks []domeSyncTask) (model.DiskProjection, model.Disk
 	inputBytes := missingMessages*domeProjectedBytesPerMessage + domeAcquisitionOverheadBytes
 	inputFiles := missingFiles + domeAcquisitionOverheadFiles
 	return model.DiskProjection{
-			Bytes: inputBytes + domeDenseResultCacheBytes, Inodes: inputFiles + domeDenseResultCacheFiles,
-		}, model.DiskProjection{
-			Bytes: inputBytes + domeSparseResultCacheBytes, Inodes: inputFiles + domeSparseResultCacheFiles,
-		}, nil
+		Bytes: inputBytes + domeDenseResultCacheBytes, Inodes: inputFiles + domeDenseResultCacheFiles,
+	}, model.DiskProjection{
+		Bytes: inputBytes + domeSparseResultCacheBytes, Inodes: inputFiles + domeSparseResultCacheFiles,
+	}, nil
 }
 
 func validateDomeStagingBinding(stagingDirectory, baseManifestSHA string) error {

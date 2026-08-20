@@ -13,7 +13,7 @@ Deployment target: operator-managed host
 - surface field names are normalized across ecCodes versions (`VMAX_10M`/`max_i10fg`);
 - the admin chart uses stacked successful/failed bars and MSK (UTC+3) calendar days; point menus provide a Back button.
 
-- Go `1.26.6`, `tzf v1.2.5`, and `gonum/plot v0.17.0`;
+- Go `1.27.0`, `tzf v1.2.5`, and `gonum/plot v0.17.0`;
 - Telegram accepts native locations and VK accepts geo attachments; both accept `59.9386, 30.3141` and `/forecast 59.9386 30.3141`;
 - both thin platform adapters depend on the common `internal/app/bot` handler and never import each other; VK Group Long Poll is enabled at startup, messages and native geo are normalized to the common request, while texts, keyboards, PNG photos, and lossless document uploads are translated back to VK API calls;
 - Telegram and VK run under independent retrying supervisors, so a platform API failure does not stop model synchronization or the other adapter;

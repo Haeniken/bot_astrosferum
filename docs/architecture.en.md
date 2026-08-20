@@ -43,7 +43,7 @@ The runtime is pinned to the official OSGeo GDAL 3.13.1 image. World Atlas coord
 | Area | MVP decision | Reason |
 |---|---|---|
 | Executables | `bot_astrosferum` and one directional worker in this module; the site is a separate private repository/image | One science implementation, one-way site dependency, explicit failure isolation |
-| Toolchain | Go `1.26.6`, pinned in `go.mod` and the Docker builder | Reproducible current build |
+| Toolchain | Go `1.27.0`, pinned in `go.mod` and the Docker builder | Reproducible current build |
 | Runtime | Main app plus the optional directional container | Ordinary forecasts remain independent of heavy directional-dome failures and of the external site |
 | Telegram | Bot API long polling | No ingress or webhook required |
 | VK | Bots Long Poll API | No public callback endpoint required |
