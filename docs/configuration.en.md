@@ -21,6 +21,8 @@ Platform tokens deliberately do not belong in `.env`: keep them in
 | `ASTRO_VK_ADMIN_IDS` | No | Comma-separated numeric VK user IDs, or empty | Grants the VK admin/statistics UI. Use numeric user IDs, not screen names; the report is the same combined Telegram + VK report. |
 | `ASTRO_LIGHT_POLLUTION_ATLAS_YEAR` | No | `2024` | Pins the operator-verified annual Light Pollution Atlas dataset; it is not advanced automatically. Change only after verifying and provisioning a supported dataset. |
 | `ASTRO_FORECAST_CONCURRENCY` | No | `2` | Shared maximum number of ordinary forecast calculations running at once across Telegram, VK, and the website. Further requests wait in the same queue. |
+| `ASTRO_FORECAST_ESTIMATED_DURATION` | No | `2m` | Presentation-only cold-run duration used for website progress and ETA. It never affects queue ordering or scientific calculation. |
+| `ASTRO_FORECAST_WARM_ESTIMATED_DURATION` | No | `10s` | Presentation-only duration used after the ordinary forecast confirms an exact render-cache hit. Before that confirmation the conservative cold estimate remains visible. |
 | `ASTRO_ICON_DOWNLOAD_LIMIT_MBIT` | No | Unset | Aggregate decimal-Mbit/s limit shared by simultaneous ICON-EU and ICON Global downloads. Unset, empty, or `0` means unlimited. |
 | `ASTRO_GEOS_CF_ENABLED` | No | `true` | Enables the independent NASA GEOS-CF AOD550/ozone enrichment used only by the night-time Reference V-band diagnostic. A disabled, stale, slow, or unavailable source removes the ring but never fails or changes the primary ICON Overall forecast. |
 
@@ -111,7 +113,7 @@ memory, CPU and ordinary-forecast latency benchmarks justify more.
 
 | Variable | Required | Recommended value | Effect |
 |---|---|---|---|
-| `ASTRO_DIRECTIONAL_QUEUE_SIZE` | No | `8` | Maximum queued Horizon + Astrodome jobs. A full FIFO rejects new admission; identical identities may share one calculation. |
+| `ASTRO_DIRECTIONAL_QUEUE_SIZE` | No | `10` | Maximum queued Horizon + Astrodome jobs. A full FIFO rejects new admission and identical scientific requests share one calculation. A regular user may have one active/queued Astrodome request; configured Telegram administrators may enqueue distinct Astrodome requests up to the shared FIFO limit. |
 | `ASTRO_DIRECTIONAL_CONCURRENCY` | No | `1` until benchmarked | Shared active Horizon + Astrodome calculations. Validation accepts `1..32`. Every additional Astrodome slot can consume the full resident limit, so bot, worker, and operator CLI must use the same value and the cgroup/disk budgets must be revalidated before increasing it. |
 | `ASTRO_ASTRODOME_ENABLED` | No | `true` after rollout | Public-access switch, not a worker kill switch. `true` permits every authenticated Telegram OIDC user; `false` permits only `ASTRO_TELEGRAM_ADMIN_IDS`; `false` plus an empty list denies everyone. |
 | `ASTRO_ASTRODOME_RESIDENT_LIMIT` | No | `10GiB` | Maximum projected resident footprint of preloaded native ICON-EU columns for one Astrodome job. Validation accepts `1GiB..20GiB`; keep it below the worker cgroup hard limit with headroom for Go, CDO/ecCodes, and charged file cache. |
@@ -125,7 +127,7 @@ Relevant YAML defaults are:
 
 ```yaml
 directional:
-  queue_size: 8
+  queue_size: 10
   concurrency: 1
   completed_ttl: 48h
   completed_entries: 128

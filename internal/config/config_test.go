@@ -20,14 +20,16 @@ func TestLoadExample(t *testing.T) {
 	if cfg.App.RequestTimeout.Duration != 15*time.Minute {
 		t.Fatalf("unexpected request timeout: %s", cfg.App.RequestTimeout.Duration)
 	}
-	if cfg.App.ForecastConcurrency != 2 || cfg.App.ECCodesWorkers != 8 || cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
+	if cfg.App.ForecastConcurrency != 2 || cfg.App.ForecastEstimatedDuration.Duration != 2*time.Minute ||
+		cfg.App.ForecastWarmEstimatedDuration.Duration != 10*time.Second || cfg.App.ECCodesWorkers != 8 ||
+		cfg.App.PointCacheEntries != 512 || cfg.App.PointCacheMemoryLimit != ByteSize(20<<30) {
 		t.Fatalf("unexpected performance configuration: %+v", cfg.App)
 	}
 	if !cfg.HorizonAnalysis.Enabled || cfg.HorizonAnalysis.QueueSize != 4 || cfg.HorizonAnalysis.Concurrency != 1 || cfg.HorizonAnalysis.CDOWorkers != 8 ||
 		cfg.HorizonAnalysis.JobTimeout.Duration != 10*time.Minute || cfg.HorizonAnalysis.EstimatedDuration.Duration != 3*time.Minute {
 		t.Fatalf("unexpected horizon-analysis configuration: %+v", cfg.HorizonAnalysis)
 	}
-	if cfg.Directional.QueueSize != 8 || cfg.Directional.Concurrency != 1 || cfg.Directional.Listen != ":18083" || cfg.Directional.WorkerURL != "http://directional_worker:18084" ||
+	if cfg.Directional.QueueSize != 10 || cfg.Directional.Concurrency != 1 || cfg.Directional.Listen != ":18083" || cfg.Directional.WorkerURL != "http://directional_worker:18084" ||
 		cfg.Directional.WorkerListen != ":18084" || cfg.Directional.EstimatedAstrodome.Duration != 30*time.Minute ||
 		cfg.Directional.InternalRequestTimeout.Duration != 0 {
 		t.Fatalf("unexpected directional configuration: %+v", cfg.Directional)
@@ -114,6 +116,20 @@ func TestEnabledGEOSCFConfigurationValidation(t *testing.T) {
 	}
 }
 
+func TestForecastPresentationEstimateValidation(t *testing.T) {
+	for index, mutate := range []func(*Config){
+		func(cfg *Config) { cfg.App.ForecastEstimatedDuration = Duration{500 * time.Millisecond} },
+		func(cfg *Config) { cfg.App.ForecastWarmEstimatedDuration = Duration{0} },
+		func(cfg *Config) { cfg.App.ForecastWarmEstimatedDuration = Duration{3 * time.Minute} },
+	} {
+		cfg := Defaults()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "forecast_") {
+			t.Fatalf("case %d validation error = %v", index, err)
+		}
+	}
+}
+
 func TestHorizonAnalysisLimitsValidation(t *testing.T) {
 	tests := []func(*Config){
 		func(cfg *Config) { cfg.HorizonAnalysis.QueueSize = 0 },
@@ -174,7 +190,7 @@ func TestAstrodomeAndDirectionalConfiguration(t *testing.T) {
 	}
 
 	for index, mutate := range []func(*Config){
-		func(value *Config) { value.Directional.QueueSize = 9 },
+		func(value *Config) { value.Directional.QueueSize = 11 },
 		func(value *Config) { value.Directional.Concurrency = 33 },
 		func(value *Config) { value.Directional.Listen = "18083" },
 		func(value *Config) { value.Directional.WorkerURL = "https://public.example" },
@@ -288,6 +304,8 @@ func TestAstrodomeResidentLimitEnvironmentOverride(t *testing.T) {
 
 func TestForecastConcurrencyEnvironmentOverride(t *testing.T) {
 	t.Setenv("ASTRO_FORECAST_CONCURRENCY", "3")
+	t.Setenv("ASTRO_FORECAST_ESTIMATED_DURATION", "90s")
+	t.Setenv("ASTRO_FORECAST_WARM_ESTIMATED_DURATION", "7s")
 	t.Setenv("ASTRO_HORIZON_CONCURRENCY", "2")
 	t.Setenv("ASTRO_ICON_DOWNLOAD_LIMIT_MBIT", "75.5")
 	cfg, err := Load(filepath.Join("..", "..", "config", "config.example.yaml"))
@@ -296,6 +314,9 @@ func TestForecastConcurrencyEnvironmentOverride(t *testing.T) {
 	}
 	if cfg.App.ForecastConcurrency != 3 {
 		t.Fatalf("forecast concurrency = %d, want 3", cfg.App.ForecastConcurrency)
+	}
+	if cfg.App.ForecastEstimatedDuration.Duration != 90*time.Second || cfg.App.ForecastWarmEstimatedDuration.Duration != 7*time.Second {
+		t.Fatalf("forecast estimates = %s/%s, want 1m30s/7s", cfg.App.ForecastEstimatedDuration.Duration, cfg.App.ForecastWarmEstimatedDuration.Duration)
 	}
 	if cfg.HorizonAnalysis.Concurrency != 2 {
 		t.Fatalf("horizon concurrency = %d, want 2", cfg.HorizonAnalysis.Concurrency)

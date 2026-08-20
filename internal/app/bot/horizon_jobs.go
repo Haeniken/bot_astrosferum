@@ -88,6 +88,12 @@ type HorizonCompletionMessenger interface {
 	CompleteHorizon(error)
 }
 
+// HorizonStatusMessenger is implemented by the website result capture. It
+// receives structured shared-queue state; platform adapters remain unchanged.
+type HorizonStatusMessenger interface {
+	UpdateHorizonStatus(directional.JobStatus)
+}
+
 type HorizonDatasetMessenger interface {
 	SendHorizonDataset(context.Context, []byte) error
 }

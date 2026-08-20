@@ -69,9 +69,10 @@ type fakeMessenger struct {
 }
 
 type structuredForecastMessenger struct {
-	dataset   []byte
-	photos    int
-	documents int
+	dataset       []byte
+	photos        int
+	documents     int
+	cacheStatuses []bool
 }
 
 func (*structuredForecastMessenger) SendMessage(context.Context, int64, string, bool) error {
@@ -91,6 +92,9 @@ func (messenger *structuredForecastMessenger) SendForecastDataset(_ context.Cont
 		messenger.dataset = data
 	}
 	return err
+}
+func (messenger *structuredForecastMessenger) UpdateForecastCacheStatus(cacheHit bool) {
+	messenger.cacheStatuses = append(messenger.cacheStatuses, cacheHit)
 }
 
 type contextCompositionProvider struct{}
@@ -590,6 +594,12 @@ func TestStructuredWebsiteForecastSkipsPNGRasterizationAndDelivery(t *testing.T)
 	if err := handler.EnableForecast(provider, t.TempDir(), render.Options{Width: 3200, Height: 960, Language: "en"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := handler.EnableRenderCache(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.replyToLocation(t.Context(), 501, 501, 59.9386, 30.3141, languageEnglish); err != nil {
+		t.Fatal(err)
+	}
 	if err := handler.replyToLocation(t.Context(), 501, 501, 59.9386, 30.3141, languageEnglish); err != nil {
 		t.Fatal(err)
 	}
@@ -598,6 +608,9 @@ func TestStructuredWebsiteForecastSkipsPNGRasterizationAndDelivery(t *testing.T)
 	}
 	if messenger.photos != 0 || messenger.documents != 0 {
 		t.Fatalf("website path attempted PNG delivery: photos=%d documents=%d", messenger.photos, messenger.documents)
+	}
+	if len(messenger.cacheStatuses) != 2 || messenger.cacheStatuses[0] || messenger.cacheStatuses[1] {
+		t.Fatalf("website cache statuses = %v, want explicit cold misses", messenger.cacheStatuses)
 	}
 }
 

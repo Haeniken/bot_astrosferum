@@ -510,19 +510,22 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	horizonAccountCapacity := 1
-	horizonAccountTimeout := time.Duration(0)
 	if cfg.HorizonAnalysis.Enabled {
-		horizonAccountCapacity = cfg.HorizonAnalysis.QueueSize + cfg.HorizonAnalysis.Concurrency
-		if cfg.HorizonAnalysis.JobTimeout.Duration > 0 {
-			horizonAccountTimeout = cfg.HorizonAnalysis.JobTimeout.Duration + 5*time.Minute
-		}
+		horizonAccountCapacity = cfg.Directional.QueueSize + cfg.Directional.Concurrency
 	}
 	accountResults, err := bot.NewAccountResultDispatcher(
-		ctx, cfg.App.RequestTimeout.Duration, horizonAccountTimeout, 96*time.Hour,
+		ctx, cfg.App.RequestTimeout.Duration, 0, 96*time.Hour,
 		filepath.Join(cfg.Paths.Data, "cache", "account-results"),
 		cfg.App.Workers, horizonAccountCapacity, logf,
 	)
 	if err != nil {
+		return err
+	}
+	if err := accountResults.SetEstimatedDurations(
+		cfg.App.ForecastEstimatedDuration.Duration,
+		cfg.App.ForecastWarmEstimatedDuration.Duration,
+		cfg.Directional.EstimatedHorizon.Duration,
+	); err != nil {
 		return err
 	}
 	// The fast straight-ray Horizon uses the ordinary immutable ICON-EU point

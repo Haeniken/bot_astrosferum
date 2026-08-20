@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/forecast"
@@ -144,6 +145,9 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 	}
 
 	status, statusErr := ticket.Status()
+	if statusErr == nil {
+		notifyHorizonStatus(waiter.messenger, status)
+	}
 	jobs.mu.Lock()
 	if jobs.closed || jobs.root == nil || jobs.root.Err() != nil {
 		jobs.mu.Unlock()
@@ -189,6 +193,25 @@ func (jobs *HorizonJobs) handleDirectionalAdmission(ctx context.Context, job *ho
 func (jobs *HorizonJobs) awaitDirectional(root context.Context, ticket *directional.Ticket, job *horizonJob, waiter horizonWaiter) {
 	defer jobs.wait.Done()
 	defer jobs.clearDirectionalTicket(waiter.identity, ticket)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		status, statusErr := ticket.Status()
+		if statusErr != nil {
+			break
+		}
+		notifyHorizonStatus(waiter.messenger, status)
+		if status.State == directional.StateReady || status.State == directional.StateFailed || status.State == directional.StateCancelled {
+			break
+		}
+		select {
+		case <-root.Done():
+			_ = ticket.Cancel()
+			jobs.releaseDirectionalWaiter(waiter.identity, job.key, false)
+			return
+		case <-ticker.C:
+		}
+	}
 	result, err := ticket.Wait(root)
 	if err != nil {
 		if root.Err() != nil {
@@ -201,6 +224,12 @@ func (jobs *HorizonJobs) awaitDirectional(root context.Context, ticket *directio
 		return
 	}
 	jobs.deliverJob(job, result.Path, nil)
+}
+
+func notifyHorizonStatus(messenger HorizonMessenger, status directional.JobStatus) {
+	if observer, ok := messenger.(HorizonStatusMessenger); ok {
+		observer.UpdateHorizonStatus(status)
+	}
 }
 
 func (jobs *HorizonJobs) clearDirectionalTicket(identity horizonUserIdentity, ticket *directional.Ticket) {

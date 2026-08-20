@@ -138,7 +138,7 @@ func TestHorizonDirectionalRejectsWorkerScienceIdentityDrift(t *testing.T) {
 	}
 }
 
-func TestHorizonSharedDirectionalOwnerLimitIncludesAstrodome(t *testing.T) {
+func TestHorizonQueuesBehindSameOwnerAstrodome(t *testing.T) {
 	root := t.TempDir()
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
 	jobs := newHorizonTestJobs(t, filepath.Join(root, "horizon-cache"), source, HorizonJobsConfig{})
@@ -179,14 +179,18 @@ func TestHorizonSharedDirectionalOwnerLimitIncludesAstrodome(t *testing.T) {
 	invokeHorizonAction(t, handler, horizonTestPayload(t, jobs, horizonTestButtonRequest()), 42, "en")
 	waitHorizonTest(t, time.Second, func() bool {
 		messages, _, _ := messenger.snapshot()
-		return containsHorizonText(messages, "another directional calculation")
+		return containsHorizonText(messages, "queued in the shared queue")
 	})
 	if calls, _ := source.counts(); calls != 0 {
-		t.Fatalf("Horizon source called despite cross-kind owner limit: %d", calls)
+		t.Fatalf("queued Horizon source called before Astrodome completed: %d", calls)
 	}
 	if err := ticket.Cancel(); err != nil {
 		t.Fatalf("cancel Astrodome: %v", err)
 	}
+	waitHorizonTest(t, time.Second, func() bool {
+		calls, _ := source.counts()
+		return calls > 0
+	})
 }
 
 func TestHorizonCancelUserCancelsSharedDirectionalTicket(t *testing.T) {

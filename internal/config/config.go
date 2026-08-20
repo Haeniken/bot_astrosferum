@@ -90,15 +90,17 @@ type DatabaseConfig struct {
 }
 
 type AppConfig struct {
-	Locale                string   `yaml:"locale"`
-	Horizon               Duration `yaml:"horizon"`
-	Step                  Duration `yaml:"step"`
-	Workers               int      `yaml:"workers"`
-	ForecastConcurrency   int      `yaml:"forecast_concurrency"`
-	ECCodesWorkers        int      `yaml:"eccodes_workers"`
-	PointCacheEntries     int      `yaml:"point_cache_entries"`
-	PointCacheMemoryLimit ByteSize `yaml:"point_cache_memory_limit"`
-	RequestTimeout        Duration `yaml:"request_timeout"`
+	Locale                        string   `yaml:"locale"`
+	Horizon                       Duration `yaml:"horizon"`
+	Step                          Duration `yaml:"step"`
+	Workers                       int      `yaml:"workers"`
+	ForecastConcurrency           int      `yaml:"forecast_concurrency"`
+	ForecastEstimatedDuration     Duration `yaml:"forecast_estimated_duration"`
+	ForecastWarmEstimatedDuration Duration `yaml:"forecast_warm_estimated_duration"`
+	ECCodesWorkers                int      `yaml:"eccodes_workers"`
+	PointCacheEntries             int      `yaml:"point_cache_entries"`
+	PointCacheMemoryLimit         ByteSize `yaml:"point_cache_memory_limit"`
+	RequestTimeout                Duration `yaml:"request_timeout"`
 }
 
 type PathsConfig struct {
@@ -194,15 +196,17 @@ type PlatformConfig struct {
 func Defaults() Config {
 	return Config{
 		App: AppConfig{
-			Locale:                "ru",
-			Horizon:               Duration{72 * time.Hour},
-			Step:                  Duration{3 * time.Hour},
-			Workers:               6,
-			ForecastConcurrency:   2,
-			ECCodesWorkers:        8,
-			PointCacheEntries:     512,
-			PointCacheMemoryLimit: ByteSize(20 << 30),
-			RequestTimeout:        Duration{15 * time.Minute},
+			Locale:                        "ru",
+			Horizon:                       Duration{72 * time.Hour},
+			Step:                          Duration{3 * time.Hour},
+			Workers:                       6,
+			ForecastConcurrency:           2,
+			ForecastEstimatedDuration:     Duration{2 * time.Minute},
+			ForecastWarmEstimatedDuration: Duration{10 * time.Second},
+			ECCodesWorkers:                8,
+			PointCacheEntries:             512,
+			PointCacheMemoryLimit:         ByteSize(20 << 30),
+			RequestTimeout:                Duration{15 * time.Minute},
 		},
 		HorizonAnalysis: HorizonAnalysisConfig{
 			Enabled: true, QueueSize: 4, Concurrency: 1, CDOWorkers: 8,
@@ -210,7 +214,7 @@ func Defaults() Config {
 			CacheEntries: 128, EstimatedDuration: Duration{3 * time.Minute},
 		},
 		Directional: DirectionalConfig{
-			QueueSize: 8, Concurrency: 1, Listen: ":18083", WorkerURL: "http://directional_worker:18084", WorkerListen: ":18084",
+			QueueSize: 10, Concurrency: 1, Listen: ":18083", WorkerURL: "http://directional_worker:18084", WorkerListen: ":18084",
 			CredentialFile: "/run/secrets/directional_credential",
 			CompletedTTL:   Duration{48 * time.Hour}, CompletedEntries: 128,
 			EstimatedHorizon: Duration{3 * time.Minute}, EstimatedAstrodome: Duration{30 * time.Minute},
@@ -299,6 +303,20 @@ func (c *Config) applyEnvironment() error {
 			return fmt.Errorf("parse ASTRO_FORECAST_CONCURRENCY: %w", err)
 		}
 		c.App.ForecastConcurrency = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_FORECAST_ESTIMATED_DURATION"); exists {
+		var parsed Duration
+		if err := parsed.UnmarshalText([]byte(strings.TrimSpace(value))); err != nil {
+			return fmt.Errorf("parse ASTRO_FORECAST_ESTIMATED_DURATION: %w", err)
+		}
+		c.App.ForecastEstimatedDuration = parsed
+	}
+	if value, exists := os.LookupEnv("ASTRO_FORECAST_WARM_ESTIMATED_DURATION"); exists {
+		var parsed Duration
+		if err := parsed.UnmarshalText([]byte(strings.TrimSpace(value))); err != nil {
+			return fmt.Errorf("parse ASTRO_FORECAST_WARM_ESTIMATED_DURATION: %w", err)
+		}
+		c.App.ForecastWarmEstimatedDuration = parsed
 	}
 	if value, exists := os.LookupEnv("ASTRO_HORIZON_CONCURRENCY"); exists {
 		parsed, err := strconv.Atoi(strings.TrimSpace(value))
@@ -493,6 +511,12 @@ func (c Config) Validate() error {
 	if c.App.ForecastConcurrency < 1 || c.App.ForecastConcurrency > 16 {
 		problems = append(problems, "app.forecast_concurrency must be between 1 and 16")
 	}
+	if c.App.ForecastEstimatedDuration.Duration < time.Second || c.App.ForecastEstimatedDuration.Duration > c.App.RequestTimeout.Duration {
+		problems = append(problems, "app.forecast_estimated_duration must be between 1s and app.request_timeout")
+	}
+	if c.App.ForecastWarmEstimatedDuration.Duration < time.Second || c.App.ForecastWarmEstimatedDuration.Duration > c.App.ForecastEstimatedDuration.Duration {
+		problems = append(problems, "app.forecast_warm_estimated_duration must be between 1s and app.forecast_estimated_duration")
+	}
 	if c.App.ECCodesWorkers < 1 || c.App.ECCodesWorkers > 64 {
 		problems = append(problems, "app.eccodes_workers must be between 1 and 64")
 	}
@@ -529,8 +553,8 @@ func (c Config) Validate() error {
 		if c.HorizonAnalysis.CDOWorkers < 1 || c.HorizonAnalysis.CDOWorkers > 16 {
 			problems = append(problems, "horizon_analysis.cdo_workers must be between 1 and 16")
 		}
-		if c.Directional.QueueSize < 1 || c.Directional.QueueSize > 8 {
-			problems = append(problems, "directional.queue_size must be between 1 and 8")
+		if c.Directional.QueueSize < 1 || c.Directional.QueueSize > 10 {
+			problems = append(problems, "directional.queue_size must be between 1 and 10")
 		}
 		if c.Directional.Concurrency < 1 || c.Directional.Concurrency > 32 {
 			problems = append(problems, "directional.concurrency must be between 1 and 32")

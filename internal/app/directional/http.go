@@ -43,18 +43,20 @@ type HTTPHandler struct {
 }
 
 type AstrodomeJobStatus struct {
-	ID             string     `json:"id"`
-	State          string     `json:"state"`
-	QueuePosition  *int       `json:"queue_position"`
-	EstimatedAt    *time.Time `json:"estimated_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	Provider       string     `json:"provider,omitempty"`
-	RunID          string     `json:"run_id,omitempty"`
-	GridProfile    string     `json:"grid_profile,omitempty"`
-	GeometryDigest string     `json:"grid_geometry_digest,omitempty"`
-	DatasetBytes   int64      `json:"dataset_bytes,omitempty"`
-	FailureCode    string     `json:"failure_code,omitempty"`
+	ID              string     `json:"id"`
+	State           string     `json:"state"`
+	QueuePosition   *int       `json:"queue_position"`
+	EstimatedAt     *time.Time `json:"estimated_at,omitempty"`
+	ProgressPercent float64    `json:"progress_percent"`
+	EstimateBasis   string     `json:"estimate_basis,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Provider        string     `json:"provider,omitempty"`
+	RunID           string     `json:"run_id,omitempty"`
+	GridProfile     string     `json:"grid_profile,omitempty"`
+	GeometryDigest  string     `json:"grid_geometry_digest,omitempty"`
+	DatasetBytes    int64      `json:"dataset_bytes,omitempty"`
+	FailureCode     string     `json:"failure_code,omitempty"`
 }
 
 func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
@@ -71,16 +73,56 @@ func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 	}
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/availability", handler.availability)
 	handler.mux.HandleFunc("POST /internal/v1/directional/astrodome/jobs", handler.submitAstrodome)
+	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs", handler.astrodomeJobs)
+	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs/current", handler.currentStatus)
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs/{jobID}", handler.status)
 	handler.mux.HandleFunc("DELETE /internal/v1/directional/astrodome/jobs/{jobID}", handler.cancel)
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/jobs/{jobID}/dataset", handler.dataset)
 	if handler.accountJobs != nil {
 		handler.mux.HandleFunc("POST /internal/v1/account/jobs/{kind}", handler.submitAccountJob)
+		handler.mux.HandleFunc("GET /internal/v1/account/jobs", handler.accountJobsList)
 		handler.mux.HandleFunc("GET /internal/v1/account/jobs/{jobID}", handler.accountJobStatus)
 		handler.mux.HandleFunc("DELETE /internal/v1/account/jobs/{jobID}", handler.cancelAccountJob)
 		handler.mux.HandleFunc("GET /internal/v1/account/jobs/{jobID}/files/{fileName}", handler.accountJobFile)
 	}
 	return handler, nil
+}
+
+func (handler *HTTPHandler) astrodomeJobs(w http.ResponseWriter, request *http.Request) {
+	ownerID, _, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	statuses, err := handler.coordinator.Statuses(ownerID, KindAstrodome)
+	if err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	jobs := make([]AstrodomeJobStatus, len(statuses))
+	for index := range statuses {
+		jobs[index] = astrodomeStatus(statuses[index])
+	}
+	writeHTTPJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func (handler *HTTPHandler) accountJobsList(w http.ResponseWriter, request *http.Request) {
+	_, numericUserID, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	kind := AccountJobKind(request.URL.Query().Get("kind"))
+	if kind != AccountJobForecast && kind != AccountJobHorizon {
+		writeHTTPProblem(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	jobs, err := handler.accountJobs.AccountJobs(request.Context(), numericUserID, kind)
+	if err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	writeHTTPJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
 func (handler *HTTPHandler) submitAccountJob(w http.ResponseWriter, request *http.Request) {
@@ -222,7 +264,7 @@ func (handler *HTTPHandler) submitAstrodome(w http.ResponseWriter, request *http
 		return
 	}
 	ticket, err := handler.coordinator.Submit(request.Context(), Request{
-		Kind: KindAstrodome, OwnerID: ownerID, IdempotencyKey: admission.IdempotencyKey,
+		Kind: KindAstrodome, OwnerID: ownerID, OwnerActiveLimit: prepared.OwnerActiveLimit, IdempotencyKey: admission.IdempotencyKey,
 		RequestFamilyKey: prepared.RequestFamilyKey, ScienceCacheKey: prepared.ScienceCacheKey,
 		Source: prepared.Source, Payload: prepared.Payload,
 	})
@@ -250,6 +292,20 @@ func (handler *HTTPHandler) status(w http.ResponseWriter, request *http.Request)
 		return
 	}
 	status, err := handler.coordinator.Status(ownerID, jobID)
+	if err != nil {
+		writeDirectionalError(w, err)
+		return
+	}
+	writeHTTPJSON(w, http.StatusOK, astrodomeStatus(status))
+}
+
+func (handler *HTTPHandler) currentStatus(w http.ResponseWriter, request *http.Request) {
+	ownerID, _, ok := internalOwner(request)
+	if !ok {
+		writeHTTPProblem(w, http.StatusUnauthorized, "user_required")
+		return
+	}
+	status, err := handler.coordinator.LatestStatus(ownerID, KindAstrodome)
 	if err != nil {
 		writeDirectionalError(w, err)
 		return
@@ -348,7 +404,8 @@ func validJobID(value string) bool {
 func astrodomeStatus(status JobStatus) AstrodomeJobStatus {
 	return AstrodomeJobStatus{
 		ID: status.ID, State: string(status.State), QueuePosition: status.QueuePosition,
-		EstimatedAt: status.EstimatedAt, CreatedAt: status.CreatedAt, UpdatedAt: status.UpdatedAt,
+		EstimatedAt: status.EstimatedAt, ProgressPercent: status.ProgressPercent, EstimateBasis: status.EstimateBasis,
+		CreatedAt: status.CreatedAt, UpdatedAt: status.UpdatedAt,
 		Provider: status.Provider, RunID: status.RunID, GridProfile: status.GridProfile,
 		GeometryDigest: status.GeometryDigest, DatasetBytes: status.DatasetBytes,
 		FailureCode: status.FailureCode,
@@ -397,7 +454,8 @@ func validatePreparedAstrodome(prepared PreparedAstrodome) (PreparedAstrodome, e
 		prepared.RequestFamilyKey = prepared.ScienceCacheKey
 	}
 	_, gridProfileErr := forecast.NewAstrodomeGridProfile(forecast.AstrodomeGridProfileID(prepared.Source.GridProfile))
-	if prepared.RequestFamilyKey == "" || len(prepared.RequestFamilyKey) > 4096 ||
+	if (prepared.OwnerActiveLimit != 0 && prepared.OwnerActiveLimit != 1) ||
+		prepared.RequestFamilyKey == "" || len(prepared.RequestFamilyKey) > 4096 ||
 		prepared.ScienceCacheKey == "" || len(prepared.ScienceCacheKey) > 4096 ||
 		prepared.Source.Provider != "icon-eu" ||
 		!validICONRunID(prepared.Source.RunID) ||

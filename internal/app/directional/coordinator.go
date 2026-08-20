@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -27,7 +28,6 @@ type Coordinator struct {
 	jobs        map[string]*directionalJob
 	scienceJobs map[string]*directionalJob
 	idempotency map[string]*directionalJob
-	ownerJobs   map[string]*directionalJob
 	completed   []string
 	active      map[string]*directionalJob
 	wake        chan struct{}
@@ -54,6 +54,7 @@ type directionalJob struct {
 	updatedAt           time.Time
 	startedAt           time.Time
 	finishedAt          time.Time
+	cacheHit            bool
 	result              Result
 	failureCode         string
 	err                 error
@@ -90,8 +91,8 @@ func NewCoordinator(config Config) (*Coordinator, error) {
 	return &Coordinator{
 		config: config, cache: cache, runners: make(map[Kind]Runner),
 		jobs: make(map[string]*directionalJob), scienceJobs: make(map[string]*directionalJob),
-		idempotency: make(map[string]*directionalJob), ownerJobs: make(map[string]*directionalJob),
-		active: make(map[string]*directionalJob), wake: make(chan struct{}, config.Concurrency),
+		idempotency: make(map[string]*directionalJob),
+		active:      make(map[string]*directionalJob), wake: make(chan struct{}, config.Concurrency),
 	}, nil
 }
 
@@ -234,7 +235,8 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		return ticket, nil
 	}
 	if existing, exists := coordinator.scienceJobs[scienceDigest]; exists && existing.state != StateFailed && existing.state != StateCancelled {
-		if owned, busy := coordinator.ownerJobs[request.OwnerID]; (existing.state == StateQueued || existing.state == StateRunning) && busy && owned != existing {
+		if request.OwnerActiveLimit > 0 && !existing.hasOwner(request.OwnerID) &&
+			coordinator.ownerActiveCountLocked(request.OwnerID, request.Kind) >= request.OwnerActiveLimit {
 			coordinator.mutex.Unlock()
 			return nil, ErrOwnerBusy
 		}
@@ -256,7 +258,7 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 			id: jobID, kind: request.Kind, scienceDigest: scienceDigest, requestFamilyDigest: requestFamilyDigest,
 			scienceCacheKey: request.ScienceCacheKey, source: request.Source,
 			owners: make(map[string]struct{}), idempotencyKeys: make(map[string]string),
-			state: StateReady, createdAt: now, updatedAt: now, finishedAt: now,
+			state: StateReady, createdAt: now, updatedAt: now, finishedAt: now, cacheHit: true,
 			result: cached, done: make(chan struct{}),
 		}
 		job.doneOnce.Do(func() { close(job.done) })
@@ -268,7 +270,7 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 		coordinator.mutex.Unlock()
 		return ticket, nil
 	}
-	if _, busy := coordinator.ownerJobs[request.OwnerID]; busy {
+	if request.OwnerActiveLimit > 0 && coordinator.ownerActiveCountLocked(request.OwnerID, request.Kind) >= request.OwnerActiveLimit {
 		coordinator.mutex.Unlock()
 		return nil, ErrOwnerBusy
 	}
@@ -297,6 +299,16 @@ func (coordinator *Coordinator) Submit(ctx context.Context, request Request) (*T
 	return ticket, nil
 }
 
+func (coordinator *Coordinator) ownerActiveCountLocked(ownerID string, kind Kind) int {
+	count := 0
+	for _, job := range coordinator.jobs {
+		if job.kind == kind && !job.terminal() && job.hasOwner(ownerID) {
+			count++
+		}
+	}
+	return count
+}
+
 func (coordinator *Coordinator) Status(ownerID, jobID string) (JobStatus, error) {
 	if coordinator == nil || ownerID == "" || jobID == "" {
 		return JobStatus{}, ErrNotFound
@@ -310,6 +322,63 @@ func (coordinator *Coordinator) Status(ownerID, jobID string) (JobStatus, error)
 		return JobStatus{}, ErrNotFound
 	}
 	return coordinator.statusLocked(job, now), nil
+}
+
+// LatestStatus returns the owner's newest active job of the requested kind,
+// or the newest retained terminal job when no active job exists. It lets a
+// first-party client restore authoritative status after a page reload without
+// trusting browser storage.
+func (coordinator *Coordinator) LatestStatus(ownerID string, kind Kind) (JobStatus, error) {
+	if coordinator == nil || ownerID == "" || !validKind(kind) {
+		return JobStatus{}, ErrNotFound
+	}
+	now := coordinator.config.Now().UTC()
+	coordinator.mutex.Lock()
+	defer coordinator.mutex.Unlock()
+	coordinator.pruneCompletedLocked(now)
+	var selected *directionalJob
+	for _, job := range coordinator.jobs {
+		if job.kind != kind || !job.hasOwner(ownerID) {
+			continue
+		}
+		if selected == nil || ((!job.terminal() && selected.terminal()) ||
+			(job.terminal() == selected.terminal() && job.createdAt.After(selected.createdAt))) {
+			selected = job
+		}
+	}
+	if selected == nil {
+		return JobStatus{}, ErrNotFound
+	}
+	return coordinator.statusLocked(selected, now), nil
+}
+
+// Statuses returns every retained job of one kind visible to an owner. Active
+// jobs are listed before terminal metadata and each group is newest first.
+func (coordinator *Coordinator) Statuses(ownerID string, kind Kind) ([]JobStatus, error) {
+	if coordinator == nil || ownerID == "" || !validKind(kind) {
+		return nil, ErrNotFound
+	}
+	now := coordinator.config.Now().UTC()
+	coordinator.mutex.Lock()
+	defer coordinator.mutex.Unlock()
+	coordinator.pruneCompletedLocked(now)
+	jobs := make([]*directionalJob, 0)
+	for _, job := range coordinator.jobs {
+		if job.kind == kind && job.hasOwner(ownerID) {
+			jobs = append(jobs, job)
+		}
+	}
+	sort.Slice(jobs, func(left, right int) bool {
+		if jobs[left].terminal() != jobs[right].terminal() {
+			return !jobs[left].terminal()
+		}
+		return jobs[left].createdAt.After(jobs[right].createdAt)
+	})
+	statuses := make([]JobStatus, len(jobs))
+	for index, job := range jobs {
+		statuses[index] = coordinator.statusLocked(job, now)
+	}
+	return statuses, nil
 }
 
 func (coordinator *Coordinator) Cancel(ownerID, jobID string) error {
@@ -547,9 +616,6 @@ func (coordinator *Coordinator) execute(ctx context.Context, runner Runner, job 
 
 func (coordinator *Coordinator) addOwnerLocked(job *directionalJob, ownerID, idempotencyDigest string) *Ticket {
 	job.owners[ownerID] = struct{}{}
-	if job.state == StateQueued || job.state == StateRunning {
-		coordinator.ownerJobs[ownerID] = job
-	}
 	job.idempotencyKeys[idempotencyDigest] = ownerID
 	coordinator.idempotency[idempotencyDigest] = job
 	return &Ticket{coordinator: coordinator, jobID: job.id, ownerID: ownerID}
@@ -557,9 +623,6 @@ func (coordinator *Coordinator) addOwnerLocked(job *directionalJob, ownerID, ide
 
 func (coordinator *Coordinator) removeOwnerLocked(job *directionalJob, ownerID string) {
 	delete(job.owners, ownerID)
-	if coordinator.ownerJobs[ownerID] == job {
-		delete(coordinator.ownerJobs, ownerID)
-	}
 	for digest, owner := range job.idempotencyKeys {
 		if owner == ownerID {
 			delete(job.idempotencyKeys, digest)
@@ -581,14 +644,25 @@ func (coordinator *Coordinator) statusLocked(job *directionalJob, now time.Time)
 	case StateQueued:
 		position, estimate := coordinator.queuePositionAndEstimateLocked(job, now)
 		status.QueuePosition, status.EstimatedAt = &position, &estimate
+		status.EstimateBasis = "cold"
 	case StateRunning:
 		estimate := job.startedAt.Add(coordinator.config.Policies[job.kind].Estimate)
-		if estimate.Before(now) {
-			estimate = now
-		}
 		status.EstimatedAt = &estimate
+		status.EstimateBasis = "cold"
+		elapsed := now.Sub(job.startedAt)
+		if elapsed > 0 {
+			status.ProgressPercent = math.Min(99, 100*float64(elapsed)/float64(coordinator.config.Policies[job.kind].Estimate))
+		}
 	case StateReady:
 		status.DatasetBytes = job.result.Bytes
+		status.ProgressPercent = 100
+		if job.cacheHit {
+			status.EstimateBasis = "warm"
+		} else {
+			status.EstimateBasis = "cold"
+		}
+	case StateFailed, StateCancelled:
+		status.ProgressPercent = 100
 	}
 	return status
 }
@@ -629,11 +703,6 @@ func (coordinator *Coordinator) finishJobLocked(job *directionalJob, state State
 	job.state, job.result, job.failureCode, job.err = state, result, code, err
 	job.updatedAt, job.finishedAt = now, now
 	job.doneOnce.Do(func() { close(job.done) })
-	for ownerID := range job.owners {
-		if coordinator.ownerJobs[ownerID] == job {
-			delete(coordinator.ownerJobs, ownerID)
-		}
-	}
 	coordinator.completed = append(coordinator.completed, job.id)
 	coordinator.pruneCompletedLocked(now)
 }
@@ -725,6 +794,9 @@ func validateRequest(request Request) error {
 	}
 	if strings.TrimSpace(request.OwnerID) == "" || len(request.OwnerID) > 256 {
 		return errors.New("directional owner ID is invalid")
+	}
+	if request.OwnerActiveLimit < 0 || request.OwnerActiveLimit > 1 {
+		return errors.New("directional owner active limit must be zero or one")
 	}
 	if request.IdempotencyKey == "" || len(request.IdempotencyKey) > 512 {
 		return errors.New("directional idempotency key is invalid")

@@ -249,7 +249,12 @@ func (backend *Backend) Prepare(ctx context.Context, admission directional.Astro
 	if err != nil {
 		return directional.PreparedAstrodome{}, err
 	}
+	ownerActiveLimit := 1
+	if _, admin := backend.admins[admission.TelegramUserID]; admin {
+		ownerActiveLimit = 0
+	}
 	return directional.PreparedAstrodome{
+		OwnerActiveLimit: ownerActiveLimit,
 		RequestFamilyKey: requestFamilyKey, ScienceCacheKey: scienceCacheKey,
 		Source: directional.SourceIdentity{
 			Provider: "icon-eu", RunID: snapshot.manifest.RunID, GridProfile: string(snapshot.profile.ID),

@@ -324,7 +324,7 @@ func TestCoordinatorOwnershipIdempotencyAndCancellation(t *testing.T) {
 	}
 }
 
-func TestCoordinatorAllowsOneActiveOrQueuedJobPerOwner(t *testing.T) {
+func TestCoordinatorAllowsMultipleQueuedJobsPerOwner(t *testing.T) {
 	runner := newControlledRunner()
 	coordinator := newTestCoordinator(t, t.TempDir(), 4, 16, time.Hour, time.Now)
 	registerBoth(t, coordinator, runner)
@@ -346,14 +346,102 @@ func TestCoordinatorAllowsOneActiveOrQueuedJobPerOwner(t *testing.T) {
 	if err != nil || sameScience.ID() != first.ID() {
 		t.Fatalf("same science request = %q/%v, want %q", sameScience.ID(), err, first.ID())
 	}
-	if _, err := coordinator.Submit(context.Background(), Request{
+	second, err := coordinator.Submit(context.Background(), Request{
 		Kind: KindAstrodome, OwnerID: "owner", IdempotencyKey: "different",
 		ScienceCacheKey: "different-science", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
-	}); !errors.Is(err, ErrOwnerBusy) {
+	})
+	if err != nil {
 		t.Fatalf("second mixed-kind owner job error = %v", err)
+	}
+	secondStatus, err := second.Status()
+	if err != nil || secondStatus.State != StateQueued || secondStatus.QueuePosition == nil || *secondStatus.QueuePosition != 1 {
+		t.Fatalf("second mixed-kind owner status = %+v/%v", secondStatus, err)
+	}
+	latest, err := coordinator.LatestStatus("owner", KindAstrodome)
+	if err != nil || latest.ID != second.ID() || latest.EstimatedAt == nil || latest.EstimateBasis != "cold" {
+		t.Fatalf("latest owner Astrodome status = %+v/%v", latest, err)
 	}
 	runner.release <- struct{}{}
 	if _, err := first.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveString(t, runner.started)
+	runner.release <- struct{}{}
+	if _, err := second.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorEnforcesOptionalPerKindOwnerLimit(t *testing.T) {
+	runner := newControlledRunner()
+	coordinator := newTestCoordinator(t, t.TempDir(), 4, 16, time.Hour, time.Now)
+	registerBoth(t, coordinator, runner)
+	startCoordinator(t, coordinator)
+	first, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "regular", OwnerActiveLimit: 1, IdempotencyKey: "first",
+		ScienceCacheKey: "regular-first", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveString(t, runner.started)
+	sameScience, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "regular", OwnerActiveLimit: 1, IdempotencyKey: "same-science",
+		ScienceCacheKey: "regular-first", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	})
+	if err != nil || sameScience.ID() != first.ID() {
+		t.Fatalf("regular identical science join = %q/%v, want %q", sameScience.ID(), err, first.ID())
+	}
+	if _, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "regular", OwnerActiveLimit: 1, IdempotencyKey: "second",
+		ScienceCacheKey: "regular-second", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	}); !errors.Is(err, ErrOwnerBusy) {
+		t.Fatalf("regular owner overlap error = %v, want owner busy", err)
+	}
+	adminFirst, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "admin", OwnerActiveLimit: 0, IdempotencyKey: "admin-first",
+		ScienceCacheKey: "admin-first", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatalf("administrator queue admission: %v", err)
+	}
+	adminSecond, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "admin", OwnerActiveLimit: 0, IdempotencyKey: "admin-second",
+		ScienceCacheKey: "admin-second", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatalf("administrator overlapping admission: %v", err)
+	}
+	otherOwner, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "other", OwnerActiveLimit: 1, IdempotencyKey: "other",
+		ScienceCacheKey: "other-science", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatalf("other owner admission: %v", err)
+	}
+	if _, err := coordinator.Submit(context.Background(), Request{
+		Kind: KindAstrodome, OwnerID: "regular", OwnerActiveLimit: 1, IdempotencyKey: "join-other",
+		ScienceCacheKey: "other-science", Source: testSourceIdentity(), Payload: json.RawMessage("null"),
+	}); !errors.Is(err, ErrOwnerBusy) {
+		t.Fatalf("regular owner cross-science join error = %v, want owner busy", err)
+	}
+	runner.release <- struct{}{}
+	if _, err := first.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveString(t, runner.started)
+	runner.release <- struct{}{}
+	if _, err := adminFirst.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveString(t, runner.started)
+	runner.release <- struct{}{}
+	if _, err := adminSecond.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveString(t, runner.started)
+	runner.release <- struct{}{}
+	if _, err := otherOwner.Wait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
