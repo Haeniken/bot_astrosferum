@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,7 @@ import (
 )
 
 const (
-	accountResultManifestVersion = 1
+	accountResultManifestVersion = 2
 	accountResultFileLimit       = 64 << 20
 	accountResultTotalLimit      = 192 << 20
 )
@@ -54,19 +55,21 @@ type accountResultManifest struct {
 // as owner-scoped website jobs. It never sends a platform message and never
 // duplicates model acquisition or scientific calculations.
 type AccountResultDispatcher struct {
-	root            context.Context
-	forecastTimeout time.Duration
-	horizonTimeout  time.Duration
-	resultTTL       time.Duration
-	resultRoot      string
-	logf            func(string, ...any)
-	forecastSlots   chan struct{}
-	horizonSlots    chan struct{}
+	root                 context.Context
+	forecastTimeout      time.Duration
+	horizonTimeout       time.Duration
+	forecastEstimate     time.Duration
+	forecastWarmEstimate time.Duration
+	horizonEstimate      time.Duration
+	resultTTL            time.Duration
+	resultRoot           string
+	logf                 func(string, ...any)
+	forecastSlots        chan struct{}
+	horizonSlots         chan struct{}
 
 	mu          sync.Mutex
 	handler     *Handler
 	jobs        map[string]*accountResultJob
-	active      map[string]string
 	idempotency map[string]string
 }
 
@@ -97,13 +100,32 @@ func NewAccountResultDispatcher(
 	}
 	dispatcher := &AccountResultDispatcher{
 		root: root, forecastTimeout: forecastTimeout, horizonTimeout: horizonTimeout,
-		resultTTL: resultTTL, resultRoot: resultRoot, logf: logf,
+		forecastEstimate: min(forecastTimeout, 2*time.Minute), forecastWarmEstimate: 10 * time.Second,
+		horizonEstimate: 3 * time.Minute,
+		resultTTL:       resultTTL, resultRoot: resultRoot, logf: logf,
 		forecastSlots: make(chan struct{}, forecastCapacity), horizonSlots: make(chan struct{}, horizonCapacity),
-		jobs: make(map[string]*accountResultJob), active: make(map[string]string), idempotency: make(map[string]string),
+		jobs: make(map[string]*accountResultJob), idempotency: make(map[string]string),
 	}
+	dispatcher.recoverInterruptedJobs(time.Now().UTC())
 	dispatcher.prune(time.Now())
 	go dispatcher.maintain()
 	return dispatcher, nil
+}
+
+// SetEstimatedDurations configures presentation-only completion estimates.
+// Scientific work and queue ordering do not depend on these values.
+func (dispatcher *AccountResultDispatcher) SetEstimatedDurations(forecastEstimate, forecastWarmEstimate, horizonEstimate time.Duration) error {
+	if forecastEstimate <= 0 || forecastWarmEstimate <= 0 || forecastWarmEstimate > forecastEstimate || horizonEstimate <= 0 {
+		return errors.New("account result estimates must be positive")
+	}
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.handler != nil {
+		return errors.New("account result estimates must be configured before the handler")
+	}
+	dispatcher.forecastEstimate, dispatcher.forecastWarmEstimate, dispatcher.horizonEstimate =
+		forecastEstimate, forecastWarmEstimate, horizonEstimate
+	return nil
 }
 
 // SetHandler installs one platform-independent, fully configured calculation
@@ -153,10 +175,6 @@ func (dispatcher *AccountResultDispatcher) AdmitAccountJob(
 		}
 		delete(dispatcher.idempotency, idempotencyKey)
 	}
-	if _, exists := dispatcher.active[activeKey]; exists {
-		dispatcher.mu.Unlock()
-		return directional.AccountJobStatus{}, directional.ErrOwnerBusy
-	}
 	select {
 	case slots <- struct{}{}:
 	default:
@@ -170,21 +188,26 @@ func (dispatcher *AccountResultDispatcher) AdmitAccountJob(
 		return directional.AccountJobStatus{}, directional.ErrAccountUnavailable
 	}
 	now := time.Now().UTC()
+	estimatedAt := now.Add(dispatcher.forecastEstimate)
+	if kind == directional.AccountJobHorizon {
+		estimatedAt = now.Add(dispatcher.horizonEstimate)
+	}
 	operationContext, cancel := dispatcher.operationContext(kind)
 	job := &accountResultJob{
 		owner: admission.TelegramUserID, idempotencyKey: idempotencyKey, requestDigest: requestDigest, cancel: cancel,
 		status: directional.AccountJobStatus{
 			ID: jobID, Kind: kind, State: directional.StateQueued, CreatedAt: now, UpdatedAt: now,
+			PointName: admission.PointName, Latitude: admission.Latitude, Longitude: admission.Longitude,
+			EstimatedAt: &estimatedAt, EstimateBasis: "cold",
 		},
 	}
 	dispatcher.jobs[jobID] = job
-	dispatcher.active[activeKey] = jobID
 	dispatcher.idempotency[idempotencyKey] = jobID
 	handler := dispatcher.handler
 	dispatcher.mu.Unlock()
 	if err := dispatcher.persist(job.owner, cloneAccountJobStatus(job.status)); err != nil {
 		cancel()
-		dispatcher.release(jobID, activeKey, slots)
+		dispatcher.release(jobID, slots)
 		dispatcher.mu.Lock()
 		dispatcher.removeJobLocked(jobID, job)
 		dispatcher.mu.Unlock()
@@ -192,8 +215,50 @@ func (dispatcher *AccountResultDispatcher) AdmitAccountJob(
 		return directional.AccountJobStatus{}, directional.ErrAccountUnavailable
 	}
 	initial := cloneAccountJobStatus(job.status)
-	go dispatcher.run(operationContext, jobID, activeKey, slots, handler, admission)
+	go dispatcher.run(operationContext, jobID, slots, handler, admission)
 	return initial, nil
+}
+
+// AccountJobs lists all retained jobs owned by one account. Active jobs come
+// from memory; durable terminal jobs are recovered from their manifests.
+func (dispatcher *AccountResultDispatcher) AccountJobs(
+	_ context.Context,
+	owner int64,
+	kind directional.AccountJobKind,
+) ([]directional.AccountJobStatus, error) {
+	if owner <= 0 || (kind != directional.AccountJobForecast && kind != directional.AccountJobHorizon) {
+		return nil, directional.ErrNotFound
+	}
+	dispatcher.prune(time.Now())
+	seen := make(map[string]struct{})
+	result := make([]directional.AccountJobStatus, 0)
+	dispatcher.mu.Lock()
+	for id, job := range dispatcher.jobs {
+		if job.owner != owner || job.status.Kind != kind {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, dispatcher.enrichStatusLocked(cloneAccountJobStatus(job.status), time.Now().UTC()))
+	}
+	dispatcher.mu.Unlock()
+	entries, err := os.ReadDir(dispatcher.resultRoot)
+	if err != nil {
+		return nil, directional.ErrAccountUnavailable
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !accountJobIDPattern.MatchString(entry.Name()) {
+			continue
+		}
+		if _, ok := seen[entry.Name()]; ok {
+			continue
+		}
+		manifest, loadErr := dispatcher.loadManifest(entry.Name())
+		if loadErr == nil && manifest.Owner == owner && manifest.Status.Kind == kind {
+			result = append(result, cloneAccountJobStatus(manifest.Status))
+		}
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].CreatedAt.After(result[right].CreatedAt) })
+	return result, nil
 }
 
 func (dispatcher *AccountResultDispatcher) operationContext(kind directional.AccountJobKind) (context.Context, context.CancelFunc) {
@@ -219,7 +284,7 @@ func (dispatcher *AccountResultDispatcher) AccountJobStatus(_ context.Context, o
 			_ = os.RemoveAll(filepath.Join(dispatcher.resultRoot, jobID))
 			return directional.AccountJobStatus{}, directional.ErrNotFound
 		}
-		status := cloneAccountJobStatus(job.status)
+		status := dispatcher.enrichStatusLocked(cloneAccountJobStatus(job.status), time.Now().UTC())
 		jobOwner := job.owner
 		dispatcher.mu.Unlock()
 		if jobOwner != owner {
@@ -233,6 +298,30 @@ func (dispatcher *AccountResultDispatcher) AccountJobStatus(_ context.Context, o
 		return directional.AccountJobStatus{}, directional.ErrNotFound
 	}
 	return cloneAccountJobStatus(manifest.Status), nil
+}
+
+func (dispatcher *AccountResultDispatcher) enrichStatusLocked(status directional.AccountJobStatus, now time.Time) directional.AccountJobStatus {
+	// Horizon receives the shared coordinator's queue position, ETA, and
+	// progress every two seconds. Forecast has no equivalent inner status
+	// stream, so derive its presentation-only progress from the configured
+	// ordinary cold-run duration on every status read.
+	if status.Kind != directional.AccountJobForecast || status.State != directional.StateRunning || status.StartedAt == nil {
+		return status
+	}
+	estimate := dispatcher.forecastEstimate
+	basis := "cold"
+	if status.EstimateBasis == "warm" {
+		estimate = dispatcher.forecastWarmEstimate
+		basis = "warm"
+	}
+	completion := status.StartedAt.Add(estimate)
+	status.EstimatedAt = &completion
+	status.EstimateBasis = basis
+	elapsed := now.Sub(*status.StartedAt)
+	if elapsed > 0 {
+		status.ProgressPercent = math.Min(99, 100*float64(elapsed)/float64(estimate))
+	}
+	return status
 }
 
 func (dispatcher *AccountResultDispatcher) OpenAccountJobFile(
@@ -306,22 +395,24 @@ func (dispatcher *AccountResultDispatcher) CancelAccountJob(_ context.Context, o
 	dispatcher.mu.Unlock()
 	cancel()
 	if kind == directional.AccountJobHorizon && handler != nil {
-		handler.CancelHorizon(owner)
+		handler.CancelAccountHorizon(owner, jobID)
 	}
 	return nil
 }
 
 func (dispatcher *AccountResultDispatcher) run(
 	ctx context.Context,
-	jobID, activeKey string,
+	jobID string,
 	slots chan struct{},
 	handler *Handler,
 	admission directional.AccountJobAdmission,
 ) {
-	defer dispatcher.release(jobID, activeKey, slots)
+	defer dispatcher.release(jobID, slots)
 	dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
 		status.State = directional.StateRunning
-		status.UpdatedAt = time.Now().UTC()
+		now := time.Now().UTC()
+		status.StartedAt, status.UpdatedAt = &now, now
+		status.EstimateBasis = "cold"
 	})
 	outputRoot := filepath.Join(dispatcher.resultRoot, jobID)
 	if err := os.MkdirAll(outputRoot, 0o750); err != nil {
@@ -333,7 +424,36 @@ func (dispatcher *AccountResultDispatcher) run(
 			status.Summary = message
 			status.UpdatedAt = time.Now().UTC()
 		})
+	}, func(queue directional.JobStatus) {
+		dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
+			if queue.State == directional.StateQueued || queue.State == directional.StateRunning {
+				status.State = queue.State
+			}
+			status.QueuePosition = queue.QueuePosition
+			status.EstimatedAt = queue.EstimatedAt
+			status.ProgressPercent = queue.ProgressPercent
+			status.EstimateBasis = queue.EstimateBasis
+			status.UpdatedAt = time.Now().UTC()
+		})
 	})
+	capture.onForecastCacheStatus = func(cacheHit bool) {
+		dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
+			if status.Kind != directional.AccountJobForecast || status.State != directional.StateRunning || status.StartedAt == nil {
+				return
+			}
+			estimate, basis := dispatcher.forecastEstimate, "cold"
+			if cacheHit {
+				estimate, basis = dispatcher.forecastWarmEstimate, "warm"
+			}
+			completion := status.StartedAt.Add(estimate)
+			status.EstimatedAt, status.EstimateBasis = &completion, basis
+			elapsed := time.Since(*status.StartedAt)
+			if elapsed > 0 {
+				status.ProgressPercent = math.Min(99, 100*float64(elapsed)/float64(estimate))
+			}
+			status.UpdatedAt = time.Now().UTC()
+		})
+	}
 	dispatcher.mu.Lock()
 	if job := dispatcher.jobs[jobID]; job != nil {
 		job.capture = capture
@@ -346,7 +466,7 @@ func (dispatcher *AccountResultDispatcher) run(
 		err = jobHandler.replyToLocation(ctx, admission.TelegramUserID, admission.TelegramUserID,
 			admission.Latitude, admission.Longitude, languageFromCode(admission.Language))
 	case directional.AccountJobHorizon:
-		err = jobHandler.DeliverHorizonLocation(ctx, admission.TelegramUserID, forecast.Location{
+		err = jobHandler.deliverAccountHorizonLocation(ctx, admission.TelegramUserID, jobID, forecast.Location{
 			Latitude: admission.Latitude, Longitude: admission.Longitude,
 		}, admission.Language)
 		if err == nil {
@@ -360,7 +480,7 @@ func (dispatcher *AccountResultDispatcher) run(
 	}
 	if err != nil {
 		if dispatcher.kind(jobID) == directional.AccountJobHorizon && ctx.Err() != nil {
-			jobHandler.CancelHorizon(admission.TelegramUserID)
+			jobHandler.CancelAccountHorizon(admission.TelegramUserID, jobID)
 		}
 		dispatcher.removePartialFiles(outputRoot)
 		failure := "calculation_failed"
@@ -373,6 +493,7 @@ func (dispatcher *AccountResultDispatcher) run(
 		if failure == "cancelled" {
 			dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
 				status.State, status.FailureCode, status.UpdatedAt = directional.StateCancelled, failure, time.Now().UTC()
+				status.QueuePosition, status.EstimatedAt, status.ProgressPercent = nil, nil, 100
 			})
 		} else {
 			dispatcher.fail(jobID, failure)
@@ -390,6 +511,7 @@ func (dispatcher *AccountResultDispatcher) run(
 		dispatcher.removePartialFiles(outputRoot)
 		dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
 			status.State, status.FailureCode, status.UpdatedAt = directional.StateCancelled, "cancelled", time.Now().UTC()
+			status.QueuePosition, status.EstimatedAt, status.ProgressPercent = nil, nil, 100
 		})
 		return
 	}
@@ -398,6 +520,7 @@ func (dispatcher *AccountResultDispatcher) run(
 		if errors.Is(err, context.Canceled) {
 			dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
 				status.State, status.FailureCode, status.UpdatedAt = directional.StateCancelled, "cancelled", time.Now().UTC()
+				status.QueuePosition, status.EstimatedAt, status.ProgressPercent = nil, nil, 100
 			})
 		} else {
 			dispatcher.fail(jobID, "storage_unavailable")
@@ -421,6 +544,10 @@ func (dispatcher *AccountResultDispatcher) publishReady(jobID string, files []di
 	candidate := cloneAccountJobStatus(job.status)
 	candidate.State, candidate.Files, candidate.UpdatedAt = directional.StateReady, append([]directional.AccountJobFile(nil), files...), time.Now().UTC()
 	candidate.FailureCode = ""
+	candidate.QueuePosition, candidate.EstimatedAt, candidate.ProgressPercent = nil, nil, 100
+	if candidate.Kind == directional.AccountJobHorizon {
+		candidate.Summary = ""
+	}
 	owner := job.owner
 	dispatcher.mu.Unlock()
 	if err := dispatcher.persist(owner, candidate); err != nil {
@@ -451,6 +578,7 @@ func (dispatcher *AccountResultDispatcher) kind(jobID string) directional.Accoun
 func (dispatcher *AccountResultDispatcher) fail(jobID, code string) {
 	dispatcher.update(jobID, func(status *directional.AccountJobStatus) {
 		status.State, status.FailureCode, status.UpdatedAt = directional.StateFailed, code, time.Now().UTC()
+		status.QueuePosition, status.EstimatedAt, status.ProgressPercent = nil, nil, 100
 	})
 }
 
@@ -471,11 +599,8 @@ func (dispatcher *AccountResultDispatcher) update(jobID string, change func(*dir
 	}
 }
 
-func (dispatcher *AccountResultDispatcher) release(jobID, activeKey string, slots chan struct{}) {
+func (dispatcher *AccountResultDispatcher) release(jobID string, slots chan struct{}) {
 	dispatcher.mu.Lock()
-	if dispatcher.active[activeKey] == jobID {
-		delete(dispatcher.active, activeKey)
-	}
 	if job := dispatcher.jobs[jobID]; job != nil {
 		job.cancel = func() {}
 	}
@@ -541,6 +666,17 @@ func (dispatcher *AccountResultDispatcher) persist(owner int64, status direction
 }
 
 func (dispatcher *AccountResultDispatcher) loadManifest(jobID string) (accountResultManifest, error) {
+	manifest, err := dispatcher.readManifest(jobID)
+	if err != nil {
+		return accountResultManifest{}, err
+	}
+	if time.Since(manifest.Status.UpdatedAt) > dispatcher.resultTTL || !terminalAccountJobState(manifest.Status.State) {
+		return accountResultManifest{}, directional.ErrNotFound
+	}
+	return manifest, nil
+}
+
+func (dispatcher *AccountResultDispatcher) readManifest(jobID string) (accountResultManifest, error) {
 	var manifest accountResultManifest
 	data, err := os.ReadFile(filepath.Join(dispatcher.resultRoot, jobID, "manifest.json"))
 	if err != nil || len(data) > 1<<20 {
@@ -548,25 +684,71 @@ func (dispatcher *AccountResultDispatcher) loadManifest(jobID string) (accountRe
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil || manifest.Version != accountResultManifestVersion || manifest.Status.ID != jobID {
+	if err := decoder.Decode(&manifest); err != nil || (manifest.Version != 1 && manifest.Version != accountResultManifestVersion) || manifest.Status.ID != jobID {
 		return accountResultManifest{}, directional.ErrNotFound
+	}
+	if manifest.Version == 1 {
+		if terminalAccountJobState(manifest.Status.State) {
+			manifest.Status.ProgressPercent = 100
+			manifest.Status.QueuePosition = nil
+			manifest.Status.EstimatedAt = nil
+		} else {
+			estimate := dispatcher.forecastEstimate
+			if manifest.Status.Kind == directional.AccountJobHorizon {
+				estimate = dispatcher.horizonEstimate
+			}
+			completion := manifest.Status.CreatedAt.Add(estimate)
+			manifest.Status.EstimatedAt = &completion
+			manifest.Status.EstimateBasis = "cold"
+		}
+		manifest.Version = accountResultManifestVersion
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || !validAccountResultManifest(manifest) {
 		return accountResultManifest{}, directional.ErrNotFound
 	}
-	if time.Since(manifest.Status.UpdatedAt) > dispatcher.resultTTL ||
-		(manifest.Status.State != directional.StateReady && manifest.Status.State != directional.StateFailed && manifest.Status.State != directional.StateCancelled) {
-		return accountResultManifest{}, directional.ErrNotFound
-	}
 	return manifest, nil
+}
+
+func (dispatcher *AccountResultDispatcher) recoverInterruptedJobs(now time.Time) {
+	entries, err := os.ReadDir(dispatcher.resultRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !accountJobIDPattern.MatchString(entry.Name()) {
+			continue
+		}
+		manifest, readErr := dispatcher.readManifest(entry.Name())
+		if readErr != nil || now.Sub(manifest.Status.UpdatedAt) > dispatcher.resultTTL ||
+			(manifest.Status.State != directional.StateQueued && manifest.Status.State != directional.StateRunning) {
+			continue
+		}
+		manifest.Status.State = directional.StateFailed
+		manifest.Status.FailureCode = "service_restarted"
+		manifest.Status.QueuePosition = nil
+		manifest.Status.EstimatedAt = nil
+		manifest.Status.ProgressPercent = 100
+		manifest.Status.UpdatedAt = now
+		dispatcher.removePartialFiles(filepath.Join(dispatcher.resultRoot, entry.Name()))
+		if persistErr := dispatcher.persist(manifest.Owner, manifest.Status); persistErr != nil {
+			dispatcher.logf("recover interrupted account result job %s: %v", entry.Name(), persistErr)
+		}
+	}
 }
 
 func validAccountResultManifest(manifest accountResultManifest) bool {
 	status := manifest.Status
 	if manifest.Owner <= 0 || status.CreatedAt.IsZero() || status.UpdatedAt.Before(status.CreatedAt) ||
 		(status.Kind != directional.AccountJobForecast && status.Kind != directional.AccountJobHorizon) ||
-		len(status.Summary) > 32<<10 || len(status.FailureCode) > 64 {
+		len(status.Summary) > 32<<10 || len(status.FailureCode) > 64 || len([]rune(status.PointName)) > 64 ||
+		forecast.ValidateCoordinates(status.Latitude, status.Longitude) != nil ||
+		math.IsNaN(status.ProgressPercent) || math.IsInf(status.ProgressPercent, 0) || status.ProgressPercent < 0 || status.ProgressPercent > 100 ||
+		(status.EstimateBasis != "" && status.EstimateBasis != "cold" && status.EstimateBasis != "warm") ||
+		(status.QueuePosition != nil && *status.QueuePosition < 1) ||
+		(status.StartedAt != nil && status.StartedAt.Before(status.CreatedAt)) ||
+		((status.State == directional.StateQueued || status.State == directional.StateRunning) && status.EstimatedAt == nil) ||
+		(terminalAccountJobState(status.State) && (status.ProgressPercent != 100 || status.QueuePosition != nil || status.EstimatedAt != nil)) {
 		return false
 	}
 	seen := make(map[string]struct{}, len(status.Files))
@@ -681,6 +863,7 @@ func accountAdmissionDigest(kind directional.AccountJobKind, admission direction
 	binary.BigEndian.PutUint64(encoded[8:16], math.Float64bits(admission.Latitude))
 	binary.BigEndian.PutUint64(encoded[16:24], math.Float64bits(admission.Longitude))
 	_, _ = hash.Write(encoded[:])
+	_, _ = io.WriteString(hash, admission.PointName)
 	_, _ = io.WriteString(hash, admission.Language)
 	var digest [sha256.Size]byte
 	copy(digest[:], hash.Sum(nil))
@@ -701,21 +884,39 @@ func cloneAccountJobStatus(status directional.AccountJobStatus) directional.Acco
 }
 
 type accountResultCapture struct {
-	root        string
-	onMessage   func(string)
-	mu          sync.Mutex
-	lastMessage string
-	outputs     []directional.AccountJobFile
-	totalBytes  int64
-	horizon     chan error
-	horizonOne  sync.Once
-	firstError  error
-	cancelled   atomic.Bool
-	structured  atomic.Bool
+	root                  string
+	onMessage             func(string)
+	onHorizonStatus       func(directional.JobStatus)
+	onForecastCacheStatus func(bool)
+	mu                    sync.Mutex
+	lastMessage           string
+	outputs               []directional.AccountJobFile
+	totalBytes            int64
+	horizon               chan error
+	horizonOne            sync.Once
+	firstError            error
+	cancelled             atomic.Bool
+	structured            atomic.Bool
 }
 
-func newAccountResultCapture(root string, onMessage func(string)) *accountResultCapture {
-	return &accountResultCapture{root: root, onMessage: onMessage, horizon: make(chan error, 1)}
+func newAccountResultCapture(root string, onMessage func(string), onHorizonStatus ...func(directional.JobStatus)) *accountResultCapture {
+	var statusCallback func(directional.JobStatus)
+	if len(onHorizonStatus) > 0 {
+		statusCallback = onHorizonStatus[0]
+	}
+	return &accountResultCapture{root: root, onMessage: onMessage, onHorizonStatus: statusCallback, horizon: make(chan error, 1)}
+}
+
+func (capture *accountResultCapture) UpdateHorizonStatus(status directional.JobStatus) {
+	if capture.onHorizonStatus != nil {
+		capture.onHorizonStatus(status)
+	}
+}
+
+func (capture *accountResultCapture) UpdateForecastCacheStatus(cacheHit bool) {
+	if capture.onForecastCacheStatus != nil {
+		capture.onForecastCacheStatus(cacheHit)
+	}
 }
 
 func (capture *accountResultCapture) SendMessage(ctx context.Context, _ int64, text string, _ bool) error {
@@ -913,6 +1114,17 @@ func (handler *Handler) DeliverHorizon(ctx context.Context, userID int64, latitu
 }
 
 func (handler *Handler) DeliverHorizonLocation(ctx context.Context, userID int64, location forecast.Location, languageCode string) error {
+	return handler.deliverHorizonLocation(ctx, userID, "web", location, languageCode)
+}
+
+func (handler *Handler) deliverAccountHorizonLocation(ctx context.Context, userID int64, jobID string, location forecast.Location, languageCode string) error {
+	if !accountJobIDPattern.MatchString(jobID) {
+		return errors.New("valid account job ID is required")
+	}
+	return handler.deliverHorizonLocation(ctx, userID, "web-job-"+jobID, location, languageCode)
+}
+
+func (handler *Handler) deliverHorizonLocation(ctx context.Context, userID int64, platform string, location forecast.Location, languageCode string) error {
 	if userID <= 0 {
 		return errors.New("positive user ID is required")
 	}
@@ -949,7 +1161,7 @@ func (handler *Handler) DeliverHorizonLocation(ctx context.Context, userID int64
 	if cloud.Provider != HorizonProviderICONEU || cloud.RunID == "" {
 		return ErrHorizonUnsupported
 	}
-	return handler.horizon.Deliver(ctx, "web", messenger, userID, userID, HorizonButtonRequest{
+	return handler.horizon.Deliver(ctx, platform, messenger, userID, userID, HorizonButtonRequest{
 		Provider: HorizonProviderICONEU, RunID: cloud.RunID, Location: location,
 		ObserverSurfaceElevationM: cloud.SurfaceElevationM,
 	}, language.renderCode())
@@ -958,6 +1170,12 @@ func (handler *Handler) DeliverHorizonLocation(ctx context.Context, userID int64
 func (handler *Handler) CancelHorizon(userID int64) {
 	if handler != nil && handler.horizon != nil {
 		handler.horizon.CancelUser("web", userID)
+	}
+}
+
+func (handler *Handler) CancelAccountHorizon(userID int64, jobID string) {
+	if handler != nil && handler.horizon != nil && accountJobIDPattern.MatchString(jobID) {
+		handler.horizon.CancelUser("web-job-"+jobID, userID)
 	}
 }
 

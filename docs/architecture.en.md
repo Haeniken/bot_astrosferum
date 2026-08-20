@@ -1041,7 +1041,7 @@ horizon_analysis:
   estimated_duration: 3m
 
 directional:
-  queue_size: 8
+  queue_size: 10
   concurrency: 1
   estimated_horizon: 3m
   estimated_astrodome: 30m
@@ -2006,8 +2006,12 @@ owner check; another owner receives `404`. Telegram and VK continue to receive
 the existing lossless PNG output.
 
 The result dispatcher has separate bounded admission for ordinary Forecast and
-Horizon jobs, rejects overlapping jobs of the same kind for one owner, and
-then defers to the existing forecast and directional queues. It does not create
+Horizon jobs, retains distinct owner requests up to those shared capacities,
+and then defers to the existing forecast and directional queues. The shared
+directional coordinator limits a regular user to one active or queued
+Astrodome request, while configured Telegram administrators may enqueue
+multiple distinct Astrodome requests up to the ten-job FIFO; identical science
+requests still join one calculation. It does not create
 a second model downloader, formula path, or renderer. The web facade has a
 discarding base messenger and per-job capture messenger, so a website request
 cannot contact Telegram or VK. Platform adapters keep their independent

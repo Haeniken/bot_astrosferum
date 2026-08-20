@@ -4,6 +4,10 @@ app:
   step: 3h
   workers: 6
   forecast_concurrency: 2
+  # Presentation-only ETA for an ordinary cold calculation.
+  forecast_estimated_duration: 2m
+  # Presentation-only ETA after an exact render-cache hit is confirmed.
+  forecast_warm_estimated_duration: 10s
   eccodes_workers: 8
   point_cache_entries: 512
   point_cache_memory_limit: 20GiB
@@ -30,7 +34,7 @@ horizon_analysis:
 # Keep concurrency at 1 until production memory/CPU benchmarks justify more;
 # the hard validation range is 1..32.
 directional:
-  queue_size: 8
+  queue_size: 10
   concurrency: 1
   listen: :18083
   worker_url: http://directional_worker:18084

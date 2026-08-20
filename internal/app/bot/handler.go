@@ -78,6 +78,13 @@ type ForecastDatasetMessenger interface {
 	SendForecastDataset(context.Context, string) error
 }
 
+// ForecastStatusMessenger is implemented by the website capture only. It
+// switches the presentation ETA to the configured warm duration after an
+// exact immutable render-cache hit has been established.
+type ForecastStatusMessenger interface {
+	UpdateForecastCacheStatus(bool)
+}
+
 type KeyboardMessenger interface {
 	SendMessageWithKeyboard(context.Context, int64, string, Keyboard) error
 }
@@ -577,6 +584,9 @@ func (handler *Handler) replyToLocation(ctx context.Context, chatID, userID int6
 			charts, renderCacheHit = loadRenderCache(handler.renderCacheRoot, cacheKey)
 			hasOverall = renderCacheHit
 		}
+	}
+	if sink, ok := handler.messenger.(ForecastStatusMessenger); ok {
+		sink.UpdateForecastCacheStatus(renderCacheHit)
 	}
 	if !renderCacheHit {
 		if hasWeather && hasCloud {

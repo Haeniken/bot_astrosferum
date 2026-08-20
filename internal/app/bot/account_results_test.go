@@ -84,7 +84,7 @@ func TestAccountResultDispatcherBoundsWorkAndCancelsByOwner(t *testing.T) {
 	if err := handler.EnableForecast(provider, t.TempDir(), render.Options{Width: 3200, Height: 960}); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := NewAccountResultDispatcher(root, time.Minute, time.Minute, time.Hour, t.TempDir(), 1, 1, nil)
+	dispatcher, err := NewAccountResultDispatcher(root, time.Minute, time.Minute, time.Hour, t.TempDir(), 2, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,8 +107,10 @@ func TestAccountResultDispatcherBoundsWorkAndCancelsByOwner(t *testing.T) {
 	}
 	overlap := admission
 	overlap.IdempotencyKey = "abcdef0123456789abcdef0123456789"
-	if _, err := dispatcher.AdmitAccountJob(t.Context(), directional.AccountJobForecast, overlap); !errors.Is(err, directional.ErrOwnerBusy) {
-		t.Fatalf("same-owner overlapping error = %v", err)
+	overlap.Latitude = 60.1
+	overlapStatus, err := dispatcher.AdmitAccountJob(t.Context(), directional.AccountJobForecast, overlap)
+	if err != nil || overlapStatus.ID == status.ID {
+		t.Fatalf("same-owner distinct admission = %+v, error = %v", overlapStatus, err)
 	}
 	other := admission
 	other.TelegramUserID = 43
@@ -119,6 +121,9 @@ func TestAccountResultDispatcherBoundsWorkAndCancelsByOwner(t *testing.T) {
 		t.Fatalf("cross-owner cancellation = %v", err)
 	}
 	if err := dispatcher.CancelAccountJob(t.Context(), 42, status.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.CancelAccountJob(t.Context(), 42, overlapStatus.ID); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -153,6 +158,78 @@ func TestAccountResultCaptureCopiesStructuredDatasetWithoutChangingBytes(t *test
 	}
 	if string(stored) != payload {
 		t.Fatalf("stored JSON changed: %q", stored)
+	}
+}
+
+func TestAccountResultDispatcherListsRetainedJobsAndRecoversInterruptedState(t *testing.T) {
+	root := t.TempDir()
+	dispatcher, err := NewAccountResultDispatcher(t.Context(), time.Minute, time.Minute, time.Hour, root, 1, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	readyID := strings.Repeat("e", 32)
+	readyDirectory := filepath.Join(root, readyID)
+	if err := os.MkdirAll(readyDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "forecast.json")
+	if err := os.WriteFile(source, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := newAccountResultCapture(readyDirectory, nil)
+	if err := capture.SendForecastDataset(t.Context(), source); err != nil {
+		t.Fatal(err)
+	}
+	ready := directional.AccountJobStatus{
+		ID: readyID, Kind: directional.AccountJobForecast, State: directional.StateReady,
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now, ProgressPercent: 100,
+		PointName: "Плавск", Latitude: 53.65, Longitude: 37.3462, Files: capture.files(),
+	}
+	if err := dispatcher.persist(42, ready); err != nil {
+		t.Fatal(err)
+	}
+	runningID := strings.Repeat("f", 32)
+	runningETA := now.Add(time.Minute)
+	running := directional.AccountJobStatus{
+		ID: runningID, Kind: directional.AccountJobHorizon, State: directional.StateRunning,
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now, Latitude: 53.65, Longitude: 37.3462,
+		EstimatedAt: &runningETA, EstimateBasis: "cold",
+	}
+	if err := dispatcher.persist(42, running); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewAccountResultDispatcher(t.Context(), time.Minute, time.Minute, time.Hour, root, 1, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := restarted.AccountJobs(t.Context(), 42, directional.AccountJobForecast)
+	if err != nil || len(jobs) != 1 || jobs[0].ID != readyID || jobs[0].PointName != "Плавск" {
+		t.Fatalf("retained jobs = %+v, error = %v", jobs, err)
+	}
+	recovered, err := restarted.AccountJobStatus(t.Context(), 42, runningID)
+	if err != nil || recovered.State != directional.StateFailed || recovered.FailureCode != "service_restarted" {
+		t.Fatalf("recovered interrupted job = %+v, error = %v", recovered, err)
+	}
+}
+
+func TestAccountResultForecastProgressUsesConfirmedWarmEstimate(t *testing.T) {
+	dispatcher, err := NewAccountResultDispatcher(t.Context(), time.Minute, time.Minute, time.Hour, t.TempDir(), 1, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.SetEstimatedDurations(time.Minute, 10*time.Second, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	started := now.Add(-5 * time.Second)
+	warm := dispatcher.enrichStatusLocked(directional.AccountJobStatus{
+		ID: strings.Repeat("c", 32), Kind: directional.AccountJobForecast, State: directional.StateRunning,
+		CreatedAt: started, UpdatedAt: started, StartedAt: &started, EstimateBasis: "warm",
+	}, now)
+	if warm.EstimateBasis != "warm" || warm.EstimatedAt == nil || !warm.EstimatedAt.Equal(started.Add(10*time.Second)) ||
+		warm.ProgressPercent < 49 || warm.ProgressPercent > 51 {
+		t.Fatalf("warm forecast status = %+v", warm)
 	}
 }
 

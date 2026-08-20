@@ -41,6 +41,17 @@ func (backend *testAccountJobBackend) AdmitAccountJob(_ context.Context, kind Ac
 	}}}, nil
 }
 
+func (*testAccountJobBackend) AccountJobs(_ context.Context, owner int64, kind AccountJobKind) ([]AccountJobStatus, error) {
+	if owner != 42 || kind != AccountJobHorizon {
+		return nil, ErrNotFound
+	}
+	return []AccountJobStatus{{
+		ID: strings.Repeat("a", 32), Kind: kind, State: StateReady,
+		CreatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 7, 28, 12, 1, 0, 0, time.UTC),
+		ProgressPercent: 100, PointName: "Плавск", Latitude: 53.65, Longitude: 37.3462,
+	}}, nil
+}
+
 func (*testAccountJobBackend) AccountJobStatus(_ context.Context, owner int64, jobID string) (AccountJobStatus, error) {
 	if owner != 42 || jobID != strings.Repeat("a", 32) {
 		return AccountJobStatus{}, ErrNotFound
@@ -164,8 +175,24 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 		server.URL+"/internal/v1/directional/astrodome/jobs/"+status.ID, nil, "")
 	defer func() { _ = response.Body.Close() }()
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil || response.StatusCode != http.StatusOK || status.State != "ready" || status.Provider != "icon-eu" || status.RunID != "2026072800" ||
-		status.GridProfile != "dense-v1" || status.GeometryDigest != "sha256:"+strings.Repeat("a", 64) || status.DatasetBytes != result.Bytes {
+		status.GridProfile != "dense-v1" || status.GeometryDigest != "sha256:"+strings.Repeat("a", 64) || status.DatasetBytes != result.Bytes || status.ProgressPercent != 100 {
 		t.Fatalf("ready status = %+v, HTTP=%d, error=%v", status, response.StatusCode, err)
+	}
+	response = internalRequest(t, server.Client(), credential, 42, http.MethodGet,
+		server.URL+"/internal/v1/directional/astrodome/jobs", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	var jobsEnvelope struct {
+		Jobs []AstrodomeJobStatus `json:"jobs"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&jobsEnvelope); err != nil || response.StatusCode != http.StatusOK || len(jobsEnvelope.Jobs) != 1 || jobsEnvelope.Jobs[0].ID != status.ID {
+		t.Fatalf("Astrodome job list = %+v, HTTP=%d, error=%v", jobsEnvelope, response.StatusCode, err)
+	}
+	response = internalRequest(t, server.Client(), credential, 42, http.MethodGet,
+		server.URL+"/internal/v1/directional/astrodome/jobs/current", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	var current AstrodomeJobStatus
+	if err := json.NewDecoder(response.Body).Decode(&current); err != nil || response.StatusCode != http.StatusOK || current.ID != status.ID || current.ProgressPercent != 100 {
+		t.Fatalf("current status = %+v, HTTP=%d, error=%v", current, response.StatusCode, err)
 	}
 	response = internalRequest(t, server.Client(), credential, 43, http.MethodGet,
 		server.URL+"/internal/v1/directional/astrodome/jobs/"+status.ID, nil, "")
@@ -242,6 +269,16 @@ func TestHTTPHandlerAuthenticatesAndValidatesAccountResults(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || backend.kind != AccountJobHorizon || backend.admission.TelegramUserID != 42 {
 		t.Fatalf("job response = %d %q, backend=%+v", response.Code, response.Body.String(), backend)
+	}
+
+	request = httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://internal/internal/v1/account/jobs?kind=horizon", nil)
+	request.Header.Set(ServiceCredentialHeader, string(credential))
+	request.Header.Set(UserIDHeader, "42")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"point_name":"Плавск"`) {
+		t.Fatalf("account history response = %d %q", response.Code, response.Body.String())
 	}
 
 	request = httptest.NewRequestWithContext(t.Context(), http.MethodGet,
