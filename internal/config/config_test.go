@@ -30,7 +30,7 @@ func TestLoadExample(t *testing.T) {
 		t.Fatalf("unexpected horizon-analysis configuration: %+v", cfg.HorizonAnalysis)
 	}
 	if cfg.Directional.QueueSize != 10 || cfg.Directional.Concurrency != 1 || cfg.Directional.Listen != ":18083" || cfg.Directional.WorkerURL != "http://directional_worker:18084" ||
-		cfg.Directional.WorkerListen != ":18084" || cfg.Directional.EstimatedAstrodome.Duration != 30*time.Minute ||
+		cfg.Directional.WorkerListen != ":18084" || cfg.Directional.EstimatedAstrodome.Duration != 28*time.Minute ||
 		cfg.Directional.InternalRequestTimeout.Duration != 0 {
 		t.Fatalf("unexpected directional configuration: %+v", cfg.Directional)
 	}

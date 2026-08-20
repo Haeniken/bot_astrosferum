@@ -45,7 +45,7 @@ directional:
   estimated_horizon: 3m
   # UI/queue estimate only. It never cancels a calculation and remains
   # independent from the execution and transport timeout policy below.
-  estimated_astrodome: 30m
+  estimated_astrodome: 28m
   # 0s disables the bot -> worker HTTP deadline so a live calculation is not
   # truncated by transport. A positive value is an optional operator guard.
   internal_request_timeout: 0s
