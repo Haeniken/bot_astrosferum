@@ -37,6 +37,12 @@ func TestBackendPublicAndAdminAccessUsesManifestProfile(t *testing.T) {
 	if availability, err := public.Availability(context.Background(), 700); err != nil || !availability.Enabled || !availability.Available {
 		t.Fatalf("public availability = %+v, %v", availability, err)
 	}
+	preparedPublic, err := public.Prepare(context.Background(), directional.AstrodomeAdmission{
+		TelegramUserID: 700, Point: directional.SavedPoint{Latitude: 55, Longitude: 37},
+	})
+	if err != nil || preparedPublic.OwnerActiveLimit != 1 {
+		t.Fatalf("public owner limit = %d, error = %v", preparedPublic.OwnerActiveLimit, err)
+	}
 
 	adminOnly, err := NewBackend(Config{
 		Enabled: false, AdminIDs: []int64{42}, DataRoot: "/unused", MaxStaleAge: 12 * time.Hour,
@@ -55,6 +61,9 @@ func TestBackendPublicAndAdminAccessUsesManifestProfile(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("admin-only admission: %v", err)
+	}
+	if preparedAdmin.OwnerActiveLimit != 0 {
+		t.Fatalf("administrator owner limit = %d, want unlimited", preparedAdmin.OwnerActiveLimit)
 	}
 	adminRequest, err := DecodeCalculationRequest(bytes.NewReader(preparedAdmin.Payload))
 	if err != nil || adminRequest.StorageProfile != model.StorageProfileDense ||

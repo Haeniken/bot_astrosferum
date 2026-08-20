@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	MaxQueueCapacity = 8
+	MaxQueueCapacity = 10
 	MaxConcurrency   = 32
 )
 
@@ -48,9 +48,10 @@ const (
 // Request is platform-neutral. Payload is interpreted only by the registered
 // runner; the coordinator neither serializes it nor knows coordinates/models.
 type Request struct {
-	Kind           Kind
-	OwnerID        string
-	IdempotencyKey string
+	Kind             Kind
+	OwnerID          string
+	OwnerActiveLimit int
+	IdempotencyKey   string
 	// RequestFamilyKey remains stable when a runner refines a cold preparation
 	// identity into the exact immutable publication identity. When omitted it
 	// defaults to ScienceCacheKey for runners without two-phase preparation.
@@ -120,19 +121,21 @@ type Result struct {
 }
 
 type JobStatus struct {
-	ID             string
-	Kind           Kind
-	State          State
-	QueuePosition  *int
-	EstimatedAt    *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	Provider       string
-	RunID          string
-	GridProfile    string
-	GeometryDigest string
-	DatasetBytes   int64
-	FailureCode    string
+	ID              string
+	Kind            Kind
+	State           State
+	QueuePosition   *int
+	EstimatedAt     *time.Time
+	ProgressPercent float64
+	EstimateBasis   string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Provider        string
+	RunID           string
+	GridProfile     string
+	GeometryDigest  string
+	DatasetBytes    int64
+	FailureCode     string
 }
 
 type QueueStats struct {
@@ -222,6 +225,7 @@ type AstrodomeAdmission struct {
 }
 
 type PreparedAstrodome struct {
+	OwnerActiveLimit int
 	RequestFamilyKey string
 	ScienceCacheKey  string
 	Source           SourceIdentity
@@ -261,6 +265,7 @@ const (
 
 type AccountJobAdmission struct {
 	TelegramUserID int64   `json:"telegram_user_id"`
+	PointName      string  `json:"point_name,omitempty"`
 	Latitude       float64 `json:"latitude"`
 	Longitude      float64 `json:"longitude"`
 	Language       string  `json:"language"`
@@ -272,6 +277,9 @@ func (admission AccountJobAdmission) Validate() error {
 		return errors.New("invalid account job admission")
 	}
 	if err := forecast.ValidateCoordinates(admission.Latitude, admission.Longitude); err != nil {
+		return errors.New("invalid account job admission")
+	}
+	if len([]rune(admission.PointName)) > 64 {
 		return errors.New("invalid account job admission")
 	}
 	return nil
@@ -298,14 +306,22 @@ type AccountJobFile struct {
 }
 
 type AccountJobStatus struct {
-	ID          string           `json:"id"`
-	Kind        AccountJobKind   `json:"kind"`
-	State       State            `json:"state"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
-	Summary     string           `json:"summary,omitempty"`
-	Files       []AccountJobFile `json:"files,omitempty"`
-	FailureCode string           `json:"failure_code,omitempty"`
+	ID              string           `json:"id"`
+	Kind            AccountJobKind   `json:"kind"`
+	State           State            `json:"state"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	StartedAt       *time.Time       `json:"started_at,omitempty"`
+	EstimatedAt     *time.Time       `json:"estimated_at,omitempty"`
+	QueuePosition   *int             `json:"queue_position"`
+	ProgressPercent float64          `json:"progress_percent"`
+	EstimateBasis   string           `json:"estimate_basis,omitempty"`
+	PointName       string           `json:"point_name,omitempty"`
+	Latitude        float64          `json:"latitude"`
+	Longitude       float64          `json:"longitude"`
+	Summary         string           `json:"summary,omitempty"`
+	Files           []AccountJobFile `json:"files,omitempty"`
+	FailureCode     string           `json:"failure_code,omitempty"`
 }
 
 type AccountJobOutput struct {
@@ -317,6 +333,7 @@ type AccountJobOutput struct {
 
 type AccountJobBackend interface {
 	AdmitAccountJob(context.Context, AccountJobKind, AccountJobAdmission) (AccountJobStatus, error)
+	AccountJobs(context.Context, int64, AccountJobKind) ([]AccountJobStatus, error)
 	AccountJobStatus(context.Context, int64, string) (AccountJobStatus, error)
 	OpenAccountJobFile(context.Context, int64, string, string) (AccountJobOutput, error)
 	CancelAccountJob(context.Context, int64, string) error
