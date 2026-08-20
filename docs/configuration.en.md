@@ -132,7 +132,7 @@ directional:
   completed_ttl: 48h
   completed_entries: 128
   estimated_horizon: 3m
-  estimated_astrodome: 30m
+  estimated_astrodome: 28m
   internal_request_timeout: 0s
 astrodome:
   enabled: true

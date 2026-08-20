@@ -217,7 +217,7 @@ func Defaults() Config {
 			QueueSize: 10, Concurrency: 1, Listen: ":18083", WorkerURL: "http://directional_worker:18084", WorkerListen: ":18084",
 			CredentialFile: "/run/secrets/directional_credential",
 			CompletedTTL:   Duration{48 * time.Hour}, CompletedEntries: 128,
-			EstimatedHorizon: Duration{3 * time.Minute}, EstimatedAstrodome: Duration{30 * time.Minute},
+			EstimatedHorizon: Duration{3 * time.Minute}, EstimatedAstrodome: Duration{28 * time.Minute},
 			InternalRequestTimeout: Duration{},
 		},
 		Astrodome: AstrodomeConfig{
