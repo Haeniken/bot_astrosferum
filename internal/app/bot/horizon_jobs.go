@@ -47,7 +47,7 @@ var (
 	ErrHorizonUserBusy    = errors.New("horizon user already has an active job")
 
 	horizonRunPattern      = regexp.MustCompile(`^[0-9]{10}$`)
-	horizonPlatformPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	horizonPlatformPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 )
 
 // HorizonSource is the consumer-owned subset implemented by

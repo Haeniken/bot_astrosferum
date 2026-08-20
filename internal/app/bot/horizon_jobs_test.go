@@ -194,6 +194,19 @@ func TestHorizonDeliveryFailureIsScopedToOneWaiter(t *testing.T) {
 	}
 }
 
+func TestHorizonPlatformAcceptsAccountJobIdentity(t *testing.T) {
+	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
+	jobs := newHorizonTestJobs(t, t.TempDir(), source, HorizonJobsConfig{})
+	messenger := newHorizonFakeMessenger()
+	accountPlatform := "web-job-" + strings.Repeat("a", 32)
+	if err := jobs.Deliver(t.Context(), accountPlatform, messenger, 42, 42, horizonTestButtonRequest(), "en"); err != nil {
+		t.Fatalf("account job platform rejected: %v", err)
+	}
+	if err := jobs.Deliver(t.Context(), "a"+strings.Repeat("b", 64), messenger, 42, 42, horizonTestButtonRequest(), "en"); err == nil {
+		t.Fatal("platform longer than 64 characters accepted")
+	}
+}
+
 func TestHorizonActionPayloadIsAuthenticatedCompactAndPersistent(t *testing.T) {
 	root := t.TempDir()
 	source := &horizonFakeSource{currentRun: horizonTestRunID, supported: true}
