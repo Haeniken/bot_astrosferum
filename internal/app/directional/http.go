@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"bot_astrosferum/internal/forecast"
@@ -26,20 +27,26 @@ const (
 )
 
 type HTTPConfig struct {
-	Coordinator       *Coordinator
-	AstrodomeBackend  AstrodomeBackend
-	WorkerHealth      WorkerHealth
-	AccountJobs       AccountJobBackend
-	ServiceCredential []byte
+	Coordinator         *Coordinator
+	AstrodomeBackend    AstrodomeBackend
+	WorkerHealth        WorkerHealth
+	AccountJobs         AccountJobBackend
+	ServiceCredential   []byte
+	NotificationContext context.Context
+	CompletionNotifier  CompletionNotifier
 }
 
 type HTTPHandler struct {
-	coordinator      *Coordinator
-	astrodomeBackend AstrodomeBackend
-	workerHealth     WorkerHealth
-	accountJobs      AccountJobBackend
-	credentialDigest [sha256.Size]byte
-	mux              *http.ServeMux
+	coordinator         *Coordinator
+	astrodomeBackend    AstrodomeBackend
+	workerHealth        WorkerHealth
+	accountJobs         AccountJobBackend
+	credentialDigest    [sha256.Size]byte
+	notificationContext context.Context
+	completionNotifier  CompletionNotifier
+	notificationMu      sync.Mutex
+	notificationWatches map[string]time.Time
+	mux                 *http.ServeMux
 }
 
 type AstrodomeJobStatus struct {
@@ -59,6 +66,19 @@ type AstrodomeJobStatus struct {
 	FailureCode     string     `json:"failure_code,omitempty"`
 }
 
+// accountJobAdmissionRequest and astrodomeAdmissionRequest keep delivery
+// preferences at the authenticated HTTP boundary. They are deliberately not
+// part of the calculation admission, cache identity, or worker payload.
+type accountJobAdmissionRequest struct {
+	AccountJobAdmission
+	NotifyTelegram bool `json:"notify_telegram,omitempty"`
+}
+
+type astrodomeAdmissionRequest struct {
+	AstrodomeAdmission
+	NotifyTelegram bool `json:"NotifyTelegram,omitempty"`
+}
+
 func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 	if config.Coordinator == nil || config.AstrodomeBackend == nil || config.WorkerHealth == nil {
 		return nil, errors.New("directional coordinator, Astrodome backend, and worker health probe are required")
@@ -70,6 +90,11 @@ func NewHTTPHandler(config HTTPConfig) (*HTTPHandler, error) {
 		coordinator: config.Coordinator, astrodomeBackend: config.AstrodomeBackend, workerHealth: config.WorkerHealth,
 		accountJobs:      config.AccountJobs,
 		credentialDigest: sha256.Sum256(config.ServiceCredential), mux: http.NewServeMux(),
+		notificationContext: config.NotificationContext, completionNotifier: config.CompletionNotifier,
+		notificationWatches: make(map[string]time.Time),
+	}
+	if handler.completionNotifier != nil && handler.notificationContext == nil {
+		return nil, errors.New("completion notification context is required")
 	}
 	handler.mux.HandleFunc("GET /internal/v1/directional/astrodome/availability", handler.availability)
 	handler.mux.HandleFunc("POST /internal/v1/directional/astrodome/jobs", handler.submitAstrodome)
@@ -140,17 +165,81 @@ func (handler *HTTPHandler) submitAccountJob(w http.ResponseWriter, request *htt
 		http.NotFound(w, request)
 		return
 	}
-	var admission AccountJobAdmission
-	if err := decodeInternalJSON(w, request, &admission); err != nil || admission.TelegramUserID != numericUserID || admission.Validate() != nil {
+	var payload accountJobAdmissionRequest
+	if err := decodeInternalJSON(w, request, &payload); err != nil || payload.TelegramUserID != numericUserID || payload.Validate() != nil {
 		writeHTTPProblem(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	status, err := handler.accountJobs.AdmitAccountJob(request.Context(), kind, admission)
+	status, err := handler.accountJobs.AdmitAccountJob(request.Context(), kind, payload.AccountJobAdmission)
 	if err != nil {
 		writeDirectionalError(w, err)
 		return
 	}
+	if payload.NotifyTelegram {
+		handler.watchAccountCompletion(status.ID, numericUserID, payload.Language, kind)
+	}
 	writeHTTPJSON(w, http.StatusAccepted, status)
+}
+
+func (handler *HTTPHandler) watchAstrodomeCompletion(ticket *Ticket, userID int64, language string) {
+	if handler.completionNotifier == nil || ticket == nil || !handler.reserveNotificationWatch("astrodome", ticket.ID(), userID) {
+		return
+	}
+	go func() {
+		_, _ = ticket.Wait(handler.notificationContext)
+		status, err := ticket.Status()
+		if err == nil {
+			handler.sendCompletionNotification(userID, language, "astrodome", status.State)
+		}
+	}()
+}
+
+func (handler *HTTPHandler) watchAccountCompletion(jobID string, userID int64, language string, kind AccountJobKind) {
+	if handler.completionNotifier == nil || !validAccountJobToken(jobID) || !handler.reserveNotificationWatch(string(kind), jobID, userID) {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			status, err := handler.accountJobs.AccountJobStatus(handler.notificationContext, userID, jobID)
+			if err == nil && (status.State == StateReady || status.State == StateFailed || status.State == StateCancelled) {
+				handler.sendCompletionNotification(userID, language, string(kind), status.State)
+				return
+			}
+			select {
+			case <-handler.notificationContext.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (handler *HTTPHandler) sendCompletionNotification(userID int64, language, kind string, state State) {
+	if state == StateCancelled || (state != StateReady && state != StateFailed) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(handler.notificationContext, 15*time.Second)
+	defer cancel()
+	_ = handler.completionNotifier(ctx, userID, language, kind, state)
+}
+
+func (handler *HTTPHandler) reserveNotificationWatch(kind, jobID string, userID int64) bool {
+	key := fmt.Sprintf("%s:%d:%s", kind, userID, jobID)
+	handler.notificationMu.Lock()
+	defer handler.notificationMu.Unlock()
+	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	for candidate, createdAt := range handler.notificationWatches {
+		if createdAt.Before(cutoff) {
+			delete(handler.notificationWatches, candidate)
+		}
+	}
+	if _, exists := handler.notificationWatches[key]; exists {
+		return false
+	}
+	handler.notificationWatches[key] = time.Now().UTC()
+	return true
 }
 
 func (handler *HTTPHandler) accountJobStatus(w http.ResponseWriter, request *http.Request) {
@@ -244,11 +333,12 @@ func (handler *HTTPHandler) submitAstrodome(w http.ResponseWriter, request *http
 		writeHTTPProblem(w, http.StatusUnsupportedMediaType, "json_required")
 		return
 	}
-	var admission AstrodomeAdmission
-	if err := decodeInternalJSON(w, request, &admission); err != nil {
+	var payload astrodomeAdmissionRequest
+	if err := decodeInternalJSON(w, request, &payload); err != nil {
 		writeHTTPProblem(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	admission := payload.AstrodomeAdmission
 	if admission.TelegramUserID != numericUserID || !validAdmission(admission) {
 		writeHTTPProblem(w, http.StatusBadRequest, "invalid_request")
 		return
@@ -276,6 +366,9 @@ func (handler *HTTPHandler) submitAstrodome(w http.ResponseWriter, request *http
 	if err != nil {
 		writeDirectionalError(w, err)
 		return
+	}
+	if payload.NotifyTelegram {
+		handler.watchAstrodomeCompletion(ticket, numericUserID, admission.Language)
 	}
 	writeHTTPJSON(w, http.StatusAccepted, astrodomeStatus(status))
 }

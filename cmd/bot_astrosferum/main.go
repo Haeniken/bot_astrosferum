@@ -570,8 +570,30 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 	}
+	var telegramClient *telegram.Client
+	if cfg.Platforms.Telegram.Enabled {
+		token, tokenErr := os.ReadFile(cfg.Platforms.Telegram.TokenFile)
+		if tokenErr != nil {
+			return fmt.Errorf("read Telegram token file: %w", tokenErr)
+		}
+		telegramClient, err = telegram.NewClient(string(token))
+		clear(token)
+		if err != nil {
+			return err
+		}
+	}
+	var completionNotifier directional.CompletionNotifier
+	if telegramClient != nil {
+		completionNotifier = func(notifyContext context.Context, userID int64, language, kind string, state directional.State) error {
+			notifyErr := telegramClient.SendMessage(notifyContext, userID, telegramCompletionMessage(language, kind, state), false)
+			if notifyErr != nil {
+				logf("website calculation Telegram notification failed: %v", notifyErr)
+			}
+			return notifyErr
+		}
+	}
 	var directionalService *directionalRuntime
-	directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, terrainStore, accountResults, logf)
+	directionalService, err = newDirectionalRuntime(ctx, cfg, horizonJobs, terrainStore, accountResults, completionNotifier, logf)
 	if err != nil {
 		return err
 	}
@@ -662,14 +684,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	adapters := make([]platformAdapter, 0, 2)
 	if cfg.Platforms.Telegram.Enabled {
-		token, err := os.ReadFile(cfg.Platforms.Telegram.TokenFile)
-		if err != nil {
-			return fmt.Errorf("read Telegram token file: %w", err)
-		}
-		client, err := telegram.NewClient(string(token))
-		if err != nil {
-			return err
-		}
+		client := telegramClient
 		handler, err := bot.NewHandler(client)
 		if err != nil {
 			return err
@@ -986,6 +1001,27 @@ func writeJSON(writer io.Writer, value any) error {
 	encoder.SetIndent("", "  ")
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+func telegramCompletionMessage(language, kind string, state directional.State) string {
+	if language == "ru" {
+		name := map[string]string{"forecast": "Обычный прогноз", "horizon": "Горизонт", "astrodome": "Астрокупол"}[kind]
+		if name == "" {
+			name = "Расчёт"
+		}
+		if state == directional.StateReady {
+			return name + ": результат готов на сайте Astrosferum."
+		}
+		return name + ": расчёт завершился с ошибкой. Откройте сайт Astrosferum, чтобы проверить состояние задания."
+	}
+	name := map[string]string{"forecast": "Forecast", "horizon": "Horizon", "astrodome": "Astrodome"}[kind]
+	if name == "" {
+		name = "Calculation"
+	}
+	if state == directional.StateReady {
+		return name + ": the result is ready on the Astrosferum website."
+	}
+	return name + ": the calculation failed. Open the Astrosferum website to check the job status."
 }
 
 func celestialTracksForSurface(surface forecast.SurfaceSeries) ([]astronomy.CelestialTrack, error) {

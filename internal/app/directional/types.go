@@ -272,6 +272,10 @@ type AccountJobAdmission struct {
 	IdempotencyKey string  `json:"idempotency_key"`
 }
 
+// CompletionNotifier sends a short terminal-status notification. It never
+// receives result files or scientific payloads.
+type CompletionNotifier func(context.Context, int64, string, string, State) error
+
 func (admission AccountJobAdmission) Validate() error {
 	if admission.TelegramUserID <= 0 || (admission.Language != "ru" && admission.Language != "en") || !validAccountJobToken(admission.IdempotencyKey) {
 		return errors.New("invalid account job admission")
