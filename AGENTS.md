@@ -345,7 +345,7 @@ configuration, or documentation change that can affect the checked result.
 set -euo pipefail
 
 go_version='1.27.0'
-golangci_lint_version='v2.13.0'
+golangci_lint_version='v2.13.1'
 govulncheck_version='v1.7.0'
 trivy_version='v0.74.0'
 trivy_digest='sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
