@@ -134,8 +134,16 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	registerBoth(t, coordinator, runner)
 	startCoordinator(t, coordinator)
 	backend := &testAstrodomeBackend{}
+	notifications := make(chan State, 1)
 	handler, err := NewHTTPHandler(HTTPConfig{
 		Coordinator: coordinator, AstrodomeBackend: backend, WorkerHealth: testWorkerHealth{}, ServiceCredential: credential,
+		NotificationContext: t.Context(), CompletionNotifier: func(_ context.Context, userID int64, language, kind string, state State) error {
+			if userID != 42 || language != "ru" || kind != "astrodome" {
+				t.Errorf("unexpected Astrodome notification identity: %d %q %q", userID, language, kind)
+			}
+			notifications <- state
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +164,7 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 		Point:          SavedPoint{ID: 7, Name: "private point", Latitude: 59.9, Longitude: 30.2},
 		Language:       "ru", IdempotencyKey: "0123456789abcdef",
 	}
-	body, err := json.Marshal(admission)
+	body, err := json.Marshal(astrodomeAdmissionRequest{AstrodomeAdmission: admission, NotifyTelegram: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +178,14 @@ func TestHTTPHandlerPublishesStableAccountContractAndGzipPassThrough(t *testing.
 	result, err := (&Ticket{coordinator: coordinator, jobID: status.ID, ownerID: "telegram:42"}).Wait(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case state := <-notifications:
+		if state != StateReady {
+			t.Fatalf("Astrodome notification state = %q", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Astrodome completion notification was not sent")
 	}
 	response = internalRequest(t, server.Client(), credential, 42, http.MethodGet,
 		server.URL+"/internal/v1/directional/astrodome/jobs/"+status.ID, nil, "")
@@ -301,6 +317,62 @@ func TestHTTPHandlerAuthenticatesAndValidatesAccountResults(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("cross-user job response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestHTTPHandlerSendsOneTelegramCompletionStatusWithoutResultFiles(t *testing.T) {
+	credential := []byte(strings.Repeat("s", 32))
+	coordinator := newTestCoordinator(t, t.TempDir(), 4, 16, time.Hour, time.Now)
+	registerBoth(t, coordinator, RunnerFunc(func(context.Context, Execution) (RunnerResult, error) {
+		return RunnerResult{}, errors.New("not used")
+	}))
+	backend := &testAccountJobBackend{}
+	type notification struct {
+		userID   int64
+		language string
+		kind     string
+		state    State
+	}
+	notifications := make(chan notification, 2)
+	handler, err := NewHTTPHandler(HTTPConfig{
+		Coordinator: coordinator, AstrodomeBackend: &testAstrodomeBackend{}, WorkerHealth: testWorkerHealth{},
+		AccountJobs: backend, ServiceCredential: credential, NotificationContext: t.Context(),
+		CompletionNotifier: func(_ context.Context, userID int64, language, kind string, state State) error {
+			notifications <- notification{userID: userID, language: language, kind: kind, state: state}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"telegram_user_id":42,"latitude":59.9,"longitude":30.2,"language":"ru","idempotency_key":"0123456789abcdef0123456789abcdef","notify_telegram":true}`
+	for range 2 {
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+			"http://internal/internal/v1/account/jobs/horizon", strings.NewReader(body))
+		request.Header.Set(ServiceCredentialHeader, string(credential))
+		request.Header.Set(UserIDHeader, "42")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("job response = %d %q", response.Code, response.Body.String())
+		}
+	}
+	if backend.admission.TelegramUserID != 42 {
+		t.Fatal("calculation admission was not forwarded to the account backend")
+	}
+	select {
+	case got := <-notifications:
+		if got.userID != 42 || got.language != "ru" || got.kind != "horizon" || got.state != StateReady {
+			t.Fatalf("notification = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion notification was not sent")
+	}
+	select {
+	case duplicate := <-notifications:
+		t.Fatalf("duplicate completion notification = %+v", duplicate)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

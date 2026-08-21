@@ -52,8 +52,9 @@ type accountResultManifest struct {
 }
 
 // AccountResultDispatcher exposes the existing forecast and Horizon renderers
-// as owner-scoped website jobs. It never sends a platform message and never
-// duplicates model acquisition or scientific calculations.
+// as owner-scoped website jobs. It never sends result files through a platform
+// and never duplicates model acquisition or scientific calculations. The
+// internal HTTP boundary may independently send one opt-in terminal status.
 type AccountResultDispatcher struct {
 	root                 context.Context
 	forecastTimeout      time.Duration

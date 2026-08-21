@@ -326,7 +326,9 @@ to a single azimuth-independent zenith. Completed code includes:
   statistics, and prepared scientific values without duplicating calculation;
   the bot publishes `forecast-interactive-v6-observing-ephemerides` and `horizon-interactive-v7-glo30-informational-skyline` JSON
   into a bounded 96-hour owner-scoped result store, while the site polls status
-  and draws interactive charts without sending a Telegram or VK message;
+  and draws interactive charts without sending result files to Telegram or VK;
+  an explicitly enabled website preference may send one best-effort Telegram
+  terminal-status message without an attachment;
 - the ordinary interactive contract preserves separate native timelines:
   one exact hourly weather/cloud axis, its possibly narrower exact Overall
   subset, and an independent three-hour pressure-level diagnostics axis, with

@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"bot_astrosferum/internal/app/directional"
 	"bot_astrosferum/internal/config"
 )
 
@@ -23,5 +24,22 @@ func TestAstrodomeVolumeRequiredIndependentlyOfStraightRayHorizon(t *testing.T) 
 				t.Fatalf("astrodomeVolumeRequired() = %v; want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestTelegramCompletionMessageContainsOnlyTerminalStatus(t *testing.T) {
+	tests := []struct {
+		language string
+		kind     string
+		state    directional.State
+		want     string
+	}{
+		{language: "ru", kind: "astrodome", state: directional.StateReady, want: "Астрокупол: результат готов на сайте Astrosferum."},
+		{language: "en", kind: "horizon", state: directional.StateFailed, want: "Horizon: the calculation failed. Open the Astrosferum website to check the job status."},
+	}
+	for _, test := range tests {
+		if got := telegramCompletionMessage(test.language, test.kind, test.state); got != test.want {
+			t.Errorf("telegramCompletionMessage(%q, %q, %q) = %q, want %q", test.language, test.kind, test.state, got, test.want)
+		}
 	}
 }
