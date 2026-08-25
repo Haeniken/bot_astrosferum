@@ -8,7 +8,7 @@ COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bot_astrosferum ./cmd/bot_astrosferum \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bot_astrosferum_directional_worker ./cmd/bot_astrosferum_directional_worker
 
-FROM ghcr.io/osgeo/gdal:ubuntu-small-3.13.2
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.13.3
 
 ARG APP_UID=1000
 ARG APP_GID=1000
