@@ -8,7 +8,7 @@ require (
 	github.com/soniakeys/meeus/v3 v3.0.1
 	github.com/soniakeys/unit v1.0.0
 	golang.org/x/image v0.45.0
-	golang.org/x/time v0.15.0
+	golang.org/x/time v0.16.0
 	gonum.org/v1/plot v0.17.0
 	gopkg.in/yaml.v3 v3.0.1
 )
