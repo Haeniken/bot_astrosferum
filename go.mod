@@ -3,7 +3,7 @@ module bot_astrosferum
 go 1.27.0
 
 require (
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/ringsaturn/tzf v1.2.5
 	github.com/soniakeys/meeus/v3 v3.0.1
 	github.com/soniakeys/unit v1.0.0
